@@ -653,8 +653,11 @@ impl eframe::App for RengraveApp {
                         if ui.button("Cancel").clicked() {
                             self.cancel_calculation("Calculation canceled");
                         }
-                    } else if self.output_is_stale() {
+                    } else if self.stale_recalculate_available() {
                         ui.colored_label(egui::Color32::from_rgb(225, 176, 84), "Output stale");
+                        if ui.button("Recalculate").clicked() {
+                            self.start_calculation(ui.ctx().clone());
+                        }
                     }
                     ui.separator();
                     ui.add(
@@ -1095,6 +1098,10 @@ impl eframe::App for RengraveApp {
                     if self.output_is_stale() {
                         ui.separator();
                         ui.colored_label(egui::Color32::from_rgb(225, 176, 84), "Output stale");
+                        if self.stale_recalculate_available() && ui.button("Recalculate").clicked()
+                        {
+                            self.start_calculation(ui.ctx().clone());
+                        }
                     }
                     ui.separator();
                     if ui
@@ -1332,6 +1339,10 @@ impl RengraveApp {
             self.last_output_request.as_ref(),
             !self.gcode.is_empty(),
         )
+    }
+
+    fn stale_recalculate_available(&self) -> bool {
+        stale_recalculate_available(self.output_is_stale(), self.calculation.is_some())
     }
 
     fn ensure_input_preview(&mut self) {
@@ -2500,6 +2511,10 @@ fn output_request_is_stale(
         && last_output
             .map(|last_output| calculation_request_is_stale(current, last_output))
             .unwrap_or(false)
+}
+
+fn stale_recalculate_available(output_is_stale: bool, calculation_active: bool) -> bool {
+    output_is_stale && !calculation_active
 }
 
 fn settings_base_path_for_save(path_text: &str) -> Option<PathBuf> {
@@ -4421,6 +4436,13 @@ mod tests {
         ));
         assert!(!output_request_is_stale(&current, Some(&expected), false));
         assert!(!output_request_is_stale(&current, None, true));
+    }
+
+    #[test]
+    fn stale_recalculate_available_only_when_output_is_stale_and_idle() {
+        assert!(stale_recalculate_available(true, false));
+        assert!(!stale_recalculate_available(true, true));
+        assert!(!stale_recalculate_available(false, false));
     }
 
     #[test]
