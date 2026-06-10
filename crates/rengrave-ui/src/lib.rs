@@ -1,3 +1,4 @@
+use std::fs;
 use std::path::PathBuf;
 
 use eframe::egui;
@@ -34,9 +35,14 @@ struct RengraveApp {
     status: String,
     settings_count: usize,
     gcode: String,
+    svg: Option<String>,
+    dxf: Option<String>,
     gcode_lines: usize,
     preview_segments: Vec<PreviewSegment>,
     preview_bounds: Option<PreviewBounds>,
+    gcode_path: String,
+    svg_path: String,
+    dxf_path: String,
     show_toolpath: bool,
     show_bounds: bool,
     show_v_area: bool,
@@ -77,9 +83,14 @@ impl RengraveApp {
             status,
             settings_count: document.settings.entries.len(),
             gcode: String::new(),
+            svg: None,
+            dxf: None,
             gcode_lines: 0,
             preview_segments: Vec::new(),
             preview_bounds: None,
+            gcode_path: default_output_path(&options.default_dir, "rengrave_output.ngc"),
+            svg_path: default_output_path(&options.default_dir, "rengrave_output.svg"),
+            dxf_path: default_output_path(&options.default_dir, "rengrave_output.dxf"),
             show_toolpath: true,
             show_bounds: true,
             show_v_area: false,
@@ -92,7 +103,7 @@ impl RengraveApp {
         app
     }
 
-    fn batch_request(&self) -> BatchRequest {
+    fn batch_request(&self, include_exports: bool) -> BatchRequest {
         BatchRequest {
             batch: true,
             gcode_file: self.gcode_file.clone(),
@@ -100,18 +111,20 @@ impl RengraveApp {
             default_dir: self.default_dir.clone(),
             text: Some(self.text.clone()),
             output: None,
-            svg_output: None,
-            dxf_output: None,
+            svg_output: include_exports.then(|| PathBuf::from(&self.svg_path)),
+            dxf_output: include_exports.then(|| PathBuf::from(&self.dxf_path)),
         }
     }
 
     fn calculate(&mut self) {
-        match prepare_batch_output(&self.batch_request()) {
+        match prepare_batch_output(&self.batch_request(true)) {
             Ok(output) => self.apply_batch_output(output),
             Err(err) => {
                 self.status = "Generation failed".to_owned();
                 self.warnings = vec![err.to_string()];
                 self.gcode.clear();
+                self.svg = None;
+                self.dxf = None;
                 self.gcode_lines = 0;
                 self.preview_segments.clear();
                 self.preview_bounds = None;
@@ -130,6 +143,29 @@ impl RengraveApp {
         };
         self.warnings = output.warnings;
         self.gcode = output.gcode;
+        self.svg = output.svg;
+        self.dxf = output.dxf;
+    }
+
+    fn export_current(&mut self, kind: ExportKind) {
+        let (label, path, contents) = match kind {
+            ExportKind::Gcode => ("G-code", self.gcode_path.clone(), Some(self.gcode.clone())),
+            ExportKind::Svg => ("SVG", self.svg_path.clone(), self.svg.clone()),
+            ExportKind::Dxf => ("DXF", self.dxf_path.clone(), self.dxf.clone()),
+        };
+
+        let Some(contents) = contents else {
+            self.status = format!("{label} export unavailable");
+            return;
+        };
+
+        match write_text_file(&path, &contents) {
+            Ok(path) => self.status = format!("{label} exported: {}", path.display()),
+            Err(err) => {
+                self.status = format!("{label} export failed");
+                self.warnings.push(err);
+            }
+        }
     }
 }
 
@@ -199,7 +235,39 @@ impl eframe::App for RengraveApp {
                 if ui.button("Calculate").clicked() {
                     self.calculate();
                 }
-                ui.add_enabled(false, egui::Button::new("Export G-code"));
+                ui.label("G-code path");
+                ui.add_sized(
+                    [ui.available_width(), 22.0],
+                    egui::TextEdit::singleline(&mut self.gcode_path),
+                );
+                if ui
+                    .add_enabled(!self.gcode.is_empty(), egui::Button::new("Export G-code"))
+                    .clicked()
+                {
+                    self.export_current(ExportKind::Gcode);
+                }
+                ui.label("SVG path");
+                ui.add_sized(
+                    [ui.available_width(), 22.0],
+                    egui::TextEdit::singleline(&mut self.svg_path),
+                );
+                if ui
+                    .add_enabled(self.svg.is_some(), egui::Button::new("Export SVG"))
+                    .clicked()
+                {
+                    self.export_current(ExportKind::Svg);
+                }
+                ui.label("DXF path");
+                ui.add_sized(
+                    [ui.available_width(), 22.0],
+                    egui::TextEdit::singleline(&mut self.dxf_path),
+                );
+                if ui
+                    .add_enabled(self.dxf.is_some(), egui::Button::new("Export DXF"))
+                    .clicked()
+                {
+                    self.export_current(ExportKind::Dxf);
+                }
                 if ui
                     .add_enabled(!self.gcode.is_empty(), egui::Button::new("Copy G-code"))
                     .clicked()
@@ -269,6 +337,32 @@ impl RengraveApp {
             "Engrave"
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExportKind {
+    Gcode,
+    Svg,
+    Dxf,
+}
+
+fn default_output_path(default_dir: &Option<PathBuf>, file_name: &str) -> String {
+    default_dir
+        .as_ref()
+        .map(|dir| dir.join(file_name))
+        .unwrap_or_else(|| PathBuf::from(file_name))
+        .display()
+        .to_string()
+}
+
+fn write_text_file(path_text: &str, contents: &str) -> Result<PathBuf, String> {
+    let path = PathBuf::from(path_text.trim());
+    if path.as_os_str().is_empty() {
+        return Err("output path is empty".to_owned());
+    }
+    fs::write(&path, contents)
+        .map_err(|err| format!("unable to write `{}`: {err}", path.display()))?;
+    Ok(path)
 }
 
 fn file_hint(ui: &mut egui::Ui, label: &str, value: &Option<PathBuf>) {
@@ -470,5 +564,26 @@ mod tests {
         assert_eq!(segments[0].end, Point::new(1.0, 0.0));
         assert_eq!(segments[1].start, Point::new(2.0, 2.0));
         assert_eq!(segments[1].end, Point::new(2.0, 3.0));
+    }
+
+    #[test]
+    fn default_output_paths_use_default_dir_when_present() {
+        let dir = Some(PathBuf::from("/tmp/rengrave-ui"));
+
+        assert_eq!(
+            default_output_path(&dir, "rengrave_output.ngc"),
+            "/tmp/rengrave-ui/rengrave_output.ngc"
+        );
+        assert_eq!(
+            default_output_path(&None, "rengrave_output.ngc"),
+            "rengrave_output.ngc"
+        );
+    }
+
+    #[test]
+    fn write_text_file_reports_empty_paths() {
+        let err = write_text_file("  ", "G90").unwrap_err();
+
+        assert_eq!(err, "output path is empty");
     }
 }
