@@ -1076,6 +1076,16 @@ impl eframe::App for RengraveApp {
                         ui.colored_label(egui::Color32::from_rgb(225, 176, 84), "Output stale");
                     }
                     ui.separator();
+                    if ui
+                        .add_enabled(
+                            self.current_bottom_tab_payload().is_some(),
+                            egui::Button::new("Copy tab"),
+                        )
+                        .clicked()
+                    {
+                        self.copy_current_bottom_tab(ui.ctx());
+                    }
+                    ui.separator();
                     ui.monospace(format!(
                         "{} lines, {} cut moves, {} rapid moves",
                         self.gcode_lines,
@@ -1213,6 +1223,13 @@ impl RengraveApp {
                 if menu_action(ui, "Copy G-code", !self.gcode.is_empty()) {
                     self.copy_gcode(ui.ctx());
                 }
+                if menu_action(
+                    ui,
+                    "Copy current output tab",
+                    self.current_bottom_tab_payload().is_some(),
+                ) {
+                    self.copy_current_bottom_tab(ui.ctx());
+                }
             });
 
             ui.menu_button("Run", |ui| {
@@ -1312,8 +1329,29 @@ impl RengraveApp {
     }
 
     fn copy_gcode(&mut self, ctx: &egui::Context) {
-        ctx.copy_text(self.gcode.clone());
-        self.status = "G-code copied".to_owned();
+        self.copy_text_payload(ctx, "G-code", self.gcode.clone());
+    }
+
+    fn copy_current_bottom_tab(&mut self, ctx: &egui::Context) {
+        if let Some((label, payload)) = self.current_bottom_tab_payload() {
+            self.copy_text_payload(ctx, label, payload);
+        }
+    }
+
+    fn current_bottom_tab_payload(&self) -> Option<(&'static str, String)> {
+        bottom_tab_copy_payload(
+            self.bottom_tab,
+            &self.warnings,
+            &self.gcode,
+            &self.secondary_gcode,
+            self.svg.as_deref(),
+            self.dxf.as_deref(),
+        )
+    }
+
+    fn copy_text_payload(&mut self, ctx: &egui::Context, label: &str, payload: String) {
+        ctx.copy_text(payload);
+        self.status = format!("{label} copied");
     }
 }
 
@@ -3058,6 +3096,29 @@ fn secondary_output_preview_text(outputs: &[SecondaryGcode]) -> Option<String> {
     Some(preview)
 }
 
+fn bottom_tab_copy_payload(
+    tab: BottomTab,
+    warnings: &[String],
+    gcode: &str,
+    secondary_gcode: &[SecondaryGcode],
+    svg: Option<&str>,
+    dxf: Option<&str>,
+) -> Option<(&'static str, String)> {
+    match tab {
+        BottomTab::Status => (!warnings.is_empty()).then(|| ("Status log", warnings.join("\n"))),
+        BottomTab::Gcode => non_empty_payload("G-code", gcode),
+        BottomTab::Cleanup => {
+            secondary_output_preview_text(secondary_gcode).map(|payload| ("Cleanup", payload))
+        }
+        BottomTab::Svg => svg.and_then(|payload| non_empty_payload("SVG", payload)),
+        BottomTab::Dxf => dxf.and_then(|payload| non_empty_payload("DXF", payload)),
+    }
+}
+
+fn non_empty_payload(label: &'static str, payload: &str) -> Option<(&'static str, String)> {
+    (!payload.trim().is_empty()).then(|| (label, payload.to_owned()))
+}
+
 fn export_payloads_available(
     gcode: &str,
     svg: Option<&str>,
@@ -4534,6 +4595,43 @@ mod tests {
             "( cleanup output: _clean )\nG90\nG1 X0\n\n( cleanup output: _v_clean )\nG91\nG1 X1\n"
         );
         assert_eq!(secondary_output_preview_text(&[]), None);
+    }
+
+    #[test]
+    fn bottom_tab_copy_payload_tracks_visible_output_tabs() {
+        let warnings = vec!["missing potrace".to_owned(), "fallback output".to_owned()];
+        let cleanup = vec![SecondaryGcode {
+            suffix: "clean".to_owned(),
+            gcode: "G90\nG1 X0\n".to_owned(),
+        }];
+
+        assert_eq!(
+            bottom_tab_copy_payload(BottomTab::Status, &warnings, "", &[], None, None),
+            Some(("Status log", "missing potrace\nfallback output".to_owned()))
+        );
+        assert_eq!(
+            bottom_tab_copy_payload(BottomTab::Gcode, &[], "G90\n", &[], None, None),
+            Some(("G-code", "G90\n".to_owned()))
+        );
+        assert_eq!(
+            bottom_tab_copy_payload(BottomTab::Cleanup, &[], "", &cleanup, None, None),
+            Some((
+                "Cleanup",
+                "( cleanup output: _clean )\nG90\nG1 X0\n".to_owned()
+            ))
+        );
+        assert_eq!(
+            bottom_tab_copy_payload(BottomTab::Svg, &[], "", &[], Some("<svg/>"), None),
+            Some(("SVG", "<svg/>".to_owned()))
+        );
+        assert_eq!(
+            bottom_tab_copy_payload(BottomTab::Dxf, &[], "", &[], None, Some("0\nEOF\n")),
+            Some(("DXF", "0\nEOF\n".to_owned()))
+        );
+        assert_eq!(
+            bottom_tab_copy_payload(BottomTab::Gcode, &[], "  ", &[], None, None),
+            None
+        );
     }
 
     #[test]
