@@ -184,31 +184,39 @@ pub fn write_vcarve_gcode(
     lines.extend(split_gcode_lines(&gcode_options.preamble));
     lines.push(format!("F{feed}"));
 
-    let mut current_loop = None;
-    for point in points {
-        let z = vcarve_options.depth_for_radius(point.radius);
-        if current_loop != Some(point.loop_id) {
-            lines.push(format!("G0 Z{safe_value}"));
-            lines.push(format!(
-                "G0 X{} Y{}",
-                format_number(point.position.x, dp),
-                format_number(point.position.y, dp)
-            ));
-            if plunge == feed {
-                lines.push(format!("G1 Z{}", format_number(z, dp)));
+    let max_depth = points
+        .iter()
+        .map(|point| vcarve_options.depth_for_radius(point.radius))
+        .reduce(f64::min)
+        .unwrap_or(0.0);
+
+    for rough_cap in vcarve_options.rough_pass_caps(max_depth) {
+        let mut current_loop = None;
+        for point in points {
+            let z = vcarve_options.pass_depth_for_radius(point.radius, rough_cap);
+            if current_loop != Some(point.loop_id) {
+                lines.push(format!("G0 Z{safe_value}"));
+                lines.push(format!(
+                    "G0 X{} Y{}",
+                    format_number(point.position.x, dp),
+                    format_number(point.position.y, dp)
+                ));
+                if plunge == feed {
+                    lines.push(format!("G1 Z{}", format_number(z, dp)));
+                } else {
+                    lines.push(format!("G1 Z{} F{plunge}", format_number(z, dp)));
+                    lines.push(format!("F{feed}"));
+                }
             } else {
-                lines.push(format!("G1 Z{} F{plunge}", format_number(z, dp)));
-                lines.push(format!("F{feed}"));
+                lines.push(format!(
+                    "G1 X{} Y{} Z{}",
+                    format_number(point.position.x, dp),
+                    format_number(point.position.y, dp),
+                    format_number(z, dp)
+                ));
             }
-        } else {
-            lines.push(format!(
-                "G1 X{} Y{} Z{}",
-                format_number(point.position.x, dp),
-                format_number(point.position.y, dp),
-                format_number(z, dp)
-            ));
+            current_loop = Some(point.loop_id);
         }
-        current_loop = Some(point.loop_id);
     }
 
     lines.push(format!("G0 Z{safe_value}"));
@@ -814,6 +822,53 @@ mod tests {
 
         assert!(lines.contains(&"G1 Z-0.0000".to_owned()));
         assert!(lines.contains(&"G1 X1.0000 Y0.0000 Z-0.8660".to_owned()));
+    }
+
+    #[test]
+    fn writes_vcarve_roughing_passes_before_final_depth() {
+        let options = GcodeOptions {
+            safe_z: 0.25,
+            depth_z: -0.005,
+            feed: 5.0,
+            plunge: 0.0,
+            accuracy: 0.001,
+            units: Units::Inch,
+            preamble: "G17 G64 P0.001 M3 S3000".to_owned(),
+            postamble: "M5|M2".to_owned(),
+            variables_disabled: true,
+            arc_fit: ArcFit::None,
+        };
+        let mut settings = crate::settings::default_legacy_settings();
+        settings.set_or_push("v_rough_stk", "0.1", false);
+        settings.set_or_push("v_max_cut", "-0.4", false);
+        let vcarve = VCarveOptions::from_legacy(&settings);
+        let lines = write_vcarve_gcode(
+            &[
+                VCarvePoint {
+                    position: Point::new(0.0, 0.0),
+                    radius: 0.0,
+                    loop_id: 1,
+                },
+                VCarvePoint {
+                    position: Point::new(1.0, 0.0),
+                    radius: 0.5,
+                    loop_id: 1,
+                },
+            ],
+            &options,
+            &vcarve,
+        );
+
+        assert!(lines.contains(&"G1 X1.0000 Y0.0000 Z-0.4000".to_owned()));
+        assert!(lines.contains(&"G1 X1.0000 Y0.0000 Z-0.7660".to_owned()));
+        assert!(lines.contains(&"G1 X1.0000 Y0.0000 Z-0.8660".to_owned()));
+        assert_eq!(
+            lines
+                .iter()
+                .filter(|line| *line == "G0 X0.0000 Y0.0000")
+                .count(),
+            3
+        );
     }
 
     fn shallow_circle_segments() -> Vec<EngraveSegment> {

@@ -14,6 +14,8 @@ pub struct VCarveOptions {
     pub inlay: bool,
     pub allowance: f64,
     pub inlay_depth: f64,
+    pub rough_stock: f64,
+    pub max_cut: f64,
 }
 
 impl VCarveOptions {
@@ -33,7 +35,9 @@ impl VCarveOptions {
             depth_limit: get_f64(settings, "v_depth_lim", 0.0),
             inlay: get_bool(settings, "inlay", false),
             allowance: get_f64(settings, "allowance", 0.0),
-            inlay_depth: get_f64(settings, "v_max_cut", 0.0),
+            inlay_depth: get_f64(settings, "v_depth_lim", 0.0),
+            rough_stock: get_f64(settings, "v_rough_stk", 0.0),
+            max_cut: get_f64(settings, "v_max_cut", -1.0),
         }
     }
 
@@ -82,6 +86,37 @@ impl VCarveOptions {
             }
             BitShape::Flat => -self.bit_diameter / 2.0,
         }
+    }
+
+    pub fn pass_depth_for_radius(&self, radius: f64, rough_cap: Option<f64>) -> f64 {
+        let final_depth = self.depth_for_radius(radius);
+        let Some(rough_cap) = rough_cap else {
+            return final_depth;
+        };
+
+        let rough_depth = (final_depth + self.rough_stock).min(0.0);
+        if rough_cap - rough_depth > 0.001 {
+            rough_cap
+        } else {
+            rough_depth
+        }
+    }
+
+    pub fn rough_pass_caps(&self, max_final_depth: f64) -> Vec<Option<f64>> {
+        if self.rough_stock <= 0.0 || self.max_cut >= 0.0 || max_final_depth >= 0.0 {
+            return vec![None];
+        }
+
+        let rough_target = (max_final_depth + self.rough_stock).min(0.0);
+        let mut caps = Vec::new();
+        let mut cap = self.max_cut;
+        while cap > rough_target {
+            caps.push(Some(cap));
+            cap += self.max_cut;
+        }
+        caps.push(Some(cap));
+        caps.push(None);
+        caps
     }
 
     fn half_angle(&self) -> f64 {
@@ -302,6 +337,23 @@ mod tests {
         let options = VCarveOptions::from_legacy(&settings);
 
         assert!((options.effective_bit_diameter() - 0.1154700538).abs() < 1e-9);
+    }
+
+    #[test]
+    fn rough_pass_caps_include_final_pass() {
+        let mut settings = default_legacy_settings();
+        settings.set_or_push("v_rough_stk", "0.1", false);
+        settings.set_or_push("v_max_cut", "-0.2", false);
+        let options = VCarveOptions::from_legacy(&settings);
+
+        let caps = options.rough_pass_caps(-0.55);
+        assert_eq!(caps.len(), 4);
+        assert!((caps[0].unwrap() + 0.2).abs() < 1e-9);
+        assert!((caps[1].unwrap() + 0.4).abs() < 1e-9);
+        assert!((caps[2].unwrap() + 0.6).abs() < 1e-9);
+        assert_eq!(caps[3], None);
+        assert!((options.pass_depth_for_radius(0.3, Some(-0.2)) + 0.2).abs() < 1e-9);
+        assert!((options.pass_depth_for_radius(0.3, None) + 0.5196152423).abs() < 1e-9);
     }
 
     #[test]
