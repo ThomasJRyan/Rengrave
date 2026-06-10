@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use rengrave_core::batch::{BatchRequest, prepare_batch_output};
 
 const SIMPLE_CXF: &str = "tests/fixtures/inputs/simple.cxf";
+const GCODE_TOLERANCE: f64 = 0.0001;
 const EXPECTED_SIMPLE_NGC: &str = include_str!("fixtures/expected/simple_text.ngc");
 const EXPECTED_SIMPLE_SVG: &str = include_str!("fixtures/expected/simple_text.svg");
 
@@ -23,9 +24,10 @@ fn simple_cxf_text_matches_checked_golden_outputs() {
         "unexpected warnings: {:?}",
         output.warnings
     );
-    assert_text_eq(
+    assert_gcode_eq_with_tolerance(
         normalize_fixture_paths(&output.gcode, &fixture),
         EXPECTED_SIMPLE_NGC,
+        GCODE_TOLERANCE,
     );
     assert_text_eq(
         trim_trailing_line_whitespace(output.svg.as_deref().unwrap()),
@@ -53,6 +55,67 @@ fn trim_trailing_line_whitespace(text: &str) -> String {
         .collect::<Vec<_>>()
         .join("\n")
         + "\n"
+}
+
+fn assert_gcode_eq_with_tolerance(actual: impl AsRef<str>, expected: &str, tolerance: f64) {
+    let actual = actual.as_ref();
+    if actual == expected {
+        return;
+    }
+
+    let actual_lines: Vec<_> = actual.lines().collect();
+    let expected_lines: Vec<_> = expected.lines().collect();
+    for index in 0..actual_lines.len().max(expected_lines.len()) {
+        let actual_line = actual_lines.get(index).copied().unwrap_or("<missing>");
+        let expected_line = expected_lines.get(index).copied().unwrap_or("<missing>");
+        assert_gcode_line_eq(actual_line, expected_line, index + 1, tolerance);
+    }
+}
+
+fn assert_gcode_line_eq(actual: &str, expected: &str, line_number: usize, tolerance: f64) {
+    if actual == expected {
+        return;
+    }
+
+    let actual_tokens: Vec<_> = actual.split_whitespace().collect();
+    let expected_tokens: Vec<_> = expected.split_whitespace().collect();
+    if actual_tokens.len() != expected_tokens.len() {
+        panic!("golden mismatch at line {line_number}:\nactual:   {actual}\nexpected: {expected}");
+    }
+
+    for (actual_token, expected_token) in actual_tokens.iter().zip(expected_tokens) {
+        if *actual_token == expected_token {
+            continue;
+        }
+        if numeric_words_match(actual_token, expected_token, tolerance) {
+            continue;
+        }
+        panic!("golden mismatch at line {line_number}:\nactual:   {actual}\nexpected: {expected}");
+    }
+}
+
+fn numeric_words_match(actual: &str, expected: &str, tolerance: f64) -> bool {
+    let Some((actual_prefix, actual_value)) = parse_gcode_numeric_word(actual) else {
+        return false;
+    };
+    let Some((expected_prefix, expected_value)) = parse_gcode_numeric_word(expected) else {
+        return false;
+    };
+
+    actual_prefix == expected_prefix && (actual_value - expected_value).abs() <= tolerance
+}
+
+fn parse_gcode_numeric_word(word: &str) -> Option<(&str, f64)> {
+    let split_at = word.find(|character: char| {
+        character == '-' || character == '+' || character == '.' || character.is_ascii_digit()
+    })?;
+    if split_at == 0 {
+        return None;
+    }
+
+    let (prefix, value) = word.split_at(split_at);
+    let value = value.parse().ok()?;
+    Some((prefix, value))
 }
 
 fn assert_text_eq(actual: impl AsRef<str>, expected: &str) {

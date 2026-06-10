@@ -70,7 +70,8 @@ The UI is now an MVP rather than only a shell, but it still lacks several expect
 ## Tests And Validation In Place
 
 - Core tests currently cover settings, CXF/TTF parsing, DXF entities, bitmap conversion, layout transforms, Add Box/Circle, G-code, SVG/DXF export, cleanup, v-carve options, and batch generation.
-- A crate-level golden-output harness now exists under `crates/rengrave-core/tests/golden.rs` with a minimal CXF fixture and checked G-code/SVG regression outputs. These first expected files pin current R-Engrave output; they are not yet F-Engrave-generated parity fixtures.
+- A crate-level golden-output harness now exists under `crates/rengrave-core/tests/golden.rs` with a minimal CXF fixture, checked G-code/SVG regression outputs, and numeric-tolerant G-code comparison helpers. These first expected files pin current R-Engrave output; they are not yet F-Engrave-generated parity fixtures.
+- F-Engrave fixture generation was rechecked on 2026-06-10 with `python f-engrave_source/f-engrave.py -b -f crates/rengrave-core/tests/fixtures/inputs/simple.cxf -t AB`; it still fails before batch mode because `pyclipper` is missing.
 - UI tests cover default and secondary output paths, cleanup companion preview formatting, native save-dialog filename helpers, settings save serialization, path-field parsing, in-app browser directory behavior, input catalog scanning, input preview loading, preference persistence, worker stale-result detection, output stale-state detection, control-to-legacy override emission, bitmap/Potrace control mapping, advanced setting mapping, preview fitting, output preview truncation, text-file write errors, cut/rapid preview parsing, and full-circle arc preview parsing.
 - Recent validation has been run with:
   - `cargo test -p rengrave-core`
@@ -79,7 +80,7 @@ The UI is now an MVP rather than only a shell, but it still lacks several expect
 
 ## Major Work Remaining For Parity
 
-- Golden fixtures from F-Engrave output. The harness and first R-Engrave regression fixture now exist, but broad comparisons against F-Engrave-generated `.ngc`, `.svg`, and `.dxf` files are still missing.
+- Golden fixtures from F-Engrave output. The harness and first R-Engrave regression fixture now exist, but broad comparisons against F-Engrave-generated `.ngc`, `.svg`, and `.dxf` files are still missing because local F-Engrave batch execution currently lacks `pyclipper`.
 - Full F-Engrave UI workflow: richer font/image preview editing controls, complete settings panels, complete v-carve/cleanup parity controls, full config parity, and parity menus.
 - Deeper cooperative cancellation/progress inside long core algorithms. The UI has a background worker, indeterminate progress, Cancel, and stale-state handling, but core routines do not yet report detailed progress or stop mid-loop.
 - Stronger V-carve parity. The current V-carve implementation is initial and not proven equivalent to F-Engrave’s full algorithm for complex glyphs and artwork.
