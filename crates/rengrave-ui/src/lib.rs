@@ -844,6 +844,7 @@ impl eframe::App for RengraveApp {
                     text_row(ui, "Preamble", &mut self.controls.gpre);
                     text_row(ui, "Postamble", &mut self.controls.gpost);
                     ui.horizontal_wrapped(|ui| {
+                        ui.checkbox(&mut self.controls.recovery_comments, "Recovery comments");
                         ui.checkbox(&mut self.controls.var_dis, "Disable variables");
                         ui.checkbox(&mut self.controls.ext_char, "Extended chars");
                     });
@@ -1169,6 +1170,7 @@ struct UiControls {
     use_image_size: bool,
     inlay: bool,
     bmp_long: bool,
+    recovery_comments: bool,
     var_dis: bool,
     ext_char: bool,
     v_flop: bool,
@@ -1234,6 +1236,7 @@ impl UiControls {
             use_image_size: get_legacy_bool(settings, "useIMGsize", false),
             inlay: get_legacy_bool(settings, "inlay", false),
             bmp_long: get_legacy_bool(settings, "bmp_long", true),
+            recovery_comments: !get_legacy_bool(settings, "no_comments", false),
             var_dis: get_legacy_bool(settings, "var_dis", true),
             ext_char: get_legacy_bool(settings, "ext_char", false),
             v_flop: get_legacy_bool(settings, "v_flop", false),
@@ -1446,6 +1449,7 @@ impl UiControls {
         push_bool(&mut entries, "useIMGsize", self.use_image_size);
         push_bool(&mut entries, "inlay", self.inlay);
         push_bool(&mut entries, "bmp_long", self.bmp_long);
+        push_bool(&mut entries, "no_comments", !self.recovery_comments);
         push_bool(&mut entries, "var_dis", self.var_dis);
         push_bool(&mut entries, "ext_char", self.ext_char);
         push_bool(&mut entries, "v_flop", self.v_flop);
@@ -3842,6 +3846,7 @@ mod tests {
         settings.set_or_push("gpre", "G17|M3 S12000", false);
         settings.set_or_push("gpost", "M5|M2", false);
         settings.set_or_push("clean_paths", "1,0,1,0,1,0,1,1", false);
+        settings.set_or_push("no_comments", "1", false);
         settings.set_or_push("var_dis", "0", false);
         settings.set_or_push("ext_char", "1", false);
         settings.set_or_push("v_flop", "1", false);
@@ -3850,6 +3855,7 @@ mod tests {
         assert_eq!(controls.height_calc, HeightCalcChoice::MaxAll);
         assert_eq!(controls.gpre, "G17|M3 S12000");
         assert_eq!(controls.clean_paths, "1,0,1,0,1,0,1,1");
+        assert!(!controls.recovery_comments);
         assert!(!controls.var_dis);
         assert!(controls.ext_char);
         assert!(controls.v_flop);
@@ -3858,6 +3864,7 @@ mod tests {
         controls.gpre = " G90|M3 S9000 ".to_owned();
         controls.gpost = " M5|M30 ".to_owned();
         controls.clean_paths = " 0,1,0,1,0,1,0,1 ".to_owned();
+        controls.recovery_comments = true;
         controls.var_dis = true;
         controls.ext_char = false;
         controls.v_flop = false;
@@ -3874,6 +3881,7 @@ mod tests {
         assert_eq!(value_for("gpre"), Some("G90|M3 S9000"));
         assert_eq!(value_for("gpost"), Some("M5|M30"));
         assert_eq!(value_for("clean_paths"), Some("0,1,0,1,0,1,0,1"));
+        assert_eq!(value_for("no_comments"), Some("0"));
         assert_eq!(value_for("var_dis"), Some("1"));
         assert_eq!(value_for("ext_char"), Some("0"));
         assert_eq!(value_for("v_flop"), Some("0"));

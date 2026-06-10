@@ -114,7 +114,7 @@ pub fn default_legacy_settings() -> LegacySettings {
         ("var_dis", "1"),
         ("ext_char", "0"),
         ("useIMGsize", "0"),
-        ("no_comments", "1"),
+        ("no_comments", "0"),
         ("plotbox", "0"),
         ("show_v_path", "1"),
         ("show_v_area", "1"),
@@ -304,6 +304,7 @@ mod tests {
         assert_eq!(settings.get_last("cut_type"), Some("engrave"));
         assert_eq!(settings.get_last("bit_shape"), Some("VBIT"));
         assert_eq!(settings.get_last("clean_paths"), Some("1,1,0,1,0,1,0,0"));
+        assert_eq!(settings.get_last("no_comments"), Some("0"));
         assert!(
             settings
                 .to_string()

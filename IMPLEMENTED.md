@@ -9,6 +9,7 @@ This document records what has actually been implemented in the Rust port and wh
 - The bottom output area now has a Cleanup tab that shows generated companion G-code grouped by suffix before export.
 - Stale-output detection now includes the secondary-output request flag, preventing cleanup files from silently falling out of sync with the visible preview/output.
 - The input preview area is larger and has an explicit Refresh action for reloading changed source files from disk.
+- R-Engrave now defaults to emitting recovery settings comments, honors legacy `no_comments 1` when loaded, and exposes that behavior in the UI as a Recovery comments toggle.
 
 ## Current Shape
 
@@ -33,6 +34,7 @@ This document records what has actually been implemented in the Rust port and wh
 - Add Box rectangular border support for engrave/v-carve cases.
 - Add Circle support for text-on-circle engrave output, including full-circle `G2 I... J...` G-code and SVG circle output.
 - Engrave G-code output with safe/depth moves, feeds, variables, units, preamble/postamble, and optional arc fitting.
+- Recovery settings comments are emitted by default for compatibility and can be suppressed with legacy `no_comments 1`.
 - Arc fitting modes `none`, `center`, and `radius` are present.
 - Initial V-carve point generation for V-bit, ball, and flat cutters.
 - Initial inlay/depth-limit/effective diameter handling.
@@ -52,7 +54,7 @@ This document records what has actually been implemented in the Rust port and wh
 - UI path preferences are persisted under the platform config directory and restored on the next launch when CLI arguments do not override them.
 - Common F-Engrave settings are exposed as working controls: mode, units, justification, origin, height/width/spacing, angle, text radius, flip/mirror, Add Box, safe/cut Z, stroke, feed/plunge, arc fitting, bit shape, V-bit/inlay/depth settings, cleanup diameter/step/V size/path mask/normal flip, and bitmap image-size/long-curve toggles.
 - The right panel has a Bitmap section that reports Potrace detected/missing status, indicates when the selected input requires Potrace, and exposes Potrace turn policy, turd size, alpha max, and optimization tolerance.
-- The right panel has an Advanced section for core-supported settings that were previously hidden: height calculation mode, G-code preamble/postamble, variable output, and extended TTF/CXF character conversion.
+- The right panel has an Advanced section for core-supported settings that were previously hidden: height calculation mode, G-code preamble/postamble, recovery comments, variable output, and extended TTF/CXF character conversion.
 - UI controls emit legacy `fengrave_set` overrides into `rengrave-core`; they do not write temporary settings files.
 - The app calculates through the same batch core path used by the CLI, now on a background worker so the preview and controls stay responsive.
 - Calculation has an indeterminate progress indicator, a Cancel action, and stale-result handling. If inputs change while a worker is running, the old result is ignored instead of replacing the current state.
@@ -88,7 +90,7 @@ The UI is now an MVP rather than only a shell, but it still lacks several expect
 - Full prismatic/inlay parity, including all F-Engrave edge cases around Add Box/Flip Normals, cleanup, depth limits, and output ordering.
 - Multipass parity for ordinary engraving and v-carve workflows beyond the currently ported roughing/depth-cap behavior.
 - More exact cleanup-path behavior and ordering compared with F-Engrave.
-- More exact G-code formatting and comments behavior, including decisions around `no_comments` versus the plan’s recovery-comment compatibility contract.
+- More exact G-code formatting and comment wording compared with F-Engrave fixture output.
 - DXF export parity beyond line-entity output; F-Engrave behavior should be fixture-tested.
 - Bitmap parity against Potrace/F-Engrave fixtures, including image thresholding, alpha behavior, option edge cases, and fixture-proven DXF/toolpath output.
 - TTF conversion parity against F-Engrave’s historical CXF conversion behavior.
