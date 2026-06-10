@@ -2910,6 +2910,21 @@ fn vector_input_preview(label: &str, segments: Vec<PreviewSegment>) -> InputPrev
     }
 }
 
+fn vector_input_preview_readouts(
+    segments: &[PreviewSegment],
+    bounds: Option<PreviewBounds>,
+) -> Vec<String> {
+    let mut readouts = Vec::new();
+    readouts.push(preview_length_readout("Stroke length", segments));
+    if let Some((size, range)) = preview_bounds_readout(bounds) {
+        readouts.push(size);
+        readouts.push(range);
+    } else {
+        readouts.push("Extents: none".to_owned());
+    }
+    readouts
+}
+
 fn preview_segments_for_font(font: &Font, sample_text: Option<&str>) -> Vec<PreviewSegment> {
     let mut segments = Vec::new();
     let mut cursor_x = 0.0;
@@ -3023,6 +3038,9 @@ fn draw_input_preview(ui: &mut egui::Ui, preview: &mut InputPreview) {
             segment_count,
         } => {
             ui.label(format!("{label} · {segment_count} segments"));
+            for readout in vector_input_preview_readouts(segments, *bounds) {
+                ui.monospace(readout);
+            }
             draw_vector_input_preview(ui, segments, *bounds);
         }
         InputPreviewData::Bitmap {
@@ -4035,6 +4053,31 @@ mod tests {
         assert_eq!(
             preview_length_readout("Rapid length", &[]),
             "Rapid length: 0.0000"
+        );
+    }
+
+    #[test]
+    fn vector_input_preview_readouts_include_length_and_bounds() {
+        let segments = vec![PreviewSegment {
+            start: Point::new(-1.0, 0.0),
+            end: Point::new(2.0, 4.0),
+        }];
+        let bounds = PreviewBounds::from_segments(&segments);
+
+        assert_eq!(
+            vector_input_preview_readouts(&segments, bounds),
+            vec![
+                "Stroke length: 5.0000".to_owned(),
+                "Extents: 3.0000 x 4.0000".to_owned(),
+                "X -1.0000..2.0000  Y 0.0000..4.0000".to_owned(),
+            ]
+        );
+        assert_eq!(
+            vector_input_preview_readouts(&[], None),
+            vec![
+                "Stroke length: 0.0000".to_owned(),
+                "Extents: none".to_owned(),
+            ]
         );
     }
 
