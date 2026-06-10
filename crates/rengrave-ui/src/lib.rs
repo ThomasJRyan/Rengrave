@@ -1,6 +1,12 @@
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+    mpsc::{self, Receiver, TryRecvError},
+};
+use std::thread;
 
 use eframe::egui;
 use rengrave_core::batch::{BatchOutput, BatchRequest, prepare_batch_output};
@@ -54,6 +60,8 @@ struct RengraveApp {
     show_v_area: bool,
     browser: Option<FileBrowser>,
     preferences_path: Option<PathBuf>,
+    calculation: Option<CalculationJob>,
+    next_calculation_id: u64,
     warnings: Vec<String>,
 }
 
@@ -135,9 +143,11 @@ impl RengraveApp {
             show_v_area: false,
             browser: None,
             preferences_path,
+            calculation: None,
+            next_calculation_id: 1,
             warnings: document.warnings,
         };
-        app.calculate();
+        app.start_calculation(cc.egui_ctx.clone());
         app
     }
 
@@ -155,7 +165,7 @@ impl RengraveApp {
         }
     }
 
-    fn reload_document(&mut self) {
+    fn reload_document(&mut self, ctx: egui::Context) {
         match load_document(&DocumentRequest {
             gcode_file: path_from_text(&self.settings_path),
             font_or_image: path_from_text(&self.input_path),
@@ -170,24 +180,84 @@ impl RengraveApp {
                 self.warnings = document.warnings;
                 self.status = "Document loaded".to_owned();
                 self.save_preferences();
-                self.calculate();
+                self.start_calculation(ctx);
             }
             Err(err) => {
+                self.cancel_calculation("Load failed");
                 self.status = "Load failed".to_owned();
                 self.warnings = vec![err.to_string()];
             }
         }
     }
 
-    fn calculate(&mut self) {
-        match prepare_batch_output(&self.batch_request(true)) {
+    fn start_calculation(&mut self, ctx: egui::Context) {
+        self.cancel_calculation("Calculation superseded");
+        let id = self.next_calculation_id;
+        self.next_calculation_id += 1;
+        let request = self.batch_request(true);
+        let worker_request = request.clone();
+        let (sender, receiver) = mpsc::channel();
+        let cancel_flag = Arc::new(AtomicBool::new(false));
+        let worker_cancel_flag = Arc::clone(&cancel_flag);
+        thread::spawn(move || {
+            let result = prepare_batch_output(&worker_request).map_err(|err| err.to_string());
+            let canceled = worker_cancel_flag.load(Ordering::Relaxed);
+            let _ = sender.send(CalculationMessage {
+                id,
+                result,
+                canceled,
+            });
+            ctx.request_repaint();
+        });
+        self.calculation = Some(CalculationJob {
+            id,
+            request,
+            receiver,
+            cancel_flag,
+        });
+        self.status = "Calculating".to_owned();
+    }
+
+    fn cancel_calculation(&mut self, status: &str) {
+        if let Some(job) = self.calculation.take() {
+            job.cancel_flag.store(true, Ordering::Relaxed);
+            self.status = status.to_owned();
+        }
+    }
+
+    fn poll_calculation(&mut self) {
+        let Some(job) = self.calculation.take() else {
+            return;
+        };
+        match job.receiver.try_recv() {
+            Ok(message) => self.apply_calculation_message(job, message),
+            Err(TryRecvError::Empty) => {
+                self.calculation = Some(job);
+            }
+            Err(TryRecvError::Disconnected) => {
+                self.status = "Calculation worker stopped".to_owned();
+            }
+        }
+    }
+
+    fn apply_calculation_message(&mut self, job: CalculationJob, message: CalculationMessage) {
+        if message.id != job.id || message.canceled {
+            self.status = "Stale calculation ignored".to_owned();
+            return;
+        }
+        let current_request = self.batch_request(true);
+        if calculation_request_is_stale(&current_request, &job.request) {
+            self.status = "Stale calculation ignored".to_owned();
+            return;
+        }
+        match message.result {
             Ok(output) => {
                 self.apply_batch_output(output);
                 self.save_preferences();
             }
             Err(err) => {
                 self.status = "Generation failed".to_owned();
-                self.warnings = vec![err.to_string()];
+                self.warnings = vec![err];
                 self.gcode.clear();
                 self.svg = None;
                 self.dxf = None;
@@ -292,18 +362,32 @@ impl RengraveApp {
 
 impl eframe::App for RengraveApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        self.poll_calculation();
         egui::Panel::top("toolbar")
             .exact_size(42.0)
             .show_inside(ui, |ui| {
                 ui.horizontal(|ui| {
                     if ui.button("Load").clicked() {
-                        self.reload_document();
+                        self.reload_document(ui.ctx().clone());
                     }
                     if ui.button("Calculate").clicked() {
-                        self.calculate();
+                        self.start_calculation(ui.ctx().clone());
                     }
                     if ui.button("Fit").clicked() {
                         self.fit_preview();
+                    }
+                    if self.calculation.is_some() {
+                        ui.spinner();
+                        ui.label("Calculating");
+                        if self.active_calculation_is_stale() {
+                            ui.colored_label(
+                                egui::Color32::from_rgb(225, 176, 84),
+                                "Input changed",
+                            );
+                        }
+                        if ui.button("Cancel").clicked() {
+                            self.cancel_calculation("Calculation canceled");
+                        }
                     }
                     ui.separator();
                     ui.add(
@@ -342,10 +426,10 @@ impl eframe::App for RengraveApp {
                     }
                     ui.horizontal(|ui| {
                         if ui.button("Load").clicked() {
-                            self.reload_document();
+                            self.reload_document(ui.ctx().clone());
                         }
                         if ui.button("Calculate").clicked() {
-                            self.calculate();
+                            self.start_calculation(ui.ctx().clone());
                         }
                     });
                     ui.label("Text");
@@ -606,6 +690,13 @@ impl RengraveApp {
                 self.apply_browser_selection(browser.target, path);
             }
         }
+    }
+
+    fn active_calculation_is_stale(&self) -> bool {
+        self.calculation
+            .as_ref()
+            .map(|job| calculation_request_is_stale(&self.batch_request(true), &job.request))
+            .unwrap_or(false)
     }
 }
 
@@ -1281,6 +1372,19 @@ enum BrowserAction {
     Select(PathBuf),
 }
 
+struct CalculationJob {
+    id: u64,
+    request: BatchRequest,
+    receiver: Receiver<CalculationMessage>,
+    cancel_flag: Arc<AtomicBool>,
+}
+
+struct CalculationMessage {
+    id: u64,
+    result: Result<BatchOutput, String>,
+    canceled: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ExportKind {
     Gcode,
@@ -1295,6 +1399,17 @@ fn default_output_path(default_dir: &Option<PathBuf>, file_name: &str) -> String
         .unwrap_or_else(|| PathBuf::from(file_name))
         .display()
         .to_string()
+}
+
+fn calculation_request_is_stale(current: &BatchRequest, expected: &BatchRequest) -> bool {
+    current.batch != expected.batch
+        || current.gcode_file != expected.gcode_file
+        || current.font_or_image != expected.font_or_image
+        || current.default_dir != expected.default_dir
+        || current.text != expected.text
+        || current.settings_overrides != expected.settings_overrides
+        || current.svg_output.is_some() != expected.svg_output.is_some()
+        || current.dxf_output.is_some() != expected.dxf_output.is_some()
 }
 
 fn write_text_file(path_text: &str, contents: &str) -> Result<PathBuf, String> {
@@ -1889,6 +2004,53 @@ mod tests {
             default_output_path(&None, "rengrave_output.ngc"),
             "rengrave_output.ngc"
         );
+    }
+
+    #[test]
+    fn calculation_staleness_ignores_output_path_text() {
+        let expected = BatchRequest {
+            batch: true,
+            text: Some("A".to_owned()),
+            svg_output: Some(PathBuf::from("/tmp/old.svg")),
+            dxf_output: Some(PathBuf::from("/tmp/old.dxf")),
+            ..BatchRequest::default()
+        };
+        let current = BatchRequest {
+            svg_output: Some(PathBuf::from("/tmp/new.svg")),
+            dxf_output: Some(PathBuf::from("/tmp/new.dxf")),
+            ..expected.clone()
+        };
+
+        assert!(!calculation_request_is_stale(&current, &expected));
+    }
+
+    #[test]
+    fn calculation_staleness_detects_generation_inputs() {
+        let expected = BatchRequest {
+            batch: true,
+            text: Some("A".to_owned()),
+            settings_overrides: vec![LegacySetting::new("YSCALE", "2", false)],
+            ..BatchRequest::default()
+        };
+        let text_changed = BatchRequest {
+            text: Some("B".to_owned()),
+            ..expected.clone()
+        };
+        let settings_changed = BatchRequest {
+            settings_overrides: vec![LegacySetting::new("YSCALE", "3", false)],
+            ..expected.clone()
+        };
+        let export_toggle_changed = BatchRequest {
+            svg_output: Some(PathBuf::from("/tmp/out.svg")),
+            ..expected.clone()
+        };
+
+        assert!(calculation_request_is_stale(&text_changed, &expected));
+        assert!(calculation_request_is_stale(&settings_changed, &expected));
+        assert!(calculation_request_is_stale(
+            &export_toggle_changed,
+            &expected
+        ));
     }
 
     #[test]

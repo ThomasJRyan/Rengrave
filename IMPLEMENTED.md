@@ -40,19 +40,20 @@ This document records what has actually been implemented in the Rust port and wh
 - UI path preferences are persisted under the platform config directory and restored on the next launch when CLI arguments do not override them.
 - Common F-Engrave settings are exposed as working controls: mode, units, justification, origin, height/width/spacing, angle, text radius, flip/mirror, Add Box, safe/cut Z, stroke, feed/plunge, arc fitting, bit shape, V-bit/inlay/depth settings, cleanup diameter/step/V size, and bitmap size/long-path toggles.
 - UI controls emit legacy `fengrave_set` overrides into `rengrave-core`; they do not write temporary settings files.
-- The app can calculate through the same batch core path used by the CLI.
+- The app calculates through the same batch core path used by the CLI, now on a background worker so the preview and controls stay responsive.
+- Calculation has an indeterminate progress indicator, a Cancel action, and stale-result handling. If inputs change while a worker is running, the old result is ignored instead of replacing the current state.
 - It stores generated G-code/SVG/DXF payloads and can write them to user-editable paths.
 - It previews linear G-code moves and now approximates center-format full-circle arcs for display.
 - It has basic toggles for toolpath and bounds layers and simple zoom/view rotation controls.
 
 ## Why The UI Looks Bare
 
-The UI is now an MVP rather than only a shell, but it still lacks several expected desktop workflow pieces. There are no native OS file dialogs, font preview/list browser, Potrace option panel, progress/cancel flow, or F-Engrave-style menus. Controls cover common settings, but not every legacy knob. Long calculations still run synchronously on the UI thread.
+The UI is now an MVP rather than only a shell, but it still lacks several expected desktop workflow pieces. There are no native OS file dialogs, font preview/list browser, Potrace option panel, cooperative mid-algorithm cancellation, or F-Engrave-style menus. Controls cover common settings, but not every legacy knob. Background jobs keep the UI responsive, but the current Cancel action ignores late worker results rather than interrupting every core loop immediately.
 
 ## Tests And Validation In Place
 
 - Core tests currently cover settings, CXF/TTF parsing, DXF entities, bitmap conversion, layout transforms, Add Box/Circle, G-code, SVG/DXF export, cleanup, v-carve options, and batch generation.
-- UI tests cover default output paths, path-field parsing, in-app browser directory behavior, preference persistence, control-to-legacy override emission, text-file write errors, linear preview parsing, and full-circle arc preview parsing.
+- UI tests cover default output paths, path-field parsing, in-app browser directory behavior, preference persistence, worker stale-result detection, control-to-legacy override emission, text-file write errors, linear preview parsing, and full-circle arc preview parsing.
 - Recent validation has been run with:
   - `cargo test -p rengrave-core`
   - `cargo test -p rengrave-ui`
@@ -62,7 +63,7 @@ The UI is now an MVP rather than only a shell, but it still lacks several expect
 
 - Golden fixtures from F-Engrave output. Current tests are focused unit/batch checks, not broad golden comparisons against F-Engrave-generated `.ngc`, `.svg`, and `.dxf` files.
 - Full F-Engrave UI workflow: native file open/save dialogs, font browser with previews, complete settings panels, complete v-carve/cleanup parity controls, bitmap controls, config save/load, clipboard operations, and parity menus.
-- Worker-thread calculation model with progress, cancellation, stale-state handling, and no UI freeze.
+- Deeper cooperative cancellation/progress inside long core algorithms. The UI has a background worker, indeterminate progress, Cancel, and stale-state handling, but core routines do not yet report detailed progress or stop mid-loop.
 - Stronger V-carve parity. The current V-carve implementation is initial and not proven equivalent to F-Engrave’s full algorithm for complex glyphs and artwork.
 - Full prismatic/inlay parity, including all F-Engrave edge cases around Add Box/Flip Normals, cleanup, depth limits, and output ordering.
 - Multipass parity for ordinary engraving and v-carve workflows beyond the currently ported roughing/depth-cap behavior.
@@ -80,4 +81,4 @@ The UI is now an MVP rather than only a shell, but it still lacks several expect
 2. Replace or supplement the in-app browser with native file pickers, add font/image previews, and broaden the settings editor.
 3. Expand parity tests for default text, multiline text, text-on-circle, flip/mirror/origin/justify, DXF imports, bitmap imports, Add Box/Circle, arc-fit modes, and settings round trips.
 4. Audit V-carve and cleanup output against F-Engrave fixtures before adding more UI around those features.
-5. Add progress/cancel worker execution for long calculations.
+5. Add detailed progress reporting and cooperative cancellation checks inside expensive core import, cleanup, and v-carve routines.
