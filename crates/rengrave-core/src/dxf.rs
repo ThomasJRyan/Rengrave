@@ -149,6 +149,13 @@ fn parse_entity_pairs(
                 append_transformed_strokes(&entity_strokes, transform, strokes);
                 idx = next;
             }
+            "SOLID" => {
+                let (entity, next) = collect_entity(pairs, idx + 1);
+                let mut entity_strokes = Vec::new();
+                parse_solid_entity(entity, &mut entity_strokes);
+                append_transformed_strokes(&entity_strokes, transform, strokes);
+                idx = next;
+            }
             "LWPOLYLINE" => {
                 let (entity, next) = collect_entity(pairs, idx + 1);
                 let mut entity_strokes = Vec::new();
@@ -346,6 +353,49 @@ fn parse_insert_entity(
         rotate_degrees: rotate,
     };
     parse_entity_pairs(&block.pairs, segarc_degrees, blocks, transform, strokes);
+}
+
+fn parse_solid_entity(entity: &[(i32, String)], strokes: &mut Vec<Stroke>) {
+    let mut p0 = PartialPoint::default();
+    let mut p1 = PartialPoint::default();
+    let mut p2 = PartialPoint::default();
+    let mut p3 = PartialPoint::default();
+
+    for (code, value) in entity {
+        match *code {
+            10 => p0.x = value.parse().ok(),
+            20 => p0.y = value.parse().ok(),
+            11 => p1.x = value.parse().ok(),
+            21 => p1.y = value.parse().ok(),
+            12 => p2.x = value.parse().ok(),
+            22 => p2.y = value.parse().ok(),
+            13 => p3.x = value.parse().ok(),
+            23 => p3.y = value.parse().ok(),
+            _ => {}
+        }
+    }
+
+    let (Some(p0), Some(p1), Some(p2)) = (p0.into_point(), p1.into_point(), p2.into_point()) else {
+        return;
+    };
+    let p3 = p3.into_point().unwrap_or(p2);
+
+    strokes.push(Stroke { start: p0, end: p1 });
+    strokes.push(Stroke { start: p1, end: p3 });
+    strokes.push(Stroke { start: p3, end: p2 });
+    strokes.push(Stroke { start: p2, end: p0 });
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+struct PartialPoint {
+    x: Option<f64>,
+    y: Option<f64>,
+}
+
+impl PartialPoint {
+    fn into_point(self) -> Option<Point> {
+        Some(Point::new(self.x?, self.y?))
+    }
 }
 
 fn parse_leader_entity(entity: &[(i32, String)], strokes: &mut Vec<Stroke>) {
@@ -803,6 +853,56 @@ EOF
         assert_eq!(strokes[0].start, Point::new(0.0, 0.0));
         assert_eq!(strokes[0].end, Point::new(1.0, 0.0));
         assert_eq!(strokes[1].end, Point::new(1.0, 1.0));
+    }
+
+    #[test]
+    fn parses_solid_entity_outlines() {
+        let strokes = parse_dxf_segments(
+            "\
+0
+SOLID
+10
+0
+20
+0
+11
+2
+21
+0
+12
+0
+22
+1
+13
+2
+23
+1
+0
+ENDSEC
+",
+            5.0,
+        );
+
+        assert_eq!(strokes.len(), 4);
+        assert_eq!(strokes[0].start, Point::new(0.0, 0.0));
+        assert_eq!(strokes[0].end, Point::new(2.0, 0.0));
+        assert_eq!(strokes[1].end, Point::new(2.0, 1.0));
+        assert_eq!(strokes[2].end, Point::new(0.0, 1.0));
+        assert_eq!(strokes[3].end, Point::new(0.0, 0.0));
+    }
+
+    #[test]
+    fn parses_triangular_solid_entity_outlines() {
+        let strokes = parse_dxf_segments(
+            "0\nSOLID\n10\n0\n20\n0\n11\n2\n21\n0\n12\n0\n22\n1\n0\nENDSEC\n",
+            5.0,
+        );
+
+        assert_eq!(strokes.len(), 4);
+        assert_eq!(strokes[1].end, Point::new(0.0, 1.0));
+        assert_eq!(strokes[2].start, Point::new(0.0, 1.0));
+        assert_eq!(strokes[2].end, Point::new(0.0, 1.0));
+        assert_eq!(strokes[3].end, Point::new(0.0, 0.0));
     }
 
     #[test]
