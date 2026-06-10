@@ -59,6 +59,7 @@ struct RengraveApp {
     show_bounds: bool,
     show_v_area: bool,
     browser: Option<FileBrowser>,
+    input_catalog: InputCatalog,
     preferences_path: Option<PathBuf>,
     calculation: Option<CalculationJob>,
     next_calculation_id: u64,
@@ -85,6 +86,8 @@ impl RengraveApp {
             .default_dir
             .clone()
             .or_else(|| path_from_text(&preferences.default_dir_path));
+        let input_catalog =
+            InputCatalog::scan(input_catalog_start_dir(&font_or_image, &default_dir));
         let document_request = DocumentRequest {
             gcode_file: gcode_file.clone(),
             font_or_image: font_or_image.clone(),
@@ -142,6 +145,7 @@ impl RengraveApp {
             show_bounds: true,
             show_v_area: false,
             browser: None,
+            input_catalog,
             preferences_path,
             calculation: None,
             next_calculation_id: 1,
@@ -331,14 +335,35 @@ impl RengraveApp {
         let text = path.display().to_string();
         match target {
             FileBrowserTarget::Settings => self.settings_path = text,
-            FileBrowserTarget::Input => self.input_path = text,
-            FileBrowserTarget::DefaultDir => self.default_dir_path = text,
+            FileBrowserTarget::Input => {
+                self.input_path = text;
+                self.refresh_input_catalog();
+            }
+            FileBrowserTarget::DefaultDir => {
+                self.default_dir_path = text;
+                self.refresh_input_catalog();
+            }
             FileBrowserTarget::GcodeOutput => self.gcode_path = text,
             FileBrowserTarget::SvgOutput => self.svg_path = text,
             FileBrowserTarget::DxfOutput => self.dxf_path = text,
         }
         self.status = format!("Selected {}", target.label());
         self.save_preferences();
+    }
+
+    fn refresh_input_catalog(&mut self) {
+        let start_dir = input_catalog_start_dir(
+            &path_from_text(&self.input_path),
+            &path_from_text(&self.default_dir_path),
+        );
+        self.input_catalog = InputCatalog::scan(start_dir);
+    }
+
+    fn select_input_catalog_entry(&mut self, path: PathBuf, ctx: egui::Context) {
+        self.input_path = path.display().to_string();
+        self.status = "Input selected".to_owned();
+        self.save_preferences();
+        self.start_calculation(ctx);
     }
 
     fn save_preferences(&mut self) {
@@ -432,6 +457,44 @@ impl eframe::App for RengraveApp {
                             self.start_calculation(ui.ctx().clone());
                         }
                     });
+                    ui.separator();
+                    ui.heading("Input Catalog");
+                    ui.horizontal(|ui| {
+                        if ui.button("Scan").clicked() {
+                            self.refresh_input_catalog();
+                        }
+                        if let Some(dir) = &self.input_catalog.dir {
+                            ui.monospace(dir.display().to_string());
+                        }
+                    });
+                    if let Some(error) = &self.input_catalog.error {
+                        ui.colored_label(egui::Color32::from_rgb(225, 176, 84), error);
+                    }
+                    if self.input_catalog.entries.is_empty() {
+                        ui.label("No supported files found");
+                    } else {
+                        egui::ScrollArea::vertical()
+                            .max_height(150.0)
+                            .show(ui, |ui| {
+                                for entry in self.input_catalog.entries.clone() {
+                                    let selected = path_from_text(&self.input_path).as_ref()
+                                        == Some(&entry.path);
+                                    let label = format!(
+                                        "{}  {}  {}",
+                                        entry.kind.label(),
+                                        entry.name,
+                                        format_bytes(entry.size_bytes)
+                                    );
+                                    if ui.selectable_label(selected, label).clicked() {
+                                        self.select_input_catalog_entry(
+                                            entry.path,
+                                            ui.ctx().clone(),
+                                        );
+                                    }
+                                }
+                            });
+                    }
+                    ui.separator();
                     ui.label("Text");
                     ui.add_sized(
                         [ui.available_width(), 120.0],
@@ -1228,7 +1291,8 @@ impl FileBrowserTarget {
     fn can_select(self, path: &Path) -> bool {
         match self {
             Self::DefaultDir => path.is_dir(),
-            Self::Settings | Self::Input => path.is_file(),
+            Self::Settings => path.is_file(),
+            Self::Input => path.is_file() || path.is_dir(),
             Self::GcodeOutput | Self::SvgOutput | Self::DxfOutput => !path.is_dir(),
         }
     }
@@ -1350,8 +1414,10 @@ impl FileBrowser {
                 if ui.button("Use current dir").clicked() {
                     action = BrowserAction::Select(self.current_dir.join(file_name));
                 }
-            } else if self.target == FileBrowserTarget::DefaultDir
-                && ui.button("Use current dir").clicked()
+            } else if matches!(
+                self.target,
+                FileBrowserTarget::DefaultDir | FileBrowserTarget::Input
+            ) && ui.button("Use current dir").clicked()
             {
                 action = BrowserAction::Select(self.current_dir.clone());
             }
@@ -1370,6 +1436,84 @@ enum BrowserAction {
     Keep,
     Close,
     Select(PathBuf),
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct InputCatalog {
+    dir: Option<PathBuf>,
+    entries: Vec<InputCatalogEntry>,
+    error: Option<String>,
+}
+
+impl InputCatalog {
+    fn scan(dir: PathBuf) -> Self {
+        match read_input_catalog_entries(&dir) {
+            Ok(entries) => Self {
+                dir: Some(dir),
+                entries,
+                error: None,
+            },
+            Err(err) => Self {
+                dir: Some(dir),
+                entries: Vec::new(),
+                error: Some(err),
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct InputCatalogEntry {
+    path: PathBuf,
+    name: String,
+    kind: InputCatalogKind,
+    size_bytes: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InputCatalogKind {
+    CxfFont,
+    TtfFont,
+    Dxf,
+    Bitmap,
+}
+
+impl InputCatalogKind {
+    fn from_path(path: &Path) -> Option<Self> {
+        match path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(str::to_ascii_lowercase)
+            .as_deref()
+        {
+            Some("cxf") => Some(Self::CxfFont),
+            Some("ttf") => Some(Self::TtfFont),
+            Some("dxf") => Some(Self::Dxf),
+            Some(
+                "bmp" | "gif" | "jpg" | "jpeg" | "png" | "tif" | "tiff" | "pbm" | "ppm" | "pgm"
+                | "pnm",
+            ) => Some(Self::Bitmap),
+            _ => None,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::CxfFont => "CXF",
+            Self::TtfFont => "TTF",
+            Self::Dxf => "DXF",
+            Self::Bitmap => "Bitmap",
+        }
+    }
+
+    fn sort_rank(self) -> u8 {
+        match self {
+            Self::CxfFont => 0,
+            Self::TtfFont => 1,
+            Self::Dxf => 2,
+            Self::Bitmap => 3,
+        }
+    }
 }
 
 struct CalculationJob {
@@ -1563,6 +1707,76 @@ fn read_browser_entries(dir: &Path) -> Result<Vec<BrowserEntry>, String> {
             .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
     });
     Ok(entries)
+}
+
+fn input_catalog_start_dir(input: &Option<PathBuf>, default_dir: &Option<PathBuf>) -> PathBuf {
+    if let Some(input) = input {
+        if input.is_dir() {
+            return input.clone();
+        }
+        if let Some(parent) = non_empty_parent(input) {
+            return parent.to_path_buf();
+        }
+    }
+    if let Some(default_dir) = default_dir {
+        if default_dir.is_dir() {
+            return default_dir.clone();
+        }
+        if let Some(parent) = non_empty_parent(default_dir) {
+            return parent.to_path_buf();
+        }
+    }
+    env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+}
+
+fn read_input_catalog_entries(dir: &Path) -> Result<Vec<InputCatalogEntry>, String> {
+    let mut entries = Vec::new();
+    for entry in
+        fs::read_dir(dir).map_err(|err| format!("unable to read input directory: {err}"))?
+    {
+        let entry = entry.map_err(|err| format!("unable to read input entry: {err}"))?;
+        let path = entry.path();
+        let file_type = entry
+            .file_type()
+            .map_err(|err| format!("unable to read input file type: {err}"))?;
+        if !file_type.is_file() {
+            continue;
+        }
+        let Some(kind) = InputCatalogKind::from_path(&path) else {
+            continue;
+        };
+        let Some(name) = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(str::to_owned)
+        else {
+            continue;
+        };
+        let size_bytes = entry.metadata().map(|metadata| metadata.len()).unwrap_or(0);
+        entries.push(InputCatalogEntry {
+            path,
+            name,
+            kind,
+            size_bytes,
+        });
+    }
+    entries.sort_by(|left, right| {
+        left.kind
+            .sort_rank()
+            .cmp(&right.kind.sort_rank())
+            .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
+    });
+    Ok(entries)
+}
+
+fn format_bytes(bytes: u64) -> String {
+    if bytes < 1024 {
+        format!("{bytes} B")
+    } else if bytes < 1024 * 1024 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else {
+        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -2110,6 +2324,46 @@ mod tests {
         assert!(entries[0].is_dir);
         assert_eq!(entries[1].name, "a_file.ngc");
         assert!(!entries[1].is_dir);
+    }
+
+    #[test]
+    fn input_catalog_start_dir_prefers_input_parent() {
+        let dir =
+            std::env::temp_dir().join(format!("rengrave-ui-catalog-start-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let input = dir.join("font.cxf");
+        fs::write(&input, "[A] 1\nL 0,0,1,1\n").unwrap();
+
+        assert_eq!(input_catalog_start_dir(&Some(input), &None), dir.clone());
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn input_catalog_reads_supported_files_only() {
+        let dir =
+            std::env::temp_dir().join(format!("rengrave-ui-input-catalog-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("romanc.cxf"), "[A] 1\nL 0,0,1,1\n").unwrap();
+        fs::write(dir.join("shape.dxf"), "0\nSECTION\n").unwrap();
+        fs::write(dir.join("image.PNG"), b"not really png").unwrap();
+        fs::write(dir.join("notes.txt"), "ignored").unwrap();
+
+        let entries = read_input_catalog_entries(&dir).unwrap();
+
+        let _ = fs::remove_dir_all(dir);
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].kind, InputCatalogKind::CxfFont);
+        assert_eq!(entries[1].kind, InputCatalogKind::Dxf);
+        assert_eq!(entries[2].kind, InputCatalogKind::Bitmap);
+        assert!(entries.iter().all(|entry| entry.name != "notes.txt"));
+    }
+
+    #[test]
+    fn formats_input_catalog_sizes() {
+        assert_eq!(format_bytes(512), "512 B");
+        assert_eq!(format_bytes(1536), "1.5 KB");
+        assert_eq!(format_bytes(2 * 1024 * 1024), "2.0 MB");
     }
 
     #[test]
