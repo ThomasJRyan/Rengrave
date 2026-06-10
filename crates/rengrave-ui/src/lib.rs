@@ -981,12 +981,37 @@ impl eframe::App for RengraveApp {
                 self.fit_preview_to_rect(rect);
                 self.fit_preview_requested = false;
             }
-            let response = ui.allocate_rect(rect, egui::Sense::drag());
+            let response = ui.allocate_rect(rect, egui::Sense::click_and_drag());
+            if response.double_clicked() && self.preview_bounds.is_some() {
+                self.fit_preview_requested = true;
+            }
             if response.dragged() {
                 let delta = response.drag_delta();
                 self.transform.pan.x += f64::from(delta.x);
                 self.transform.pan.y += f64::from(delta.y);
                 ui.ctx().request_repaint();
+            }
+            if response.hovered() {
+                let (scroll_y, zoom_delta) =
+                    ui.input(|input| (input.smooth_scroll_delta().y, input.zoom_delta()));
+                let zoom_factor = if (zoom_delta - 1.0).abs() > f32::EPSILON {
+                    f64::from(zoom_delta)
+                } else if scroll_y.abs() > 0.0 {
+                    2.0_f64.powf(f64::from(scroll_y) / 240.0)
+                } else {
+                    1.0
+                };
+                if (zoom_factor - 1.0).abs() > f64::EPSILON {
+                    if let Some(anchor) = response.hover_pos() {
+                        zoom_transform_at_screen_point(
+                            &mut self.transform,
+                            rect,
+                            anchor,
+                            zoom_factor,
+                        );
+                        ui.ctx().request_repaint();
+                    }
+                }
             }
 
             draw_preview(
@@ -3031,6 +3056,33 @@ fn fit_transform_to_bounds(
     transform.pan = Point::new(-center.x * zoom, center.y * zoom);
 }
 
+fn zoom_transform_at_screen_point(
+    transform: &mut ViewTransform,
+    rect: egui::Rect,
+    anchor: egui::Pos2,
+    zoom_factor: f64,
+) {
+    if !zoom_factor.is_finite() || zoom_factor <= 0.0 || transform.zoom <= 0.0 {
+        return;
+    }
+
+    let old_zoom = transform.zoom;
+    let new_zoom = (old_zoom * zoom_factor).clamp(1.0, 500.0);
+    if (new_zoom - old_zoom).abs() <= f64::EPSILON {
+        return;
+    }
+
+    let applied_factor = new_zoom / old_zoom;
+    let relative_x = f64::from(anchor.x - rect.center().x);
+    let relative_y = f64::from(anchor.y - rect.center().y);
+
+    transform.pan = Point::new(
+        relative_x - (relative_x - transform.pan.x) * applied_factor,
+        relative_y + (transform.pan.y - relative_y) * applied_factor,
+    );
+    transform.zoom = new_zoom;
+}
+
 #[derive(Debug, Clone, Default, PartialEq)]
 struct PreviewMotion {
     cuts: Vec<PreviewSegment>,
@@ -3523,6 +3575,40 @@ mod tests {
         assert_eq!(transform.pan, Point::default());
         assert_eq!(transform.zoom, DEFAULT_PREVIEW_ZOOM);
         assert_eq!(transform.viewport_rotation_degrees, 45.0);
+    }
+
+    #[test]
+    fn cursor_zoom_preserves_anchor_model_point() {
+        let rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(400.0, 300.0));
+        let model_point = Point::new(1.5, -0.25);
+        let mut transform = ViewTransform {
+            zoom: 80.0,
+            model_rotation_degrees: 30.0,
+            viewport_rotation_degrees: 15.0,
+            ..ViewTransform::default()
+        };
+        let anchor = preview_screen_point(rect, transform, model_point);
+
+        zoom_transform_at_screen_point(&mut transform, rect, anchor, 2.0);
+
+        assert_eq!(transform.zoom, 160.0);
+        assert_pos_close(preview_screen_point(rect, transform, model_point), anchor);
+    }
+
+    #[test]
+    fn cursor_zoom_clamps_to_preview_zoom_limits() {
+        let rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(400.0, 300.0));
+        let anchor = rect.center();
+        let mut transform = ViewTransform {
+            zoom: 490.0,
+            ..ViewTransform::default()
+        };
+
+        zoom_transform_at_screen_point(&mut transform, rect, anchor, 10.0);
+        assert_eq!(transform.zoom, 500.0);
+
+        zoom_transform_at_screen_point(&mut transform, rect, anchor, 0.001);
+        assert_eq!(transform.zoom, 1.0);
     }
 
     #[test]
