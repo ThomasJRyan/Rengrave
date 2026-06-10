@@ -537,13 +537,13 @@ impl RengraveApp {
         self.browser = Some(FileBrowser::new(target, start_dir));
     }
 
-    fn choose_path(&mut self, target: FileBrowserTarget) {
+    fn choose_path(&mut self, target: FileBrowserTarget, ctx: egui::Context) {
         if let Some(path) = choose_native_path(
             target,
             self.browser_value(target),
             path_from_text(&self.default_dir_path),
         ) {
-            self.apply_browser_selection(target, path);
+            self.apply_browser_selection(target, path, ctx);
         } else {
             self.open_browser(target);
             self.status = "Using in-app browser".to_owned();
@@ -561,7 +561,12 @@ impl RengraveApp {
         }
     }
 
-    fn apply_browser_selection(&mut self, target: FileBrowserTarget, path: PathBuf) {
+    fn apply_browser_selection(
+        &mut self,
+        target: FileBrowserTarget,
+        path: PathBuf,
+        ctx: egui::Context,
+    ) {
         let text = path.display().to_string();
         match target {
             FileBrowserTarget::Settings => self.settings_path = text,
@@ -579,6 +584,11 @@ impl RengraveApp {
         }
         self.status = format!("Selected {}", target.label());
         self.save_preferences();
+        match selection_followup(target) {
+            SelectionFollowup::None => {}
+            SelectionFollowup::LoadDocument => self.reload_document(ctx),
+            SelectionFollowup::StartCalculation => self.start_calculation(ctx),
+        }
     }
 
     fn refresh_input_catalog(&mut self) {
@@ -687,16 +697,16 @@ impl eframe::App for RengraveApp {
                     ui.heading("Input");
                     let settings_path_action = path_row(ui, "Settings", &mut self.settings_path);
                     if settings_path_action.browse_clicked {
-                        self.choose_path(FileBrowserTarget::Settings);
+                        self.choose_path(FileBrowserTarget::Settings, ui.ctx().clone());
                     }
                     let input_path_action = path_row(ui, "Input", &mut self.input_path);
                     if input_path_action.browse_clicked {
-                        self.choose_path(FileBrowserTarget::Input);
+                        self.choose_path(FileBrowserTarget::Input, ui.ctx().clone());
                     }
                     let default_dir_action =
                         path_row(ui, "Default dir", &mut self.default_dir_path);
                     if default_dir_action.browse_clicked {
-                        self.choose_path(FileBrowserTarget::DefaultDir);
+                        self.choose_path(FileBrowserTarget::DefaultDir, ui.ctx().clone());
                     }
                     if settings_path_action.value_changed
                         || input_path_action.value_changed
@@ -1001,7 +1011,7 @@ impl eframe::App for RengraveApp {
                     }
                     let gcode_path_action = path_row(ui, "G-code", &mut self.gcode_path);
                     if gcode_path_action.browse_clicked {
-                        self.choose_path(FileBrowserTarget::GcodeOutput);
+                        self.choose_path(FileBrowserTarget::GcodeOutput, ui.ctx().clone());
                     }
                     if gcode_path_action.value_changed {
                         self.save_preferences();
@@ -1024,7 +1034,7 @@ impl eframe::App for RengraveApp {
                     }
                     let svg_path_action = path_row(ui, "SVG", &mut self.svg_path);
                     if svg_path_action.browse_clicked {
-                        self.choose_path(FileBrowserTarget::SvgOutput);
+                        self.choose_path(FileBrowserTarget::SvgOutput, ui.ctx().clone());
                     }
                     if svg_path_action.value_changed {
                         self.save_preferences();
@@ -1037,7 +1047,7 @@ impl eframe::App for RengraveApp {
                     }
                     let dxf_path_action = path_row(ui, "DXF", &mut self.dxf_path);
                     if dxf_path_action.browse_clicked {
-                        self.choose_path(FileBrowserTarget::DxfOutput);
+                        self.choose_path(FileBrowserTarget::DxfOutput, ui.ctx().clone());
                     }
                     if dxf_path_action.value_changed {
                         self.save_preferences();
@@ -1207,13 +1217,13 @@ impl RengraveApp {
         egui::MenuBar::new().ui(ui, |ui| {
             ui.menu_button("File", |ui| {
                 if menu_action(ui, "Open settings...", true) {
-                    self.choose_path(FileBrowserTarget::Settings);
+                    self.choose_path(FileBrowserTarget::Settings, ui.ctx().clone());
                 }
                 if menu_action(ui, "Open input...", true) {
-                    self.choose_path(FileBrowserTarget::Input);
+                    self.choose_path(FileBrowserTarget::Input, ui.ctx().clone());
                 }
                 if menu_action(ui, "Set default directory...", true) {
-                    self.choose_path(FileBrowserTarget::DefaultDir);
+                    self.choose_path(FileBrowserTarget::DefaultDir, ui.ctx().clone());
                 }
                 ui.separator();
                 if menu_action(ui, "Load", true) {
@@ -1227,7 +1237,7 @@ impl RengraveApp {
                 }
                 ui.separator();
                 if menu_action(ui, "Choose G-code output...", true) {
-                    self.choose_path(FileBrowserTarget::GcodeOutput);
+                    self.choose_path(FileBrowserTarget::GcodeOutput, ui.ctx().clone());
                 }
                 if menu_action(ui, "Use default dir for outputs", true) {
                     self.reset_output_paths_to_default_dir();
@@ -1321,7 +1331,7 @@ impl RengraveApp {
             BrowserAction::Keep => self.browser = Some(browser),
             BrowserAction::Close => {}
             BrowserAction::Select(path) => {
-                self.apply_browser_selection(browser.target, path);
+                self.apply_browser_selection(browser.target, path, ctx.clone());
             }
         }
     }
@@ -2083,6 +2093,24 @@ impl FileBrowserTarget {
             Self::Input => path.is_file() || path.is_dir(),
             Self::GcodeOutput | Self::SvgOutput | Self::DxfOutput => !path.is_dir(),
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SelectionFollowup {
+    None,
+    LoadDocument,
+    StartCalculation,
+}
+
+fn selection_followup(target: FileBrowserTarget) -> SelectionFollowup {
+    match target {
+        FileBrowserTarget::Settings => SelectionFollowup::LoadDocument,
+        FileBrowserTarget::Input => SelectionFollowup::StartCalculation,
+        FileBrowserTarget::DefaultDir
+        | FileBrowserTarget::GcodeOutput
+        | FileBrowserTarget::SvgOutput
+        | FileBrowserTarget::DxfOutput => SelectionFollowup::None,
     }
 }
 
@@ -4570,6 +4598,26 @@ mod tests {
         assert_eq!(
             output_file_name("/tmp/out", FileBrowserTarget::DxfOutput),
             "out"
+        );
+    }
+
+    #[test]
+    fn browser_selection_followup_matches_user_workflow() {
+        assert_eq!(
+            selection_followup(FileBrowserTarget::Settings),
+            SelectionFollowup::LoadDocument
+        );
+        assert_eq!(
+            selection_followup(FileBrowserTarget::Input),
+            SelectionFollowup::StartCalculation
+        );
+        assert_eq!(
+            selection_followup(FileBrowserTarget::DefaultDir),
+            SelectionFollowup::None
+        );
+        assert_eq!(
+            selection_followup(FileBrowserTarget::GcodeOutput),
+            SelectionFollowup::None
         );
     }
 
