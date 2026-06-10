@@ -433,7 +433,26 @@ fn parse_preview_segments(gcode: &str) -> Vec<PreviewSegment> {
             continue;
         }
 
-        let Some(next) = motion_point(trimmed, current) else {
+        let params = motion_params(trimmed);
+        if matches!(command, "G2" | "G02" | "G3" | "G03") {
+            if let Some(start) = current {
+                if let (Some(i), Some(j)) = (params.i, params.j) {
+                    let end = params.point(current).unwrap_or(start);
+                    let center = Point::new(start.x + i, start.y + j);
+                    append_preview_arc(
+                        &mut segments,
+                        start,
+                        end,
+                        center,
+                        matches!(command, "G2" | "G02"),
+                    );
+                    current = Some(end);
+                    continue;
+                }
+            }
+        }
+
+        let Some(next) = params.point(current) else {
             continue;
         };
         if matches!(command, "G1" | "G01" | "G2" | "G02" | "G3" | "G03") {
@@ -449,25 +468,104 @@ fn parse_preview_segments(gcode: &str) -> Vec<PreviewSegment> {
     segments
 }
 
-fn motion_point(line: &str, current: Option<Point>) -> Option<Point> {
-    let mut x = current.map(|point| point.x);
-    let mut y = current.map(|point| point.y);
-    let mut saw_xy = false;
+#[derive(Debug, Default)]
+struct MotionParams {
+    x: Option<f64>,
+    y: Option<f64>,
+    i: Option<f64>,
+    j: Option<f64>,
+    saw_xy: bool,
+}
+
+impl MotionParams {
+    fn point(&self, current: Option<Point>) -> Option<Point> {
+        if self.saw_xy {
+            Some(Point::new(
+                self.x
+                    .or_else(|| current.map(|point| point.x))
+                    .unwrap_or(0.0),
+                self.y
+                    .or_else(|| current.map(|point| point.y))
+                    .unwrap_or(0.0),
+            ))
+        } else {
+            current
+        }
+    }
+}
+
+fn motion_params(line: &str) -> MotionParams {
+    let mut params = MotionParams::default();
 
     for token in line.split_whitespace().skip(1) {
-        if let Some(value) = token.strip_prefix('X').and_then(|value| value.parse().ok()) {
-            x = Some(value);
-            saw_xy = true;
-        } else if let Some(value) = token.strip_prefix('Y').and_then(|value| value.parse().ok()) {
-            y = Some(value);
-            saw_xy = true;
+        if let Some(value) = axis_value(token, 'X') {
+            params.x = Some(value);
+            params.saw_xy = true;
+        } else if let Some(value) = axis_value(token, 'Y') {
+            params.y = Some(value);
+            params.saw_xy = true;
+        } else if let Some(value) = axis_value(token, 'I') {
+            params.i = Some(value);
+        } else if let Some(value) = axis_value(token, 'J') {
+            params.j = Some(value);
         }
     }
 
-    if saw_xy {
-        Some(Point::new(x.unwrap_or(0.0), y.unwrap_or(0.0)))
+    params
+}
+
+fn axis_value(token: &str, axis: char) -> Option<f64> {
+    token
+        .strip_prefix(axis)
+        .and_then(|value| value.parse().ok())
+}
+
+fn append_preview_arc(
+    segments: &mut Vec<PreviewSegment>,
+    start: Point,
+    end: Point,
+    center: Point,
+    clockwise: bool,
+) {
+    let radius = point_distance(start, center);
+    if radius <= 0.00001 {
+        return;
+    }
+
+    let start_angle = (start.y - center.y).atan2(start.x - center.x);
+    let end_angle = (end.y - center.y).atan2(end.x - center.x);
+    let full_circle = point_distance(start, end) <= 0.00001;
+    let mut sweep = if full_circle {
+        if clockwise {
+            -std::f64::consts::TAU
+        } else {
+            std::f64::consts::TAU
+        }
     } else {
-        current
+        end_angle - start_angle
+    };
+
+    if clockwise && sweep >= 0.0 {
+        sweep -= std::f64::consts::TAU;
+    } else if !clockwise && sweep <= 0.0 {
+        sweep += std::f64::consts::TAU;
+    }
+
+    let steps = ((sweep.abs() / std::f64::consts::TAU) * 64.0)
+        .ceil()
+        .max(4.0) as usize;
+    let mut previous = start;
+    for step in 1..=steps {
+        let angle = start_angle + sweep * step as f64 / steps as f64;
+        let next = Point::new(
+            center.x + radius * angle.cos(),
+            center.y + radius * angle.sin(),
+        );
+        segments.push(PreviewSegment {
+            start: previous,
+            end: next,
+        });
+        previous = next;
     }
 }
 
@@ -564,6 +662,19 @@ mod tests {
         assert_eq!(segments[0].end, Point::new(1.0, 0.0));
         assert_eq!(segments[1].start, Point::new(2.0, 2.0));
         assert_eq!(segments[1].end, Point::new(2.0, 3.0));
+    }
+
+    #[test]
+    fn parses_full_circle_arc_for_preview() {
+        let segments =
+            parse_preview_segments("G0 X-2.0000 Y0.0000\nG1 Z-0.0050\nG2 I2.0000 J0.0000\n");
+
+        assert_eq!(segments.len(), 64);
+        assert_eq!(segments[0].start, Point::new(-2.0, 0.0));
+        assert!((segments.last().unwrap().end.x + 2.0).abs() < 1e-9);
+        assert!(segments.iter().any(|segment| segment.end.x > 1.99));
+        assert!(segments.iter().any(|segment| segment.end.y > 1.99));
+        assert!(segments.iter().any(|segment| segment.end.y < -1.99));
     }
 
     #[test]
