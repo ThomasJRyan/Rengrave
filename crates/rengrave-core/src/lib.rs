@@ -1,4 +1,5 @@
 pub mod batch;
+pub mod bitmap;
 pub mod dxf;
 pub mod external;
 pub mod font;

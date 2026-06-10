@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 
-use crate::dxf::read_dxf_font;
+use crate::bitmap::vectorize_bitmap_to_dxf;
+use crate::dxf::{dxf_font_from_str, read_dxf_font};
+use crate::external::requires_potrace;
 use crate::font::{read_cxf, read_ttf};
 use crate::gcode::{GcodeOptions, write_engrave_gcode};
 use crate::layout::{LayoutSettings, layout_text};
@@ -141,21 +143,29 @@ fn generate_dxf_engrave_gcode(
         .and_then(|ext| ext.to_str())
         .map(|ext| ext.eq_ignore_ascii_case("dxf"))
         .unwrap_or(false);
-    if !is_dxf {
-        warnings.push("bitmap vectorization through Potrace is not ported yet".to_owned());
-        return None;
-    }
-
     let segarc = settings
         .get_last("segarc")
         .and_then(|value| value.parse().ok())
         .unwrap_or(5.0);
-    let font = match read_dxf_font(&path, segarc) {
-        Ok(font) => font,
-        Err(err) => {
-            warnings.push(err.to_string());
-            return None;
+    let font = if is_dxf {
+        match read_dxf_font(&path, segarc) {
+            Ok(font) => font,
+            Err(err) => {
+                warnings.push(err.to_string());
+                return None;
+            }
         }
+    } else if requires_potrace(&path) {
+        match vectorize_bitmap_to_dxf(&path, settings) {
+            Ok(dxf) => dxf_font_from_str(&dxf, segarc),
+            Err(err) => {
+                warnings.push(err.to_string());
+                return None;
+            }
+        }
+    } else {
+        warnings.push("unsupported image input format".to_owned());
+        return None;
     };
     let layout = layout_text(&font, "F", &LayoutSettings::from_legacy(settings));
     if layout.segments.is_empty() {
@@ -302,5 +312,35 @@ mod tests {
         assert!(output.gcode.contains("(fengrave_set input_type  image )"));
         assert!(!output.gcode.contains("(Engrave Text:"));
         assert!(output.gcode.contains("G1 X0.0000 Y1.9900"));
+    }
+
+    #[test]
+    fn bitmap_decode_failure_falls_back_to_settings_only_output() {
+        let path = std::env::temp_dir().join(format!(
+            "rengrave-invalid-bitmap-{}-{}.png",
+            std::process::id(),
+            "batch"
+        ));
+        fs::write(&path, b"not a png").unwrap();
+
+        let output = prepare_batch_output(&BatchRequest {
+            batch: true,
+            font_or_image: Some(path.clone()),
+            ..BatchRequest::default()
+        })
+        .unwrap();
+
+        let _ = fs::remove_file(path);
+        assert!(
+            output
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("unable to decode bitmap"))
+        );
+        assert!(
+            output
+                .gcode
+                .contains("( R-Engrave scaffold: toolpath generation is not implemented yet )")
+        );
     }
 }
