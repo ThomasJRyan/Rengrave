@@ -105,6 +105,9 @@ pub struct CleanupPoint {
     pub loop_id: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CleanupCanceled;
+
 pub fn generate_cleanup_points(
     segments: &[EngraveSegment],
     cleanup: &CleanupOptions,
@@ -112,19 +115,34 @@ pub fn generate_cleanup_points(
     bit: CleanupBit,
     accuracy: f64,
 ) -> Vec<CleanupPoint> {
+    generate_cleanup_points_with_cancel(segments, cleanup, vcarve, bit, accuracy, &|| false)
+        .expect("non-canceling cleanup generation should not cancel")
+}
+
+pub fn generate_cleanup_points_with_cancel(
+    segments: &[EngraveSegment],
+    cleanup: &CleanupOptions,
+    vcarve: &VCarveOptions,
+    bit: CleanupBit,
+    accuracy: f64,
+    cancel: &dyn Fn() -> bool,
+) -> Result<Vec<CleanupPoint>, CleanupCanceled> {
+    check_canceled(cancel)?;
     let selection = cleanup.selection(bit);
     if !selection.any() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
 
-    let source_paths = collect_closed_paths(segments, accuracy.max(ZERO));
+    let source_paths = collect_closed_paths(segments, accuracy.max(ZERO), cancel)?;
     if source_paths.is_empty() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
 
+    check_canceled(cancel)?;
     let area_paths = cleanup_area_paths(&source_paths, cleanup, vcarve, bit, accuracy.max(ZERO));
+    check_canceled(cancel)?;
     if area_paths.is_empty() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
 
     let tool_diameter = cleanup.tool_diameter(bit);
@@ -134,7 +152,7 @@ pub fn generate_cleanup_points(
     let mut next_loop_id = 1;
 
     if selection.profile {
-        append_closed_paths(&area_paths, radius, &mut next_loop_id, &mut output);
+        append_closed_paths(&area_paths, radius, &mut next_loop_id, &mut output, cancel)?;
     }
 
     if selection.loops {
@@ -145,20 +163,41 @@ pub fn generate_cleanup_points(
             accuracy.max(ZERO),
             &mut next_loop_id,
             &mut output,
-        );
+            cancel,
+        )?;
     }
 
     if selection.x {
-        let segments = horizontal_scanlines(&area_paths, tool_diameter, step_over, cleanup.v_flop);
-        append_ordered_segments(segments, radius, &mut next_loop_id, &mut output);
+        let segments = horizontal_scanlines(
+            &area_paths,
+            tool_diameter,
+            step_over,
+            cleanup.v_flop,
+            cancel,
+        )?;
+        append_ordered_segments(segments, radius, &mut next_loop_id, &mut output, cancel)?;
     }
 
     if selection.y {
-        let segments = vertical_scanlines(&area_paths, tool_diameter, step_over, cleanup.v_flop);
-        append_ordered_segments(segments, radius, &mut next_loop_id, &mut output);
+        let segments = vertical_scanlines(
+            &area_paths,
+            tool_diameter,
+            step_over,
+            cleanup.v_flop,
+            cancel,
+        )?;
+        append_ordered_segments(segments, radius, &mut next_loop_id, &mut output, cancel)?;
     }
 
-    output
+    Ok(output)
+}
+
+fn check_canceled(cancel: &dyn Fn() -> bool) -> Result<(), CleanupCanceled> {
+    if cancel() {
+        Err(CleanupCanceled)
+    } else {
+        Ok(())
+    }
 }
 
 fn cleanup_area_paths(
@@ -195,13 +234,18 @@ fn cleanup_area_paths(
     }
 }
 
-fn collect_closed_paths(segments: &[EngraveSegment], accuracy: f64) -> Vec<Vec<Point>> {
+fn collect_closed_paths(
+    segments: &[EngraveSegment],
+    accuracy: f64,
+    cancel: &dyn Fn() -> bool,
+) -> Result<Vec<Vec<Point>>, CleanupCanceled> {
     let mut paths = Vec::new();
     let mut current = Vec::new();
     let mut last_loop = None;
     let mut last_end = None;
 
     for segment in segments {
+        check_canceled(cancel)?;
         let starts_new = last_loop != Some(segment.loop_id)
             || last_end
                 .map(|point| distance(point, segment.start) > accuracy)
@@ -216,7 +260,7 @@ fn collect_closed_paths(segments: &[EngraveSegment], accuracy: f64) -> Vec<Vec<P
     }
 
     push_if_closed(&mut paths, current, accuracy);
-    paths
+    Ok(paths)
 }
 
 fn push_if_closed(paths: &mut Vec<Vec<Point>>, mut path: Vec<Point>, accuracy: f64) {
@@ -272,14 +316,17 @@ fn append_closed_paths(
     radius: f64,
     next_loop_id: &mut usize,
     output: &mut Vec<CleanupPoint>,
-) {
-    for path in order_paths(paths.to_vec()) {
+    cancel: &dyn Fn() -> bool,
+) -> Result<(), CleanupCanceled> {
+    for path in order_paths_with_cancel(paths.to_vec(), cancel)? {
+        check_canceled(cancel)?;
         if path.is_empty() {
             continue;
         }
         let loop_id = *next_loop_id;
         *next_loop_id += 1;
         for point in path.iter().copied().chain(std::iter::once(path[0])) {
+            check_canceled(cancel)?;
             output.push(CleanupPoint {
                 position: point,
                 radius,
@@ -287,6 +334,7 @@ fn append_closed_paths(
             });
         }
     }
+    Ok(())
 }
 
 fn append_loop_offsets(
@@ -296,19 +344,23 @@ fn append_loop_offsets(
     accuracy: f64,
     next_loop_id: &mut usize,
     output: &mut Vec<CleanupPoint>,
-) {
+    cancel: &dyn Fn() -> bool,
+) -> Result<(), CleanupCanceled> {
     if step <= ZERO {
-        return;
+        return Ok(());
     }
 
     let mut current = paths.to_vec();
     for _ in 0..1000 {
+        check_canceled(cancel)?;
         current = offset_paths(&current, -step, accuracy);
+        check_canceled(cancel)?;
         if current.is_empty() {
             break;
         }
-        append_closed_paths(&current, radius, next_loop_id, output);
+        append_closed_paths(&current, radius, next_loop_id, output, cancel)?;
     }
+    Ok(())
 }
 
 fn horizontal_scanlines(
@@ -316,13 +368,14 @@ fn horizontal_scanlines(
     tool_diameter: f64,
     step_over: f64,
     v_flop: bool,
-) -> Vec<Vec<Point>> {
+    cancel: &dyn Fn() -> bool,
+) -> Result<Vec<Vec<Point>>, CleanupCanceled> {
     let Some(bounds) = bounds(paths) else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
     let spacing = tool_diameter * step_over;
     if spacing <= ZERO {
-        return Vec::new();
+        return Ok(Vec::new());
     }
 
     let offset = spacing / 2.0;
@@ -330,17 +383,18 @@ fn horizontal_scanlines(
     let max_y = bounds.max.y - offset;
     let y_size = max_y - min_y;
     if y_size <= ZERO {
-        return Vec::new();
+        return Ok(Vec::new());
     }
 
     let edge = usize::from(v_flop);
     let steps = (y_size / spacing).ceil() as usize;
     if steps == 0 {
-        return Vec::new();
+        return Ok(Vec::new());
     }
 
     let mut output = Vec::new();
     for idx in 0..=steps {
+        check_canceled(cancel)?;
         let y = min_y + idx as f64 / steps as f64 * y_size;
         let xs = horizontal_intersections(paths, y);
         for pair in paired_intersections(&xs, edge) {
@@ -351,7 +405,7 @@ fn horizontal_scanlines(
             }
         }
     }
-    output
+    Ok(output)
 }
 
 fn vertical_scanlines(
@@ -359,13 +413,14 @@ fn vertical_scanlines(
     tool_diameter: f64,
     step_over: f64,
     v_flop: bool,
-) -> Vec<Vec<Point>> {
+    cancel: &dyn Fn() -> bool,
+) -> Result<Vec<Vec<Point>>, CleanupCanceled> {
     let Some(bounds) = bounds(paths) else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
     let spacing = tool_diameter * step_over;
     if spacing <= ZERO {
-        return Vec::new();
+        return Ok(Vec::new());
     }
 
     let offset = spacing / 2.0;
@@ -373,17 +428,18 @@ fn vertical_scanlines(
     let max_x = bounds.max.x - offset;
     let x_size = max_x - min_x;
     if x_size <= ZERO {
-        return Vec::new();
+        return Ok(Vec::new());
     }
 
     let edge = usize::from(v_flop);
     let steps = (x_size / spacing).ceil() as usize;
     if steps == 0 {
-        return Vec::new();
+        return Ok(Vec::new());
     }
 
     let mut output = Vec::new();
     for idx in 0..=steps {
+        check_canceled(cancel)?;
         let x = min_x + idx as f64 / steps as f64 * x_size;
         let ys = vertical_intersections(paths, x);
         for pair in paired_intersections(&ys, edge) {
@@ -394,7 +450,7 @@ fn vertical_scanlines(
             }
         }
     }
-    output
+    Ok(output)
 }
 
 fn horizontal_intersections(paths: &[Vec<Point>], y: f64) -> Vec<f64> {
@@ -447,14 +503,17 @@ fn append_ordered_segments(
     radius: f64,
     next_loop_id: &mut usize,
     output: &mut Vec<CleanupPoint>,
-) {
-    for path in order_paths(paths) {
+    cancel: &dyn Fn() -> bool,
+) -> Result<(), CleanupCanceled> {
+    for path in order_paths_with_cancel(paths, cancel)? {
+        check_canceled(cancel)?;
         if path.len() < 2 {
             continue;
         }
         let loop_id = *next_loop_id;
         *next_loop_id += 1;
         for point in path {
+            check_canceled(cancel)?;
             output.push(CleanupPoint {
                 position: point,
                 radius,
@@ -462,15 +521,20 @@ fn append_ordered_segments(
             });
         }
     }
+    Ok(())
 }
 
-fn order_paths(mut paths: Vec<Vec<Point>>) -> Vec<Vec<Point>> {
+fn order_paths_with_cancel(
+    mut paths: Vec<Vec<Point>>,
+    cancel: &dyn Fn() -> bool,
+) -> Result<Vec<Vec<Point>>, CleanupCanceled> {
     if paths.is_empty() {
-        return paths;
+        return Ok(paths);
     }
 
     let mut ordered = vec![paths.remove(0)];
     while !paths.is_empty() {
+        check_canceled(cancel)?;
         let current = *ordered.last().and_then(|path| path.last()).unwrap();
         let mut best_index = 0;
         let mut best_reverse = false;
@@ -499,7 +563,7 @@ fn order_paths(mut paths: Vec<Vec<Point>>) -> Vec<Vec<Point>> {
         ordered.push(next);
     }
 
-    ordered
+    Ok(ordered)
 }
 
 fn to_clip_paths(paths: &[Vec<Point>]) -> ClipPaths {
@@ -593,6 +657,7 @@ fn get_f64(settings: &LegacySettings, key: &str, default: f64) -> f64 {
 mod tests {
     use super::*;
     use crate::settings::default_legacy_settings;
+    use std::cell::Cell;
 
     #[test]
     fn parses_legacy_clean_paths_vbit_xy_order() {
@@ -661,6 +726,34 @@ mod tests {
                 .iter()
                 .all(|point| (point.radius - 0.025).abs() < 1e-9)
         );
+    }
+
+    #[test]
+    fn cleanup_generation_can_cancel_inside_scanline_loop() {
+        let mut settings = default_legacy_settings();
+        settings.set_or_push("clean_paths", "0,1,0,0,0,0,0,0", false);
+        settings.set_or_push("clean_dia", "0.01", false);
+        settings.set_or_push("clean_step", "10", false);
+        let cleanup = CleanupOptions::from_legacy(&settings);
+        let vcarve = VCarveOptions::from_legacy(&settings);
+        let calls = Cell::new(0usize);
+
+        let err = generate_cleanup_points_with_cancel(
+            &square_segments(),
+            &cleanup,
+            &vcarve,
+            CleanupBit::Straight,
+            0.001,
+            &|| {
+                let next = calls.get() + 1;
+                calls.set(next);
+                next > 12
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(err, CleanupCanceled);
+        assert!(calls.get() > 12);
     }
 
     fn square_segments() -> Vec<EngraveSegment> {

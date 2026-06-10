@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use crate::bitmap::vectorize_bitmap_to_dxf;
-use crate::cleanup::{CleanupBit, CleanupOptions, generate_cleanup_points};
+use crate::cleanup::{CleanupBit, CleanupOptions, generate_cleanup_points_with_cancel};
 use crate::dxf::{dxf_font_from_str, read_dxf_font};
 use crate::export::{ExportOptions, write_dxf, write_svg_with_circle};
 use crate::external::requires_potrace;
@@ -423,13 +423,15 @@ fn write_layout_gcode(
                 CleanupBit::Straight => BatchProgress::CalculatingStraightCleanup,
                 CleanupBit::VBit => BatchProgress::CalculatingVBitCleanup,
             });
-            let cleanup_points = generate_cleanup_points(
+            let cleanup_points = generate_cleanup_points_with_cancel(
                 segments,
                 &cleanup_options,
                 &vcarve_options,
                 bit,
                 gcode_options.accuracy,
-            );
+                cancel,
+            )
+            .map_err(|_| BatchError::Canceled)?;
             check_canceled(cancel)?;
             if cleanup_points.is_empty() {
                 continue;
@@ -672,6 +674,54 @@ mod tests {
         let _ = fs::remove_file(path);
         assert_eq!(err.to_string(), "generation canceled");
         assert!(vcarve_checks.get() > 4);
+    }
+
+    #[test]
+    fn batch_cancel_hook_stops_during_cleanup_scanlines() {
+        let path = std::env::temp_dir().join(format!(
+            "rengrave-cleanup-cancel-{}-{}.cxf",
+            std::process::id(),
+            "batch"
+        ));
+        fs::write(&path, "[A] 4\nL 0,0,2,0\nL 2,0,2,2\nL 2,2,0,2\nL 0,2,0,0\n").unwrap();
+        let in_cleanup = Cell::new(false);
+        let cleanup_checks = Cell::new(0usize);
+
+        let err = prepare_batch_output_with_cancel_and_progress(
+            &BatchRequest {
+                batch: true,
+                font_or_image: Some(path.clone()),
+                text: Some("A".to_owned()),
+                include_secondary: true,
+                settings_overrides: vec![
+                    LegacySetting::new("cut_type", "v-carve", false),
+                    LegacySetting::new("v_step_len", "0.5", false),
+                    LegacySetting::new("clean_paths", "0,1,0,0,0,0,0,0", false),
+                    LegacySetting::new("clean_dia", "0.01", false),
+                    LegacySetting::new("clean_step", "10", false),
+                ],
+                ..BatchRequest::default()
+            },
+            || {
+                if in_cleanup.get() {
+                    let next = cleanup_checks.get() + 1;
+                    cleanup_checks.set(next);
+                    next > 4
+                } else {
+                    false
+                }
+            },
+            |event| {
+                if event == BatchProgress::CalculatingStraightCleanup {
+                    in_cleanup.set(true);
+                }
+            },
+        )
+        .unwrap_err();
+
+        let _ = fs::remove_file(path);
+        assert_eq!(err.to_string(), "generation canceled");
+        assert!(cleanup_checks.get() > 4);
     }
 
     #[test]
