@@ -3,11 +3,14 @@ use std::path::PathBuf;
 use crate::bitmap::vectorize_bitmap_to_dxf;
 use crate::cleanup::{CleanupBit, CleanupOptions, generate_cleanup_points};
 use crate::dxf::{dxf_font_from_str, read_dxf_font};
-use crate::export::{ExportOptions, write_dxf, write_svg};
+use crate::export::{ExportOptions, write_dxf, write_svg_with_circle};
 use crate::external::requires_potrace;
 use crate::font::{read_cxf, read_ttf};
-use crate::gcode::{GcodeOptions, write_cleanup_gcode, write_engrave_gcode, write_vcarve_gcode};
-use crate::layout::{LayoutSettings, layout_text};
+use crate::gcode::{
+    GcodeOptions, write_cleanup_gcode, write_engrave_gcode, write_engrave_gcode_with_circle,
+    write_vcarve_gcode,
+};
+use crate::layout::{EngraveCircle, LayoutSettings, layout_text};
 use crate::project::{DocumentError, DocumentRequest, load_document};
 use crate::project::{InputKind, resolve_input_kind};
 use crate::settings::{LegacySettings, get_legacy_bool};
@@ -179,6 +182,7 @@ fn generate_text_engrave_gcode(
     write_layout_gcode(
         settings,
         &layout.segments,
+        layout.circle_border,
         include_secondary,
         include_svg,
         include_dxf,
@@ -236,6 +240,7 @@ fn generate_dxf_engrave_gcode(
     write_layout_gcode(
         settings,
         &layout.segments,
+        layout.circle_border,
         include_secondary,
         include_svg,
         include_dxf,
@@ -260,16 +265,17 @@ struct GeneratedSecondary {
 fn write_layout_gcode(
     settings: &LegacySettings,
     segments: &[crate::layout::EngraveSegment],
+    circle: Option<EngraveCircle>,
     include_secondary: bool,
     include_svg: bool,
     include_dxf: bool,
     warnings: &mut Vec<String>,
 ) -> Option<GeneratedToolpaths> {
     let gcode_options = GcodeOptions::from_legacy(settings);
-    let exports = build_exports(settings, segments, include_svg, include_dxf);
+    let exports = build_exports(settings, segments, circle, include_svg, include_dxf);
     if settings.get_last("cut_type") != Some("v-carve") {
         return Some(GeneratedToolpaths {
-            primary: write_engrave_gcode(segments, &gcode_options),
+            primary: write_engrave_gcode_with_circle(segments, circle, &gcode_options),
             secondary: Vec::new(),
             svg: exports.svg,
             dxf: exports.dxf,
@@ -336,11 +342,14 @@ struct GeneratedExports {
 fn build_exports(
     settings: &LegacySettings,
     segments: &[crate::layout::EngraveSegment],
+    circle: Option<EngraveCircle>,
     include_svg: bool,
     include_dxf: bool,
 ) -> GeneratedExports {
     GeneratedExports {
-        svg: include_svg.then(|| write_svg(segments, &ExportOptions::from_legacy(settings))),
+        svg: include_svg.then(|| {
+            write_svg_with_circle(segments, circle, &ExportOptions::from_legacy(settings))
+        }),
         dxf: include_dxf.then(|| write_dxf(segments)),
     }
 }
@@ -520,6 +529,50 @@ mod tests {
         assert!(output.warnings.is_empty());
         assert!(output.gcode.contains("(fengrave_set plotbox     box )"));
         assert!(output.gcode.contains("G1 X2.2500 Y-0.2600"));
+    }
+
+    #[test]
+    fn batch_generates_add_circle_for_text_on_circle() {
+        let font_path = std::env::temp_dir().join(format!(
+            "rengrave-add-circle-{}-{}.cxf",
+            std::process::id(),
+            "batch"
+        ));
+        let settings_path = std::env::temp_dir().join(format!(
+            "rengrave-add-circle-{}-{}.ngc",
+            std::process::id(),
+            "batch"
+        ));
+        fs::write(&font_path, "[A] 2\nL 0,0,10,0\nL 0,0,0,10\n").unwrap();
+        fs::write(
+            &settings_path,
+            "(fengrave_set TRADIUS    5 )\n(fengrave_set plotbox    1 )\n(fengrave_set boxgap     0.25 )\n",
+        )
+        .unwrap();
+
+        let output = prepare_batch_output(&BatchRequest {
+            batch: true,
+            gcode_file: Some(settings_path.clone()),
+            font_or_image: Some(font_path.clone()),
+            text: Some("A".to_owned()),
+            svg_output: Some(std::env::temp_dir().join("rengrave-add-circle.svg")),
+            ..BatchRequest::default()
+        })
+        .unwrap();
+
+        let _ = fs::remove_file(font_path);
+        let _ = fs::remove_file(settings_path);
+        assert!(output.warnings.is_empty());
+        assert!(output.gcode.contains("G0 X-7.2550 Y0.0000"));
+        assert!(output.gcode.contains("G2 I7.2550 J0.0000"));
+        assert!(
+            output
+                .svg
+                .as_deref()
+                .unwrap()
+                .contains("<circle cx=\"726.000000\" cy=\"726.000000\" r=\"725.500000\"")
+        );
+        assert!(!output.gcode.contains("G1 X7.2500 Y-7.2500"));
     }
 
     #[test]

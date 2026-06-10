@@ -1,4 +1,4 @@
-use crate::layout::EngraveSegment;
+use crate::layout::{EngraveCircle, EngraveSegment};
 use crate::settings::LegacySettings;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -22,7 +22,15 @@ impl ExportOptions {
 }
 
 pub fn write_svg(segments: &[EngraveSegment], options: &ExportOptions) -> String {
-    let Some(bounds) = export_bounds(segments, options.stroke_thickness) else {
+    write_svg_with_circle(segments, None, options)
+}
+
+pub fn write_svg_with_circle(
+    segments: &[EngraveSegment],
+    circle: Option<EngraveCircle>,
+    options: &ExportOptions,
+) -> String {
+    let Some(bounds) = export_bounds(segments, circle, options.stroke_thickness) else {
         return empty_svg(&options.units);
     };
 
@@ -44,6 +52,18 @@ pub fn write_svg(segments: &[EngraveSegment], options: &ExportOptions) -> String
     lines.push("     xmlns=\"http://www.w3.org/2000/svg\" version=\"1.1\">".to_owned());
     lines.push("  <title> R-Engrave Output </title>".to_owned());
     lines.push("  <desc>SVG File Created By R-Engrave</desc>".to_owned());
+
+    if let Some(circle) = circle {
+        lines.push(format!(
+            "  <circle cx=\"{:.6}\" cy=\"{:.6}\" r=\"{:.6}\"",
+            (circle.center.x - bounds.min_x) * dpi,
+            (-circle.center.y + bounds.max_y) * dpi,
+            circle.radius * dpi
+        ));
+        lines.push(format!(
+            "        fill=\"none\" stroke=\"blue\" stroke-width=\"{stroke_width:.6}\"/>"
+        ));
+    }
 
     for segment in segments {
         lines.push(format!(
@@ -183,29 +203,60 @@ struct ExportBounds {
     max_y: f64,
 }
 
-fn export_bounds(segments: &[EngraveSegment], thickness: f64) -> Option<ExportBounds> {
-    let mut segments = segments.iter();
-    let first = segments.next()?;
-    let mut bounds = ExportBounds {
-        min_x: first.start.x.min(first.end.x),
-        min_y: first.start.y.min(first.end.y),
-        max_x: first.start.x.max(first.end.x),
-        max_y: first.start.y.max(first.end.y),
-    };
+fn export_bounds(
+    segments: &[EngraveSegment],
+    circle: Option<EngraveCircle>,
+    thickness: f64,
+) -> Option<ExportBounds> {
+    let mut bounds = None;
 
     for segment in segments {
-        bounds.min_x = bounds.min_x.min(segment.start.x).min(segment.end.x);
-        bounds.min_y = bounds.min_y.min(segment.start.y).min(segment.end.y);
-        bounds.max_x = bounds.max_x.max(segment.start.x).max(segment.end.x);
-        bounds.max_y = bounds.max_y.max(segment.start.y).max(segment.end.y);
+        include_point(&mut bounds, segment.start);
+        include_point(&mut bounds, segment.end);
     }
 
+    if let Some(circle) = circle {
+        include_point(
+            &mut bounds,
+            crate::geometry::Point::new(circle.center.x - circle.radius, circle.center.y),
+        );
+        include_point(
+            &mut bounds,
+            crate::geometry::Point::new(circle.center.x + circle.radius, circle.center.y),
+        );
+        include_point(
+            &mut bounds,
+            crate::geometry::Point::new(circle.center.x, circle.center.y - circle.radius),
+        );
+        include_point(
+            &mut bounds,
+            crate::geometry::Point::new(circle.center.x, circle.center.y + circle.radius),
+        );
+    }
+
+    let mut bounds = bounds?;
     let pad = thickness / 2.0;
     bounds.min_x -= pad;
     bounds.min_y -= pad;
     bounds.max_x += pad;
     bounds.max_y += pad;
     Some(bounds)
+}
+
+fn include_point(bounds: &mut Option<ExportBounds>, point: crate::geometry::Point) {
+    if let Some(bounds) = bounds {
+        bounds.min_x = bounds.min_x.min(point.x);
+        bounds.min_y = bounds.min_y.min(point.y);
+        bounds.max_x = bounds.max_x.max(point.x);
+        bounds.max_y = bounds.max_y.max(point.y);
+    } else {
+        *bounds = Some(ExportBounds {
+            min_x: point.x,
+            min_y: point.y,
+            max_x: point.x,
+            max_y: point.y,
+        });
+    }
 }
 
 fn empty_svg(units: &str) -> String {
@@ -240,6 +291,23 @@ mod tests {
         assert!(svg.contains("<svg width=\"1.020000in\" height=\"1.020000in\""));
         assert!(svg.contains("stroke-width=\"2.000000\""));
         assert!(svg.contains("M 1.000000 101.000000 L 101.000000 1.000000"));
+    }
+
+    #[test]
+    fn svg_export_writes_circle_border() {
+        let mut settings = default_legacy_settings();
+        settings.set_or_push("STHICK", "0.02", false);
+        let svg = write_svg_with_circle(
+            &segments(),
+            Some(EngraveCircle {
+                center: Point::new(0.0, 0.0),
+                radius: 2.0,
+            }),
+            &ExportOptions::from_legacy(&settings),
+        );
+
+        assert!(svg.contains("<svg width=\"4.020000in\" height=\"4.020000in\""));
+        assert!(svg.contains("<circle cx=\"201.000000\" cy=\"201.000000\" r=\"200.000000\""));
     }
 
     #[test]

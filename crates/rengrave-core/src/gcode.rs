@@ -1,5 +1,5 @@
 use crate::cleanup::{CleanupBit, CleanupOptions, CleanupPoint};
-use crate::layout::EngraveSegment;
+use crate::layout::{EngraveCircle, EngraveSegment};
 use crate::settings::{LegacySettings, get_legacy_bool};
 use crate::vcarve::{VCarveOptions, VCarvePoint};
 
@@ -95,6 +95,14 @@ impl Units {
 }
 
 pub fn write_engrave_gcode(segments: &[EngraveSegment], options: &GcodeOptions) -> Vec<String> {
+    write_engrave_gcode_with_circle(segments, None, options)
+}
+
+pub fn write_engrave_gcode_with_circle(
+    segments: &[EngraveSegment],
+    circle: Option<EngraveCircle>,
+    options: &GcodeOptions,
+) -> Vec<String> {
     let dp = options.coord_digits();
     let dpfeed = options.feed_digits();
     let safe_number = format_number(options.safe_z, dp);
@@ -149,6 +157,18 @@ pub fn write_engrave_gcode(segments: &[EngraveSegment], options: &GcodeOptions) 
         }
 
         emit_cut_path(&mut lines, &path, options, dp);
+    }
+
+    if let Some(circle) = circle {
+        emit_circle_border(
+            &mut lines,
+            circle,
+            &safe_value,
+            &depth_value,
+            &feed,
+            &plunge,
+            dp,
+        );
     }
 
     lines.push(format!("G0 Z{safe_value}"));
@@ -370,6 +390,39 @@ fn emit_cut_path(
                 current = Some(end);
             }
         }
+    }
+}
+
+fn emit_circle_border(
+    lines: &mut Vec<String>,
+    circle: EngraveCircle,
+    safe_value: &str,
+    depth_value: &str,
+    feed: &str,
+    plunge: &str,
+    digits: usize,
+) {
+    lines.push(format!("G0 Z{safe_value}"));
+    lines.push(format!(
+        "G0 X{} Y{}",
+        format_number(circle.center.x - circle.radius, digits),
+        format_number(circle.center.y, digits)
+    ));
+    if plunge == feed {
+        lines.push(format!("G1 Z{depth_value}"));
+        lines.push(format!(
+            "G2 I{} J{}",
+            format_number(circle.radius, digits),
+            format_number(0.0, digits)
+        ));
+    } else {
+        lines.push(format!("G1 Z{depth_value} F{plunge}"));
+        lines.push(format!(
+            "G2 I{} J{} F{}",
+            format_number(circle.radius, digits),
+            format_number(0.0, digits),
+            feed
+        ));
     }
 }
 
@@ -852,6 +905,38 @@ mod tests {
         assert!(lines.contains(&"G20".to_owned()));
         assert!(lines.contains(&"G1 Z-0.0050".to_owned()));
         assert!(lines.contains(&"G1 X1.0000 Y0.0000".to_owned()));
+    }
+
+    #[test]
+    fn writes_circle_border_as_full_clockwise_arc() {
+        let options = GcodeOptions {
+            safe_z: 0.25,
+            depth_z: -0.005,
+            feed: 5.0,
+            plunge: 2.0,
+            accuracy: 0.001,
+            units: Units::Inch,
+            preamble: "G17 G64 P0.001 M3 S3000".to_owned(),
+            postamble: "M5|M2".to_owned(),
+            variables_disabled: true,
+            arc_fit: ArcFit::None,
+        };
+        let lines = write_engrave_gcode_with_circle(
+            &[EngraveSegment {
+                start: Point::new(0.0, 0.0),
+                end: Point::new(1.0, 0.0),
+                loop_id: 1,
+            }],
+            Some(EngraveCircle {
+                center: Point::new(0.0, 0.0),
+                radius: 2.0,
+            }),
+            &options,
+        );
+
+        assert!(lines.contains(&"G0 X-2.0000 Y0.0000".to_owned()));
+        assert!(lines.contains(&"G1 Z-0.0050 F2.00".to_owned()));
+        assert!(lines.contains(&"G2 I2.0000 J0.0000 F5.00".to_owned()));
     }
 
     #[test]

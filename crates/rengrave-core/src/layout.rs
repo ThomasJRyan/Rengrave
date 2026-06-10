@@ -19,10 +19,17 @@ pub struct Bounds {
     pub max: Point,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct EngraveCircle {
+    pub center: Point,
+    pub radius: f64,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct LayoutOutput {
     pub segments: Vec<EngraveSegment>,
     pub bounds: Option<Bounds>,
+    pub circle_border: Option<EngraveCircle>,
     pub missing_chars: Vec<char>,
 }
 
@@ -216,6 +223,7 @@ pub fn layout_text(font: &Font, text: &str, settings: &LayoutSettings) -> Layout
                 return LayoutOutput {
                     segments: Vec::new(),
                     bounds: None,
+                    circle_border: None,
                     missing_chars: text.chars().collect(),
                 };
             }
@@ -340,6 +348,7 @@ pub fn layout_text(font: &Font, text: &str, settings: &LayoutSettings) -> Layout
 
     let angle = settings.angle_degrees.to_radians();
     let mut transformed_bounds = MutableBounds::empty();
+    let mut max_radius_sq = 0.0f64;
     for segment in &mut segments {
         if settings.angle_degrees != 0.0 {
             segment.start = rotate(segment.start, angle);
@@ -355,12 +364,16 @@ pub fn layout_text(font: &Font, text: &str, settings: &LayoutSettings) -> Layout
         }
         transformed_bounds.include(segment.start);
         transformed_bounds.include(segment.end);
+        max_radius_sq = max_radius_sq
+            .max(radius_sq(segment.start))
+            .max(radius_sq(segment.end));
     }
 
     let Some(mut bounds) = transformed_bounds.take() else {
         return LayoutOutput {
             segments,
             bounds: None,
+            circle_border: None,
             missing_chars: missing.into_iter().collect(),
         };
     };
@@ -370,8 +383,20 @@ pub fn layout_text(font: &Font, text: &str, settings: &LayoutSettings) -> Layout
     bounds.min.y -= thick / 2.0;
     bounds.max.y += thick / 2.0;
 
+    let mut circle_border = None;
     if settings.plotbox && (circle_radius == 0.0 || settings.cut_type == CutType::VCarve) {
         append_plotbox(&mut segments, &mut bounds, settings, thick);
+    } else if settings.plotbox && settings.cut_type == CutType::Engrave {
+        let radius = max_radius_sq.sqrt() + thick + settings.boxgap;
+        let pad = thick / 2.0;
+        bounds = Bounds {
+            min: Point::new(-radius - pad, -radius - pad),
+            max: Point::new(radius + pad, radius + pad),
+        };
+        circle_border = Some(EngraveCircle {
+            center: Point::new(0.0, 0.0),
+            radius,
+        });
     }
 
     let zero = settings.origin.zero_point(bounds);
@@ -387,9 +412,15 @@ pub fn layout_text(font: &Font, text: &str, settings: &LayoutSettings) -> Layout
     bounds.min.y = bounds.min.y - zero.y + settings.yorigin;
     bounds.max.y = bounds.max.y - zero.y + settings.yorigin;
 
+    if let Some(circle) = &mut circle_border {
+        circle.center.x = circle.center.x - zero.x + settings.xorigin;
+        circle.center.y = circle.center.y - zero.y + settings.yorigin;
+    }
+
     LayoutOutput {
         segments,
         bounds: Some(bounds),
+        circle_border,
         missing_chars: missing.into_iter().collect(),
     }
 }
@@ -461,6 +492,10 @@ fn rotate(point: Point, angle: f64) -> Point {
         point.x * angle.cos() - point.y * angle.sin(),
         point.x * angle.sin() + point.y * angle.cos(),
     )
+}
+
+fn radius_sq(point: Point) -> f64 {
+    point.x * point.x + point.y * point.y
 }
 
 fn text_circle_radius(
@@ -687,5 +722,28 @@ mod tests {
         assert!((bounds.min.x + 0.25).abs() < 1e-9);
         assert!((bounds.max.x - 2.25).abs() < 1e-9);
         assert!((bounds.max.y - 2.25).abs() < 1e-9);
+    }
+
+    #[test]
+    fn plotbox_adds_circle_border_for_text_on_circle() {
+        let font = parse_cxf("[A] 2\nL 0,0,10,0\nL 0,0,0,10\n", 5.0).unwrap();
+        let mut legacy = default_legacy_settings();
+        legacy.set_or_push("TRADIUS", "5", false);
+        legacy.set_or_push("plotbox", "1", false);
+        legacy.set_or_push("boxgap", "0.25", false);
+        let settings = LayoutSettings::from_legacy(&legacy);
+
+        let output = layout_text(&font, "A", &settings);
+        let circle = output.circle_border.unwrap();
+
+        assert_eq!(output.segments.len(), 2);
+        assert!(circle.center.x.abs() < 1e-9);
+        assert!(circle.center.y.abs() < 1e-9);
+        assert!((circle.radius - 7.255).abs() < 1e-9);
+        let bounds = output.bounds.unwrap();
+        assert!((bounds.min.x + 7.260).abs() < 1e-9);
+        assert!((bounds.max.x - 7.260).abs() < 1e-9);
+        assert!((bounds.min.y + 7.260).abs() < 1e-9);
+        assert!((bounds.max.y - 7.260).abs() < 1e-9);
     }
 }
