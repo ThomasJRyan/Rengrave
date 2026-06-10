@@ -34,6 +34,7 @@ pub struct LayoutSettings {
     pub char_space_percent: f64,
     pub word_space_percent: f64,
     pub angle_degrees: f64,
+    pub text_radius: f64,
     pub stroke_thickness: f64,
     pub xorigin: f64,
     pub yorigin: f64,
@@ -45,6 +46,8 @@ pub struct LayoutSettings {
     pub use_image_size: bool,
     pub input_type: InputType,
     pub cut_type: CutType,
+    pub outer: bool,
+    pub upper: bool,
 }
 
 impl LayoutSettings {
@@ -56,6 +59,7 @@ impl LayoutSettings {
             char_space_percent: get_f64(settings, "CSPACE", 25.0),
             word_space_percent: get_f64(settings, "WSPACE", 100.0),
             angle_degrees: get_f64(settings, "TANGLE", 0.0),
+            text_radius: get_f64(settings, "TRADIUS", 0.0),
             stroke_thickness: get_f64(settings, "STHICK", 0.01),
             xorigin: get_f64(settings, "xorigin", 0.0),
             yorigin: get_f64(settings, "yorigin", 0.0),
@@ -67,6 +71,8 @@ impl LayoutSettings {
             use_image_size: get_bool(settings, "useIMGsize", false),
             input_type: InputType::parse(settings.get_last("input_type").unwrap_or("text")),
             cut_type: CutType::parse(settings.get_last("cut_type").unwrap_or("engrave")),
+            outer: get_bool(settings, "outer", true),
+            upper: get_bool(settings, "upper", true),
         }
     }
 }
@@ -317,6 +323,17 @@ pub fn layout_text(font: &Font, text: &str, settings: &LayoutSettings) -> Layout
         })
         .collect();
 
+    let circle_radius =
+        text_circle_radius(settings, font_line_height, font_line_depth, thick, yscale);
+    if circle_radius != 0.0 {
+        apply_text_circle(
+            &mut segments,
+            circle_radius,
+            settings.justify,
+            settings.upper,
+        );
+    }
+
     let angle = settings.angle_degrees.to_radians();
     let mut transformed_bounds = MutableBounds::empty();
     for segment in &mut segments {
@@ -394,6 +411,70 @@ fn rotate(point: Point, angle: f64) -> Point {
     )
 }
 
+fn text_circle_radius(
+    settings: &LayoutSettings,
+    font_line_height: f64,
+    font_line_depth: f64,
+    thick: f64,
+    yscale: f64,
+) -> f64 {
+    if settings.input_type != InputType::Text || settings.text_radius == 0.0 {
+        return 0.0;
+    }
+
+    if settings.outer {
+        if settings.upper {
+            settings.text_radius + thick / 2.0 + yscale * (-font_line_depth)
+        } else {
+            -settings.text_radius - thick / 2.0 - yscale * font_line_height
+        }
+    } else if settings.upper {
+        settings.text_radius - thick / 2.0 - yscale * font_line_height
+    } else {
+        -settings.text_radius + thick / 2.0 + yscale * (-font_line_depth)
+    }
+}
+
+fn apply_text_circle(segments: &mut [EngraveSegment], radius: f64, justify: Justify, upper: bool) {
+    let mut min_angle = f64::INFINITY;
+    let mut max_angle = f64::NEG_INFINITY;
+
+    for segment in segments.iter_mut() {
+        let (start, start_angle) = bend_point_to_circle(segment.start, radius);
+        let (end, end_angle) = bend_point_to_circle(segment.end, radius);
+        segment.start = start;
+        segment.end = end;
+        min_angle = min_angle.min(start_angle).min(end_angle);
+        max_angle = max_angle.max(start_angle).max(end_angle);
+    }
+
+    let rotation = match justify {
+        Justify::Left => 0.0,
+        Justify::Center => (min_angle + max_angle) / 2.0,
+        Justify::Right if upper => max_angle,
+        Justify::Right => min_angle,
+    };
+    if rotation == 0.0 {
+        return;
+    }
+
+    for segment in segments {
+        segment.start = rotate(segment.start, rotation);
+        segment.end = rotate(segment.end, rotation);
+    }
+}
+
+fn bend_point_to_circle(point: Point, radius: f64) -> (Point, f64) {
+    let alpha = point.x / radius;
+    (
+        Point::new(
+            (radius + point.y) * alpha.sin(),
+            (radius + point.y) * alpha.cos(),
+        ),
+        alpha,
+    )
+}
+
 #[derive(Debug, Clone, Copy)]
 struct MutableBounds {
     min: Point,
@@ -463,5 +544,36 @@ mod tests {
 
         assert!(output.bounds.unwrap().min.x.abs() < 1e-9);
         assert!(output.bounds.unwrap().min.y.abs() < 1e-9);
+    }
+
+    #[test]
+    fn bends_text_onto_upper_outside_circle() {
+        let font = parse_cxf("[A] 2\nL 0,0,10,0\nL 0,0,0,10\n", 5.0).unwrap();
+        let mut legacy = default_legacy_settings();
+        legacy.set_or_push("TRADIUS", "5", false);
+        let settings = LayoutSettings::from_legacy(&legacy);
+        let output = layout_text(&font, "A", &settings);
+        let segment = output.segments[0];
+
+        assert!(segment.start.x.abs() < 1e-9);
+        assert!((segment.start.y - 5.005).abs() < 1e-9);
+        assert!(segment.end.x > 1.8);
+        assert!(segment.end.y < segment.start.y);
+    }
+
+    #[test]
+    fn bends_text_onto_lower_outside_circle() {
+        let font = parse_cxf("[A] 2\nL 0,0,10,0\nL 0,0,0,10\n", 5.0).unwrap();
+        let mut legacy = default_legacy_settings();
+        legacy.set_or_push("TRADIUS", "5", false);
+        legacy.set_or_push("upper", "0", false);
+        let settings = LayoutSettings::from_legacy(&legacy);
+        let output = layout_text(&font, "A", &settings);
+        let segment = output.segments[0];
+
+        assert!(segment.start.x.abs() < 1e-9);
+        assert!((segment.start.y + 6.995).abs() < 1e-9);
+        assert!(segment.end.x > 1.8);
+        assert!(segment.end.y > segment.start.y);
     }
 }
