@@ -638,7 +638,7 @@ impl eframe::App for RengraveApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.poll_calculation();
         egui::Panel::top("toolbar")
-            .exact_size(68.0)
+            .exact_size(92.0)
             .show_inside(ui, |ui| {
                 self.show_menu_bar(ui);
                 ui.horizontal(|ui| {
@@ -687,6 +687,8 @@ impl eframe::App for RengraveApp {
                     ui.label("Status");
                     ui.monospace(&self.status);
                 });
+                ui.add_space(4.0);
+                self.show_job_summary(ui);
             });
 
         egui::Panel::left("input_settings")
@@ -1302,6 +1304,56 @@ impl RengraveApp {
                 ui.checkbox(&mut self.show_bounds, "Bounds layer");
                 ui.checkbox(&mut self.show_axes, "Axes layer");
             });
+        });
+    }
+
+    fn show_job_summary(&self, ui: &mut egui::Ui) {
+        let output_state = output_state_summary(
+            self.calculation.is_some(),
+            self.output_is_stale(),
+            !self.gcode.trim().is_empty(),
+        );
+        ui.horizontal_wrapped(|ui| {
+            summary_label(
+                ui,
+                &input_source_summary(&self.input_path),
+                egui::Color32::from_rgb(214, 220, 224),
+            );
+            summary_separator(ui);
+            summary_label(
+                ui,
+                &tool_summary(&self.controls),
+                egui::Color32::from_rgb(214, 220, 224),
+            );
+            summary_separator(ui);
+            summary_label(ui, output_state, output_state_color(output_state));
+            summary_separator(ui);
+            summary_label(
+                ui,
+                &artifact_summary(
+                    &self.gcode,
+                    self.svg.as_deref(),
+                    self.dxf.as_deref(),
+                    self.secondary_gcode.len(),
+                ),
+                egui::Color32::from_rgb(214, 220, 224),
+            );
+            if let Some(warnings) = warning_count_summary(&self.warnings) {
+                summary_separator(ui);
+                summary_label(ui, &warnings, egui::Color32::from_rgb(225, 176, 84));
+            }
+            if let Some(potrace) = potrace_requirement_summary(
+                input_path_requires_potrace(&self.input_path),
+                self.potrace_status.available,
+            ) {
+                summary_separator(ui);
+                let color = if self.potrace_status.available {
+                    egui::Color32::from_rgb(94, 176, 132)
+                } else {
+                    egui::Color32::from_rgb(225, 176, 84)
+                };
+                summary_label(ui, potrace, color);
+            }
         });
     }
 
@@ -2580,6 +2632,118 @@ fn input_path_requires_potrace(path_text: &str) -> bool {
         .as_deref()
         .map(requires_potrace)
         .unwrap_or(false)
+}
+
+fn input_source_summary(path_text: &str) -> String {
+    let Some(path) = path_from_text(path_text) else {
+        return "Source: none".to_owned();
+    };
+    let name = path_display_name(&path);
+    match InputCatalogKind::from_path(&path) {
+        Some(kind) => format!("Source: {} {name}", kind.label()),
+        None if path.is_dir() => format!("Source dir: {name}"),
+        None => format!("Source: {name}"),
+    }
+}
+
+fn path_display_name(path: &Path) -> String {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.trim().is_empty())
+        .map(str::to_owned)
+        .unwrap_or_else(|| path.display().to_string())
+}
+
+fn tool_summary(controls: &UiControls) -> String {
+    format!(
+        "Job: {}, {}, {}",
+        controls.cut_type.label(),
+        controls.bit_shape.label(),
+        controls.units.label()
+    )
+}
+
+fn output_state_summary(
+    calculation_active: bool,
+    output_stale: bool,
+    has_gcode: bool,
+) -> &'static str {
+    if calculation_active {
+        "Output: calculating"
+    } else if output_stale {
+        "Output: stale"
+    } else if has_gcode {
+        "Output: ready"
+    } else {
+        "Output: none"
+    }
+}
+
+fn output_state_color(output_state: &str) -> egui::Color32 {
+    match output_state {
+        "Output: ready" => egui::Color32::from_rgb(94, 176, 132),
+        "Output: stale" | "Output: calculating" => egui::Color32::from_rgb(225, 176, 84),
+        _ => egui::Color32::from_rgb(214, 220, 224),
+    }
+}
+
+fn artifact_summary(
+    gcode: &str,
+    svg: Option<&str>,
+    dxf: Option<&str>,
+    cleanup_count: usize,
+) -> String {
+    let mut artifacts = Vec::new();
+    if !gcode.trim().is_empty() {
+        artifacts.push("G-code".to_owned());
+    }
+    if svg
+        .map(|payload| !payload.trim().is_empty())
+        .unwrap_or(false)
+    {
+        artifacts.push("SVG".to_owned());
+    }
+    if dxf
+        .map(|payload| !payload.trim().is_empty())
+        .unwrap_or(false)
+    {
+        artifacts.push("DXF".to_owned());
+    }
+    if cleanup_count > 0 {
+        artifacts.push(format!("cleanup x{cleanup_count}"));
+    }
+
+    if artifacts.is_empty() {
+        "Artifacts: none".to_owned()
+    } else {
+        format!("Artifacts: {}", artifacts.join(", "))
+    }
+}
+
+fn warning_count_summary(warnings: &[String]) -> Option<String> {
+    match warnings.len() {
+        0 => None,
+        1 => Some("Warnings: 1".to_owned()),
+        count => Some(format!("Warnings: {count}")),
+    }
+}
+
+fn potrace_requirement_summary(required: bool, available: bool) -> Option<&'static str> {
+    if !required {
+        None
+    } else if available {
+        Some("Potrace: ready")
+    } else {
+        Some("Potrace: missing")
+    }
+}
+
+fn summary_label(ui: &mut egui::Ui, text: &str, color: egui::Color32) {
+    ui.label(egui::RichText::new(text).color(color));
+}
+
+fn summary_separator(ui: &mut egui::Ui) {
+    ui.label(egui::RichText::new("/").color(egui::Color32::from_rgb(120, 130, 136)));
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -4555,6 +4719,55 @@ mod tests {
         assert!(input_path_requires_potrace("/tmp/image.PBM"));
         assert!(!input_path_requires_potrace("/tmp/shape.dxf"));
         assert!(!input_path_requires_potrace("  "));
+    }
+
+    #[test]
+    fn job_summary_helpers_format_visible_state() {
+        let mut controls = UiControls::from_settings(&LegacySettings::default());
+        controls.cut_type = CutTypeChoice::VCarve;
+        controls.bit_shape = BitShapeChoice::Ball;
+        controls.units = UnitsChoice::Mm;
+
+        assert_eq!(
+            input_source_summary(" /tmp/fonts/romanc.cxf "),
+            "Source: CXF romanc.cxf"
+        );
+        assert_eq!(
+            input_source_summary("/tmp/artwork.dxf"),
+            "Source: DXF artwork.dxf"
+        );
+        assert_eq!(input_source_summary("  "), "Source: none");
+        assert_eq!(tool_summary(&controls), "Job: V-carve, Ball, mm");
+        assert_eq!(
+            output_state_summary(true, false, true),
+            "Output: calculating"
+        );
+        assert_eq!(output_state_summary(false, true, true), "Output: stale");
+        assert_eq!(output_state_summary(false, false, true), "Output: ready");
+        assert_eq!(output_state_summary(false, false, false), "Output: none");
+    }
+
+    #[test]
+    fn artifact_and_runtime_summaries_track_export_readiness() {
+        assert_eq!(
+            artifact_summary("G90\n", Some("<svg/>"), Some("0\nEOF\n"), 2),
+            "Artifacts: G-code, SVG, DXF, cleanup x2"
+        );
+        assert_eq!(artifact_summary(" ", Some(""), None, 0), "Artifacts: none");
+        assert_eq!(warning_count_summary(&[]), None);
+        assert_eq!(
+            warning_count_summary(&["missing potrace".to_owned()]),
+            Some("Warnings: 1".to_owned())
+        );
+        assert_eq!(potrace_requirement_summary(false, false), None);
+        assert_eq!(
+            potrace_requirement_summary(true, false),
+            Some("Potrace: missing")
+        );
+        assert_eq!(
+            potrace_requirement_summary(true, true),
+            Some("Potrace: ready")
+        );
     }
 
     #[test]
