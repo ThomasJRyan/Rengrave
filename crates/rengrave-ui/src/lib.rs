@@ -1314,6 +1314,12 @@ impl RengraveApp {
                 if menu_action(ui, "Choose G-code output...", true) {
                     self.choose_path(FileBrowserTarget::GcodeOutput, ui.ctx().clone());
                 }
+                if menu_action(ui, "Choose SVG output...", true) {
+                    self.choose_path(FileBrowserTarget::SvgOutput, ui.ctx().clone());
+                }
+                if menu_action(ui, "Choose DXF output...", true) {
+                    self.choose_path(FileBrowserTarget::DxfOutput, ui.ctx().clone());
+                }
                 if menu_action(ui, "Use default dir for outputs", true) {
                     self.reset_output_paths_to_default_dir();
                 }

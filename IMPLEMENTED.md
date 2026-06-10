@@ -18,6 +18,7 @@ This document records what has actually been implemented in the Rust port and wh
 - The central preview now supports cursor-centered mouse-wheel/pinch zoom and double-click fit in addition to toolbar/menu controls.
 - The central preview now shows live model-space X/Y coordinates under the pointer using the same pan/zoom/rotation transform as the drawn toolpath.
 - The Output panel and File menu now include a Use default dir action that resets G-code/SVG/DXF export paths to the current default directory with standard filenames.
+- The File menu can now choose G-code, SVG, and DXF output paths, matching the Output panel browse actions.
 - Manual edits to settings/input/default-dir and output path fields now persist to UI preferences without requiring a browse/export action first.
 - Loaded settings now surface the resolved font/image path back to the UI Input field, including relative font files resolved through `fontdir` and moved image files recovered through `NGC_DIR`.
 - Launching the UI with an explicit `-g/--gcode_file` settings file no longer lets an old remembered input path silently override that settings file unless `-f/--fontdir` is also supplied.
@@ -93,7 +94,7 @@ This document records what has actually been implemented in the Rust port and wh
 - It stores generated G-code/SVG/DXF payloads and can write them to user-editable paths individually or with one Export all available action; output paths can also be reset to the current default directory.
 - It stores generated secondary cleanup G-code payloads, displays the available cleanup-file count, and exports cleanup files beside the primary G-code path.
 - UI Cancel now sets a worker flag consumed by the core batch generator at stage boundaries, so canceled jobs can stop before later layout/v-carve/cleanup/rendering work instead of only being ignored after completion.
-- File, Run, and View menus expose the same load/save/export-all/export/calculate/cancel/copy/Fit/layer actions as the panels and toolbar.
+- File, Run, and View menus expose the same load/save/export-all/export/calculate/cancel/copy/Fit/layer actions as the panels and toolbar, including output path selection for G-code, SVG, and DXF.
 - The toolbar includes a compact job summary row so source, mode/tool/units, output state, artifacts, warnings, and bitmap tracing readiness are visible without switching panels.
 - The bottom panel has Status, G-code, Cleanup, SVG, and DXF tabs so generated text output can be inspected without exporting first.
 - The active bottom tab can be copied to the clipboard, including cleanup, SVG, and DXF payloads in addition to primary G-code.
