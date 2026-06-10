@@ -10,7 +10,7 @@ use crate::gcode::{GcodeOptions, write_cleanup_gcode, write_engrave_gcode, write
 use crate::layout::{LayoutSettings, layout_text};
 use crate::project::{DocumentError, DocumentRequest, load_document};
 use crate::project::{InputKind, resolve_input_kind};
-use crate::settings::LegacySettings;
+use crate::settings::{LegacySettings, get_legacy_bool};
 use crate::vcarve::{VCarveOptions, generate_vcarve_points};
 use crate::{FENGRAVE_VERSION, RENGRAVE_VERSION};
 
@@ -148,10 +148,7 @@ fn generate_text_engrave_gcode(
             }
         },
         InputKind::TtfFont(path) => {
-            let extended_chars = settings
-                .get_last("ext_char")
-                .map(|value| matches!(value, "1" | "true" | "True"))
-                .unwrap_or(false);
+            let extended_chars = get_legacy_bool(settings, "ext_char", false);
             match read_ttf(&path, segarc, extended_chars) {
                 Ok(font) => font,
                 Err(err) => {
@@ -488,6 +485,41 @@ mod tests {
         assert!(output.gcode.contains("(fengrave_set input_type  image )"));
         assert!(!output.gcode.contains("(Engrave Text:"));
         assert!(output.gcode.contains("G1 X0.0000 Y1.9900"));
+    }
+
+    #[test]
+    fn batch_reads_legacy_plotbox_box_alias() {
+        let font_path = std::env::temp_dir().join(format!(
+            "rengrave-plotbox-alias-{}-{}.cxf",
+            std::process::id(),
+            "batch"
+        ));
+        let settings_path = std::env::temp_dir().join(format!(
+            "rengrave-plotbox-alias-{}-{}.ngc",
+            std::process::id(),
+            "batch"
+        ));
+        fs::write(&font_path, "[A] 2\nL 0,0,10,0\nL 0,0,0,10\n").unwrap();
+        fs::write(
+            &settings_path,
+            "(fengrave_set plotbox   box )\n(fengrave_set boxgap    0.25 )\n",
+        )
+        .unwrap();
+
+        let output = prepare_batch_output(&BatchRequest {
+            batch: true,
+            gcode_file: Some(settings_path.clone()),
+            font_or_image: Some(font_path.clone()),
+            text: Some("A".to_owned()),
+            ..BatchRequest::default()
+        })
+        .unwrap();
+
+        let _ = fs::remove_file(font_path);
+        let _ = fs::remove_file(settings_path);
+        assert!(output.warnings.is_empty());
+        assert!(output.gcode.contains("(fengrave_set plotbox     box )"));
+        assert!(output.gcode.contains("G1 X2.2500 Y-0.2600"));
     }
 
     #[test]

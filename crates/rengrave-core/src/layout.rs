@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use crate::font::Font;
 use crate::geometry::Point;
-use crate::settings::LegacySettings;
+use crate::settings::{LegacySettings, get_legacy_bool};
 
 const ZERO: f64 = 0.00001;
 
@@ -68,14 +68,14 @@ impl LayoutSettings {
             height_calc: HeightCalc::parse(settings.get_last("H_CALC").unwrap_or("max_use")),
             origin: Origin::parse(settings.get_last("origin").unwrap_or("Default")),
             justify: Justify::parse(settings.get_last("justify").unwrap_or("Left")),
-            mirror: get_bool(settings, "mirror", false),
-            flip: get_bool(settings, "flip", false),
-            use_image_size: get_bool(settings, "useIMGsize", false),
+            mirror: get_legacy_bool(settings, "mirror", false),
+            flip: get_legacy_bool(settings, "flip", false),
+            use_image_size: get_legacy_bool(settings, "useIMGsize", false),
             input_type: InputType::parse(settings.get_last("input_type").unwrap_or("text")),
             cut_type: CutType::parse(settings.get_last("cut_type").unwrap_or("engrave")),
-            outer: get_bool(settings, "outer", true),
-            upper: get_bool(settings, "upper", true),
-            plotbox: get_bool(settings, "plotbox", false),
+            outer: get_legacy_bool(settings, "outer", true),
+            upper: get_legacy_bool(settings, "upper", true),
+            plotbox: get_legacy_bool(settings, "plotbox", false),
             boxgap: get_f64(settings, "boxgap", 0.25),
         }
     }
@@ -452,13 +452,6 @@ fn get_f64(settings: &LegacySettings, key: &str, default: f64) -> f64 {
         .unwrap_or(default)
 }
 
-fn get_bool(settings: &LegacySettings, key: &str, default: bool) -> bool {
-    settings
-        .get_last(key)
-        .map(|value| matches!(value, "1" | "true" | "True"))
-        .unwrap_or(default)
-}
-
 fn scale_point(point: Point, xscale: f64, yscale: f64) -> Point {
     Point::new(point.x * xscale, point.y * yscale)
 }
@@ -658,6 +651,19 @@ mod tests {
         assert!((bounds.max.x - 2.255).abs() < 1e-9);
         assert!((bounds.min.y + 0.265).abs() < 1e-9);
         assert!((bounds.max.y - 2.255).abs() < 1e-9);
+    }
+
+    #[test]
+    fn plotbox_accepts_legacy_box_alias() {
+        let font = parse_cxf("[A] 2\nL 0,0,10,0\nL 0,0,0,10\n", 5.0).unwrap();
+        let mut legacy = default_legacy_settings();
+        legacy.set_or_push("plotbox", "box", false);
+        let settings = LayoutSettings::from_legacy(&legacy);
+
+        let output = layout_text(&font, "A", &settings);
+
+        assert_eq!(output.segments.len(), 6);
+        assert_eq!(output.segments[2].loop_id, 2);
     }
 
     #[test]

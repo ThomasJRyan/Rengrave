@@ -1,6 +1,6 @@
 use crate::geometry::Point;
 use crate::layout::EngraveSegment;
-use crate::settings::LegacySettings;
+use crate::settings::{LegacySettings, get_legacy_bool};
 
 const ZERO: f64 = 0.00001;
 
@@ -33,7 +33,7 @@ impl VCarveOptions {
             bit_angle_degrees: get_f64(settings, "v_bit_angle", 60.0),
             bit_diameter: get_f64(settings, "v_bit_dia", 0.5),
             depth_limit: get_f64(settings, "v_depth_lim", 0.0),
-            inlay: get_bool(settings, "inlay", false),
+            inlay: get_legacy_bool(settings, "inlay", false),
             allowance: get_f64(settings, "allowance", 0.0),
             inlay_depth: get_f64(settings, "v_depth_lim", 0.0),
             rough_stock: get_f64(settings, "v_rough_stk", 0.0),
@@ -298,13 +298,6 @@ fn get_f64(settings: &LegacySettings, key: &str, default: f64) -> f64 {
     settings
         .get_last(key)
         .and_then(|value| value.parse().ok())
-        .unwrap_or(default)
-}
-
-fn get_bool(settings: &LegacySettings, key: &str, default: bool) -> bool {
-    settings
-        .get_last(key)
-        .map(|value| matches!(value, "1" | "true" | "True"))
         .unwrap_or(default)
 }
 

@@ -1,6 +1,6 @@
 use crate::cleanup::{CleanupBit, CleanupOptions, CleanupPoint};
 use crate::layout::EngraveSegment;
-use crate::settings::LegacySettings;
+use crate::settings::{LegacySettings, get_legacy_bool};
 use crate::vcarve::{VCarveOptions, VCarvePoint};
 
 const ZERO: f64 = 0.00001;
@@ -34,7 +34,7 @@ impl GcodeOptions {
                 .unwrap_or("G17 G64 P0.001 M3 S3000")
                 .to_owned(),
             postamble: settings.get_last("gpost").unwrap_or("M5|M2").to_owned(),
-            variables_disabled: get_bool(settings, "var_dis", true),
+            variables_disabled: get_legacy_bool(settings, "var_dis", true),
             arc_fit: ArcFit::parse(settings.get_last("arc_fit").unwrap_or("none")),
         }
     }
@@ -817,13 +817,6 @@ fn get_f64(settings: &LegacySettings, key: &str, default: f64) -> f64 {
     settings
         .get_last(key)
         .and_then(|value| value.parse().ok())
-        .unwrap_or(default)
-}
-
-fn get_bool(settings: &LegacySettings, key: &str, default: bool) -> bool {
-    settings
-        .get_last(key)
-        .map(|value| matches!(value, "1" | "true" | "True"))
         .unwrap_or(default)
 }
 

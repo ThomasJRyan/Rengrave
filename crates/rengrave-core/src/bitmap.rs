@@ -5,7 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use image::DynamicImage;
 
-use crate::settings::LegacySettings;
+use crate::settings::{LegacySettings, get_legacy_bool};
 
 #[derive(Debug, thiserror::Error)]
 pub enum BitmapError {
@@ -147,10 +147,7 @@ impl PotraceOptions {
             turd_size: settings.get_last("bmp_turds").unwrap_or("2").to_owned(),
             alpha_max: settings.get_last("bmp_alpha").unwrap_or("1").to_owned(),
             opt_tolerance: settings.get_last("bmp_optto").unwrap_or("0.2").to_owned(),
-            long_curve: settings
-                .get_last("bmp_long")
-                .map(|value| matches!(value, "1" | "true" | "True"))
-                .unwrap_or(true),
+            long_curve: get_legacy_bool(settings, "bmp_long", true),
         }
     }
 

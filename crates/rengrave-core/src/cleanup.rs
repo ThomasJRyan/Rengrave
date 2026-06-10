@@ -1,6 +1,6 @@
 use crate::geometry::Point;
 use crate::layout::EngraveSegment;
-use crate::settings::LegacySettings;
+use crate::settings::{LegacySettings, get_legacy_bool, legacy_bool_value};
 use crate::vcarve::VCarveOptions;
 
 const ZERO: f64 = 0.00001;
@@ -60,7 +60,7 @@ impl CleanupOptions {
             bit_diameter: get_f64(settings, "clean_dia", 0.25).max(ZERO),
             step_over_percent: get_f64(settings, "clean_step", 50.0).max(ZERO),
             vbit_diameter: get_f64(settings, "clean_v", 0.05).max(ZERO),
-            v_flop: get_bool(settings, "v_flop", false),
+            v_flop: get_legacy_bool(settings, "v_flop", false),
             straight: CleanupSelection {
                 profile: paths.first().copied().unwrap_or(true),
                 x: paths.get(1).copied().unwrap_or(true),
@@ -572,7 +572,7 @@ fn parse_clean_paths(value: Option<&str>) -> Vec<bool> {
     value
         .unwrap_or("1,1,0,1,0,1,0,0")
         .split(',')
-        .map(|token| matches!(token.trim(), "1" | "1.0" | "true" | "True"))
+        .map(legacy_bool_value)
         .collect()
 }
 
@@ -586,13 +586,6 @@ fn get_f64(settings: &LegacySettings, key: &str, default: f64) -> f64 {
     settings
         .get_last(key)
         .and_then(|value| value.parse().ok())
-        .unwrap_or(default)
-}
-
-fn get_bool(settings: &LegacySettings, key: &str, default: bool) -> bool {
-    settings
-        .get_last(key)
-        .map(|value| matches!(value, "1" | "true" | "True"))
         .unwrap_or(default)
 }
 

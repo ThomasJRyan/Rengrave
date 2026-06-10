@@ -237,6 +237,22 @@ impl fmt::Display for LegacySettings {
     }
 }
 
+pub fn get_legacy_bool(settings: &LegacySettings, key: &str, default: bool) -> bool {
+    settings
+        .get_last(key)
+        .map(legacy_bool_value)
+        .unwrap_or(default)
+}
+
+pub fn legacy_bool_value(value: &str) -> bool {
+    let value = value.trim();
+    matches!(value, "1" | "1.0")
+        || value.eq_ignore_ascii_case("true")
+        || value.eq_ignore_ascii_case("yes")
+        || value.eq_ignore_ascii_case("on")
+        || value.eq_ignore_ascii_case("box")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -293,5 +309,15 @@ mod tests {
                 .to_string()
                 .contains("(fengrave_set fontdir     \"fonts\" )")
         );
+    }
+
+    #[test]
+    fn parses_legacy_bool_aliases() {
+        assert!(legacy_bool_value("1"));
+        assert!(legacy_bool_value("True"));
+        assert!(legacy_bool_value("box"));
+        assert!(!legacy_bool_value("0"));
+        assert!(!legacy_bool_value("False"));
+        assert!(!legacy_bool_value("no_box"));
     }
 }
