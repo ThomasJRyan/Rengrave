@@ -1048,6 +1048,12 @@ impl eframe::App for RengraveApp {
                     ui.label(format!("G-code lines: {}", self.gcode_lines));
                     ui.label(format!("Cut moves: {}", self.preview_segments.len()));
                     ui.label(format!("Rapid moves: {}", self.preview_rapids.len()));
+                    if let Some((size, range)) = preview_bounds_readout(self.preview_bounds) {
+                        ui.label(size);
+                        ui.monospace(range);
+                    } else {
+                        ui.label("Extents: none");
+                    }
                 });
             });
 
@@ -3178,6 +3184,31 @@ impl PreviewBounds {
     }
 }
 
+fn preview_bounds_readout(bounds: Option<PreviewBounds>) -> Option<(String, String)> {
+    let bounds = bounds?;
+    let width = (bounds.max.x - bounds.min.x).abs();
+    let height = (bounds.max.y - bounds.min.y).abs();
+    Some((
+        format!(
+            "Extents: {} x {}",
+            format_preview_coord(width),
+            format_preview_coord(height)
+        ),
+        format!(
+            "X {}..{}  Y {}..{}",
+            format_preview_coord(bounds.min.x),
+            format_preview_coord(bounds.max.x),
+            format_preview_coord(bounds.min.y),
+            format_preview_coord(bounds.max.y)
+        ),
+    ))
+}
+
+fn format_preview_coord(value: f64) -> String {
+    let value = if value.abs() < 0.00005 { 0.0 } else { value };
+    format!("{value:.4}")
+}
+
 fn fit_transform_to_bounds(
     transform: &mut ViewTransform,
     bounds: Option<PreviewBounds>,
@@ -3707,6 +3738,20 @@ mod tests {
 
         assert_eq!(bounds.min, Point::new(-2.0, -1.0));
         assert_eq!(bounds.max, Point::new(4.0, 3.0));
+    }
+
+    #[test]
+    fn preview_bounds_readout_formats_extents_and_ranges() {
+        let bounds = PreviewBounds {
+            min: Point::new(-1.25, -0.0000001),
+            max: Point::new(2.5, 4.125),
+        };
+
+        let (size, range) = preview_bounds_readout(Some(bounds)).unwrap();
+
+        assert_eq!(size, "Extents: 3.7500 x 4.1250");
+        assert_eq!(range, "X -1.2500..2.5000  Y 0.0000..4.1250");
+        assert_eq!(preview_bounds_readout(None), None);
     }
 
     #[test]
