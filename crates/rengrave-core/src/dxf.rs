@@ -142,6 +142,13 @@ fn parse_entity_pairs(
                 append_transformed_strokes(&entity_strokes, transform, strokes);
                 idx = next;
             }
+            "ELLIPSE" => {
+                let (entity, next) = collect_entity(pairs, idx + 1);
+                let mut entity_strokes = Vec::new();
+                parse_ellipse_entity(entity, segarc_degrees, &mut entity_strokes);
+                append_transformed_strokes(&entity_strokes, transform, strokes);
+                idx = next;
+            }
             "LEADER" => {
                 let (entity, next) = collect_entity(pairs, idx + 1);
                 let mut entity_strokes = Vec::new();
@@ -384,6 +391,103 @@ fn parse_solid_entity(entity: &[(i32, String)], strokes: &mut Vec<Stroke>) {
     strokes.push(Stroke { start: p1, end: p3 });
     strokes.push(Stroke { start: p3, end: p2 });
     strokes.push(Stroke { start: p2, end: p0 });
+}
+
+fn parse_ellipse_entity(entity: &[(i32, String)], segarc_degrees: f64, strokes: &mut Vec<Stroke>) {
+    let mut center = PartialPoint::default();
+    let mut major = PartialPoint::default();
+    let mut ratio: Option<f64> = None;
+    let mut start: Option<f64> = None;
+    let mut end: Option<f64> = None;
+
+    for (code, value) in entity {
+        match *code {
+            10 => center.x = value.parse().ok(),
+            20 => center.y = value.parse().ok(),
+            11 => major.x = value.parse().ok(),
+            21 => major.y = value.parse().ok(),
+            40 => ratio = value.parse().ok(),
+            41 => start = value.parse().ok(),
+            42 => end = value.parse().ok(),
+            _ => {}
+        }
+    }
+
+    let (Some(center), Some(major), Some(ratio), Some(start), Some(mut end)) =
+        (center.into_point(), major.into_point(), ratio, start, end)
+    else {
+        return;
+    };
+
+    let major_radius = (major.x * major.x + major.y * major.y).sqrt();
+    let minor_radius = major_radius * ratio;
+    if major_radius <= 1.0e-12 || minor_radius.abs() <= 1.0e-12 {
+        return;
+    }
+
+    while end < start {
+        end += std::f64::consts::TAU;
+    }
+
+    let rotation = major.y.atan2(major.x);
+    let tolerance = segarc_degrees.max(1.0).to_radians();
+    let mut phi = start;
+    let mut step = tolerance;
+    let mut previous = ellipse_point(center, major_radius, minor_radius, rotation, phi);
+
+    while phi < end {
+        if phi + step > end {
+            step = end - phi;
+        }
+        if step <= 1.0e-12 {
+            break;
+        }
+
+        let middle_phi = phi + step / 2.0;
+        let next_phi = phi + step;
+        let middle = ellipse_point(center, major_radius, minor_radius, rotation, middle_phi);
+        let next = ellipse_point(center, major_radius, minor_radius, rotation, next_phi);
+
+        let v1 = Point::new(middle.x - previous.x, middle.y - previous.y);
+        let v2 = Point::new(next.x - middle.x, next.y - middle.y);
+        let l1 = (v1.x * v1.x + v1.y * v1.y).sqrt();
+        let l2 = (v2.x * v2.x + v2.y * v2.y).sqrt();
+        let angle = if l1 <= 1.0e-12 || l2 <= 1.0e-12 {
+            0.0
+        } else {
+            ((v1.x * v2.x + v1.y * v2.y) / (l1 * l2))
+                .clamp(-1.0, 1.0)
+                .acos()
+        };
+
+        if angle > tolerance {
+            step /= 2.0;
+        } else {
+            strokes.push(Stroke {
+                start: previous,
+                end: next,
+            });
+            phi = next_phi;
+            step *= 2.0;
+            previous = next;
+        }
+    }
+}
+
+fn ellipse_point(
+    center: Point,
+    major_radius: f64,
+    minor_radius: f64,
+    rotation: f64,
+    phi: f64,
+) -> Point {
+    Point::new(
+        center.x + major_radius * phi.cos() * rotation.cos()
+            - minor_radius * phi.sin() * rotation.sin(),
+        center.y
+            + major_radius * phi.cos() * rotation.sin()
+            + minor_radius * phi.sin() * rotation.cos(),
+    )
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -903,6 +1007,70 @@ ENDSEC
         assert_eq!(strokes[2].start, Point::new(0.0, 1.0));
         assert_eq!(strokes[2].end, Point::new(0.0, 1.0));
         assert_eq!(strokes[3].end, Point::new(0.0, 0.0));
+    }
+
+    #[test]
+    fn approximates_ellipse_entities() {
+        let dxf = format!(
+            "\
+0
+ELLIPSE
+10
+0
+20
+0
+11
+2
+21
+0
+40
+0.5
+41
+0
+42
+{}
+0
+ENDSEC
+",
+            std::f64::consts::FRAC_PI_2
+        );
+        let strokes = parse_dxf_segments(&dxf, 20.0);
+
+        assert!(!strokes.is_empty());
+        assert_point_close(strokes[0].start, Point::new(2.0, 0.0));
+        assert_point_close(strokes.last().unwrap().end, Point::new(0.0, 1.0));
+    }
+
+    #[test]
+    fn approximates_rotated_ellipse_entities() {
+        let dxf = format!(
+            "\
+0
+ELLIPSE
+10
+1
+20
+2
+11
+0
+21
+2
+40
+0.5
+41
+0
+42
+{}
+0
+ENDSEC
+",
+            std::f64::consts::FRAC_PI_2
+        );
+        let strokes = parse_dxf_segments(&dxf, 20.0);
+
+        assert!(!strokes.is_empty());
+        assert_point_close(strokes[0].start, Point::new(1.0, 4.0));
+        assert_point_close(strokes.last().unwrap().end, Point::new(0.0, 2.0));
     }
 
     #[test]
