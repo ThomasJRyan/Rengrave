@@ -1,6 +1,10 @@
 pub mod batch;
+pub mod dxf;
 pub mod external;
+pub mod font;
+pub mod gcode;
 pub mod geometry;
+pub mod layout;
 pub mod project;
 pub mod settings;
 

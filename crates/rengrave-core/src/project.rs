@@ -42,6 +42,45 @@ pub enum DocumentError {
     },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InputKind {
+    CxfFont(PathBuf),
+    TtfFont(PathBuf),
+    Image(PathBuf),
+    Missing,
+}
+
+pub fn resolve_input_kind(settings: &LegacySettings) -> InputKind {
+    match settings.get_last("input_type") {
+        Some("image") => settings
+            .get_last("imagefile")
+            .map(|path| InputKind::Image(PathBuf::from(path)))
+            .unwrap_or(InputKind::Missing),
+        _ => {
+            let fontfile = settings.get_last("fontfile").unwrap_or_default().trim();
+            if fontfile.is_empty() {
+                return InputKind::Missing;
+            }
+            let font_path = PathBuf::from(fontfile);
+            let path = if font_path.is_absolute() {
+                font_path
+            } else {
+                PathBuf::from(settings.get_last("fontdir").unwrap_or_default()).join(font_path)
+            };
+            match path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .map(str::to_ascii_lowercase)
+                .as_deref()
+            {
+                Some("cxf") => InputKind::CxfFont(path),
+                Some("ttf") => InputKind::TtfFont(path),
+                _ => InputKind::Missing,
+            }
+        }
+    }
+}
+
 pub fn load_document(request: &DocumentRequest) -> Result<RengraveDocument, DocumentError> {
     load_document_with_potrace_probe(request, detect_potrace)
 }
@@ -217,5 +256,17 @@ mod tests {
         let _ = fs::remove_file(path);
         assert_eq!(document.text, "F-Engrave");
         assert_eq!(document.warnings.len(), 1);
+    }
+
+    #[test]
+    fn resolves_relative_cxf_font_from_legacy_settings() {
+        let mut settings = default_legacy_settings();
+        settings.set_or_push("fontdir", "/tmp/fonts", true);
+        settings.set_or_push("fontfile", "romanc.cxf", true);
+
+        assert_eq!(
+            resolve_input_kind(&settings),
+            InputKind::CxfFont(PathBuf::from("/tmp/fonts/romanc.cxf"))
+        );
     }
 }
