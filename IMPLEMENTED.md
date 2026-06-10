@@ -8,6 +8,7 @@ This document records what has actually been implemented in the Rust port and wh
 - The UI stores secondary cleanup outputs from the core calculation, shows how many cleanup files are available, and can export them next to the selected primary G-code path using F-Engrave-style suffixes such as `_clean`.
 - The bottom output area now has a Cleanup tab that shows generated companion G-code grouped by suffix before export.
 - Stale-output detection now includes the secondary-output request flag, preventing cleanup files from silently falling out of sync with the visible preview/output.
+- The input preview area is larger and has an explicit Refresh action for reloading changed source files from disk.
 
 ## Current Shape
 
@@ -46,7 +47,7 @@ This document records what has actually been implemented in the Rust port and wh
 - The UI now has editable Settings/Input/Default-dir path fields and Load/Calculate actions, so settings files and font/image paths are reachable without CLI launch arguments.
 - Each path field has a Browse action that first tries a native file/folder/save dialog through `rfd`, then falls back to the in-app filesystem browser. The in-app browser can navigate parent/home directories, select settings/input files, select the default directory, and choose output files in the current directory.
 - The left panel includes an input catalog that scans the current input/default directory for CXF, TTF, DXF, and bitmap files; selecting an entry updates the input path and starts background generation.
-- The left panel also shows a cached input preview: CXF/TTF sample strokes, DXF line artwork, or a bitmap thumbnail, with decode/parser errors shown inline.
+- The left panel also shows a cached input preview: CXF/TTF sample strokes, DXF line artwork, or a bitmap thumbnail, with decode/parser errors shown inline and a Refresh action for changed files.
 - Current UI settings can be saved back out as reusable `fengrave_set` comments, including selected input/default directory, UI overrides, and TCODE text. Existing settings files are used as a base when present; new settings paths save from defaults.
 - UI path preferences are persisted under the platform config directory and restored on the next launch when CLI arguments do not override them.
 - Common F-Engrave settings are exposed as working controls: mode, units, justification, origin, height/width/spacing, angle, text radius, flip/mirror, Add Box, safe/cut Z, stroke, feed/plunge, arc fitting, bit shape, V-bit/inlay/depth settings, cleanup diameter/step/V size/path mask/normal flip, and bitmap image-size/long-curve toggles.
@@ -96,7 +97,7 @@ The UI is now an MVP rather than only a shell, but it still lacks several expect
 
 ## Recommended Next Checkpoints
 
-1. Build a golden-fixture harness that can compare generated output against checked-in F-Engrave fixtures with tolerances.
+1. Generate actual F-Engrave reference fixtures once `pyclipper` is available, then wire them into the existing tolerance-ready golden harness.
 2. Enrich font/image preview controls and add more complete F-Engrave-style setting panels.
 3. Expand parity tests for default text, multiline text, text-on-circle, flip/mirror/origin/justify, DXF imports, bitmap imports, Add Box/Circle, arc-fit modes, and settings round trips.
 4. Audit V-carve and cleanup output against F-Engrave fixtures before adding more UI around those features.

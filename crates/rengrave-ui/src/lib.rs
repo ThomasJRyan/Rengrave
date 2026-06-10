@@ -21,6 +21,9 @@ use rfd::FileDialog;
 const DEFAULT_PREVIEW_ZOOM: f64 = 80.0;
 const PREVIEW_FIT_PADDING: f32 = 24.0;
 const OUTPUT_PREVIEW_CHARS: usize = 8000;
+const INPUT_PREVIEW_VECTOR_HEIGHT: f32 = 180.0;
+const INPUT_PREVIEW_THUMBNAIL_WIDTH: u32 = 300;
+const INPUT_PREVIEW_THUMBNAIL_HEIGHT: u32 = 180;
 
 #[derive(Debug, Clone, Default)]
 pub struct UiLaunchOptions {
@@ -629,7 +632,12 @@ impl eframe::App for RengraveApp {
                             });
                     }
                     ui.separator();
-                    ui.heading("Input Preview");
+                    ui.horizontal(|ui| {
+                        ui.heading("Input Preview");
+                        if ui.button("Refresh").clicked() {
+                            self.reload_input_preview();
+                        }
+                    });
                     self.ensure_input_preview();
                     draw_input_preview(ui, &mut self.input_preview);
                     ui.separator();
@@ -1097,6 +1105,11 @@ impl RengraveApp {
         if self.input_preview.path != path {
             self.input_preview = InputPreview::load(path);
         }
+    }
+
+    fn reload_input_preview(&mut self) {
+        self.input_preview = InputPreview::load(path_from_text(&self.input_path));
+        self.status = "Input preview refreshed".to_owned();
     }
 
     fn copy_gcode(&mut self, ctx: &egui::Context) {
@@ -2520,7 +2533,12 @@ fn load_bitmap_preview(path: &Path) -> InputPreviewData {
         Ok(image) => {
             let original_width = image.width();
             let original_height = image.height();
-            let thumbnail = image.thumbnail(240, 140).to_rgba8();
+            let thumbnail = image
+                .thumbnail(
+                    INPUT_PREVIEW_THUMBNAIL_WIDTH,
+                    INPUT_PREVIEW_THUMBNAIL_HEIGHT,
+                )
+                .to_rgba8();
             InputPreviewData::Bitmap {
                 original_width,
                 original_height,
@@ -2570,7 +2588,7 @@ fn draw_input_preview(ui: &mut egui::Ui, preview: &mut InputPreview) {
             }
             if let Some(texture) = &preview.texture {
                 let max_width = ui.available_width().max(80.0);
-                let max_height = 140.0_f32;
+                let max_height = INPUT_PREVIEW_THUMBNAIL_HEIGHT as f32;
                 let image_width = *thumbnail_width as f32;
                 let image_height = *thumbnail_height as f32;
                 let scale = (max_width / image_width)
@@ -2649,7 +2667,7 @@ fn draw_vector_input_preview(
     segments: &[PreviewSegment],
     bounds: Option<PreviewBounds>,
 ) {
-    let desired = egui::vec2(ui.available_width().max(80.0), 130.0);
+    let desired = egui::vec2(ui.available_width().max(80.0), INPUT_PREVIEW_VECTOR_HEIGHT);
     let (rect, _) = ui.allocate_exact_size(desired, egui::Sense::hover());
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, 0.0, egui::Color32::from_rgb(28, 30, 32));
@@ -3679,8 +3697,8 @@ mod tests {
             } => {
                 assert_eq!(original_width, 4);
                 assert_eq!(original_height, 2);
-                assert!(thumbnail_width <= 240);
-                assert!(thumbnail_height <= 140);
+                assert!(thumbnail_width <= INPUT_PREVIEW_THUMBNAIL_WIDTH as usize);
+                assert!(thumbnail_height <= INPUT_PREVIEW_THUMBNAIL_HEIGHT as usize);
                 assert_eq!(rgba.len(), thumbnail_width * thumbnail_height * 4);
             }
             other => panic!("unexpected preview: {other:?}"),
