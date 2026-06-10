@@ -80,6 +80,7 @@ struct RengraveApp {
     show_axes: bool,
     browser: Option<FileBrowser>,
     input_catalog: InputCatalog,
+    input_catalog_filter: InputCatalogFilter,
     input_preview: InputPreview,
     preferences_path: Option<PathBuf>,
     calculation: Option<CalculationJob>,
@@ -174,6 +175,7 @@ impl RengraveApp {
             show_axes: get_legacy_bool(&document.settings, "show_axis", true),
             browser: None,
             input_catalog,
+            input_catalog_filter: InputCatalogFilter::default(),
             input_preview: InputPreview::default(),
             preferences_path,
             calculation: None,
@@ -756,10 +758,44 @@ impl eframe::App for RengraveApp {
                     if self.input_catalog.entries.is_empty() {
                         ui.label("No supported files found");
                     } else {
+                        let counts = input_catalog_counts(&self.input_catalog.entries);
+                        ui.horizontal_wrapped(|ui| {
+                            input_catalog_filter_checkbox(
+                                ui,
+                                &mut self.input_catalog_filter.cxf,
+                                "CXF",
+                                counts.cxf,
+                            );
+                            input_catalog_filter_checkbox(
+                                ui,
+                                &mut self.input_catalog_filter.ttf,
+                                "TTF",
+                                counts.ttf,
+                            );
+                            input_catalog_filter_checkbox(
+                                ui,
+                                &mut self.input_catalog_filter.dxf,
+                                "DXF",
+                                counts.dxf,
+                            );
+                            input_catalog_filter_checkbox(
+                                ui,
+                                &mut self.input_catalog_filter.bitmap,
+                                "Bitmap",
+                                counts.bitmap,
+                            );
+                        });
+                        let visible_entries = visible_input_catalog_entries(
+                            &self.input_catalog.entries,
+                            self.input_catalog_filter,
+                        );
+                        if visible_entries.is_empty() {
+                            ui.label("No files match enabled filters");
+                        }
                         egui::ScrollArea::vertical()
                             .max_height(150.0)
                             .show(ui, |ui| {
-                                for entry in self.input_catalog.entries.clone() {
+                                for entry in visible_entries {
                                     let selected = path_from_text(&self.input_path).as_ref()
                                         == Some(&entry.path);
                                     let label = format!(
@@ -2412,6 +2448,44 @@ impl InputCatalogKind {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct InputCatalogFilter {
+    cxf: bool,
+    ttf: bool,
+    dxf: bool,
+    bitmap: bool,
+}
+
+impl Default for InputCatalogFilter {
+    fn default() -> Self {
+        Self {
+            cxf: true,
+            ttf: true,
+            dxf: true,
+            bitmap: true,
+        }
+    }
+}
+
+impl InputCatalogFilter {
+    fn accepts(self, kind: InputCatalogKind) -> bool {
+        match kind {
+            InputCatalogKind::CxfFont => self.cxf,
+            InputCatalogKind::TtfFont => self.ttf,
+            InputCatalogKind::Dxf => self.dxf,
+            InputCatalogKind::Bitmap => self.bitmap,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct InputCatalogCounts {
+    cxf: usize,
+    ttf: usize,
+    dxf: usize,
+    bitmap: usize,
+}
+
 struct InputPreview {
     path: Option<PathBuf>,
     sample_text: Option<String>,
@@ -2811,6 +2885,10 @@ fn path_row(ui: &mut egui::Ui, label: &str, value: &mut String) -> PathRowAction
     action
 }
 
+fn input_catalog_filter_checkbox(ui: &mut egui::Ui, enabled: &mut bool, label: &str, count: usize) {
+    ui.checkbox(enabled, format!("{label} ({count})"));
+}
+
 fn number_row(ui: &mut egui::Ui, label: &str, value: &mut f64, speed: f64) {
     ui.horizontal(|ui| {
         ui.add_sized([124.0, 20.0], egui::Label::new(label));
@@ -3099,6 +3177,30 @@ fn read_input_catalog_entries(dir: &Path) -> Result<Vec<InputCatalogEntry>, Stri
             .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
     });
     Ok(entries)
+}
+
+fn input_catalog_counts(entries: &[InputCatalogEntry]) -> InputCatalogCounts {
+    let mut counts = InputCatalogCounts::default();
+    for entry in entries {
+        match entry.kind {
+            InputCatalogKind::CxfFont => counts.cxf += 1,
+            InputCatalogKind::TtfFont => counts.ttf += 1,
+            InputCatalogKind::Dxf => counts.dxf += 1,
+            InputCatalogKind::Bitmap => counts.bitmap += 1,
+        }
+    }
+    counts
+}
+
+fn visible_input_catalog_entries(
+    entries: &[InputCatalogEntry],
+    filter: InputCatalogFilter,
+) -> Vec<InputCatalogEntry> {
+    entries
+        .iter()
+        .filter(|entry| filter.accepts(entry.kind))
+        .cloned()
+        .collect()
 }
 
 fn format_bytes(bytes: u64) -> String {
@@ -4985,6 +5087,65 @@ mod tests {
         assert_eq!(entries[1].kind, InputCatalogKind::Dxf);
         assert_eq!(entries[2].kind, InputCatalogKind::Bitmap);
         assert!(entries.iter().all(|entry| entry.name != "notes.txt"));
+    }
+
+    #[test]
+    fn input_catalog_filters_entries_by_enabled_kind() {
+        let entries = vec![
+            InputCatalogEntry {
+                path: PathBuf::from("/tmp/a.cxf"),
+                name: "a.cxf".to_owned(),
+                kind: InputCatalogKind::CxfFont,
+                size_bytes: 10,
+            },
+            InputCatalogEntry {
+                path: PathBuf::from("/tmp/b.ttf"),
+                name: "b.ttf".to_owned(),
+                kind: InputCatalogKind::TtfFont,
+                size_bytes: 20,
+            },
+            InputCatalogEntry {
+                path: PathBuf::from("/tmp/c.dxf"),
+                name: "c.dxf".to_owned(),
+                kind: InputCatalogKind::Dxf,
+                size_bytes: 30,
+            },
+            InputCatalogEntry {
+                path: PathBuf::from("/tmp/d.png"),
+                name: "d.png".to_owned(),
+                kind: InputCatalogKind::Bitmap,
+                size_bytes: 40,
+            },
+        ];
+
+        assert_eq!(
+            input_catalog_counts(&entries),
+            InputCatalogCounts {
+                cxf: 1,
+                ttf: 1,
+                dxf: 1,
+                bitmap: 1
+            }
+        );
+        let filter = InputCatalogFilter {
+            cxf: false,
+            ttf: true,
+            dxf: false,
+            bitmap: true,
+        };
+        let visible = visible_input_catalog_entries(&entries, filter);
+
+        assert_eq!(
+            visible
+                .iter()
+                .map(|entry| entry.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["b.ttf", "d.png"]
+        );
+        assert_eq!(
+            visible_input_catalog_entries(&entries, InputCatalogFilter::default()).len(),
+            4
+        );
     }
 
     #[test]
