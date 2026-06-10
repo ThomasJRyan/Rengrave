@@ -593,14 +593,24 @@ impl eframe::App for RengraveApp {
             .show_inside(ui, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     ui.heading("Input");
-                    if path_row(ui, "Settings", &mut self.settings_path) {
+                    let settings_path_action = path_row(ui, "Settings", &mut self.settings_path);
+                    if settings_path_action.browse_clicked {
                         self.choose_path(FileBrowserTarget::Settings);
                     }
-                    if path_row(ui, "Input", &mut self.input_path) {
+                    let input_path_action = path_row(ui, "Input", &mut self.input_path);
+                    if input_path_action.browse_clicked {
                         self.choose_path(FileBrowserTarget::Input);
                     }
-                    if path_row(ui, "Default dir", &mut self.default_dir_path) {
+                    let default_dir_action =
+                        path_row(ui, "Default dir", &mut self.default_dir_path);
+                    if default_dir_action.browse_clicked {
                         self.choose_path(FileBrowserTarget::DefaultDir);
+                    }
+                    if settings_path_action.value_changed
+                        || input_path_action.value_changed
+                        || default_dir_action.value_changed
+                    {
+                        self.save_preferences();
                     }
                     ui.horizontal(|ui| {
                         if ui.button("Load").clicked() {
@@ -892,8 +902,12 @@ impl eframe::App for RengraveApp {
                     if ui.button("Use default dir").clicked() {
                         self.reset_output_paths_to_default_dir();
                     }
-                    if path_row(ui, "G-code", &mut self.gcode_path) {
+                    let gcode_path_action = path_row(ui, "G-code", &mut self.gcode_path);
+                    if gcode_path_action.browse_clicked {
                         self.choose_path(FileBrowserTarget::GcodeOutput);
+                    }
+                    if gcode_path_action.value_changed {
+                        self.save_preferences();
                     }
                     if ui
                         .add_enabled(!self.gcode.is_empty(), egui::Button::new("Export G-code"))
@@ -911,8 +925,12 @@ impl eframe::App for RengraveApp {
                     {
                         self.export_secondary_outputs();
                     }
-                    if path_row(ui, "SVG", &mut self.svg_path) {
+                    let svg_path_action = path_row(ui, "SVG", &mut self.svg_path);
+                    if svg_path_action.browse_clicked {
                         self.choose_path(FileBrowserTarget::SvgOutput);
+                    }
+                    if svg_path_action.value_changed {
+                        self.save_preferences();
                     }
                     if ui
                         .add_enabled(self.svg.is_some(), egui::Button::new("Export SVG"))
@@ -920,8 +938,12 @@ impl eframe::App for RengraveApp {
                     {
                         self.export_current(ExportKind::Svg);
                     }
-                    if path_row(ui, "DXF", &mut self.dxf_path) {
+                    let dxf_path_action = path_row(ui, "DXF", &mut self.dxf_path);
+                    if dxf_path_action.browse_clicked {
                         self.choose_path(FileBrowserTarget::DxfOutput);
+                    }
+                    if dxf_path_action.value_changed {
+                        self.save_preferences();
                     }
                     if ui
                         .add_enabled(self.dxf.is_some(), egui::Button::new("Export DXF"))
@@ -2288,15 +2310,23 @@ fn input_path_requires_potrace(path_text: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn path_row(ui: &mut egui::Ui, label: &str, value: &mut String) -> bool {
-    let mut browse_clicked = false;
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct PathRowAction {
+    browse_clicked: bool,
+    value_changed: bool,
+}
+
+fn path_row(ui: &mut egui::Ui, label: &str, value: &mut String) -> PathRowAction {
+    let mut action = PathRowAction::default();
     ui.horizontal(|ui| {
         ui.add_sized([88.0, 20.0], egui::Label::new(label));
         let text_width = (ui.available_width() - 74.0).max(80.0);
-        ui.add_sized([text_width, 22.0], egui::TextEdit::singleline(value));
-        browse_clicked = ui.button("Browse").clicked();
+        action.value_changed = ui
+            .add_sized([text_width, 22.0], egui::TextEdit::singleline(value))
+            .changed();
+        action.browse_clicked = ui.button("Browse").clicked();
     });
-    browse_clicked
+    action
 }
 
 fn number_row(ui: &mut egui::Ui, label: &str, value: &mut f64, speed: f64) {

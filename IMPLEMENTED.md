@@ -17,6 +17,7 @@ This document records what has actually been implemented in the Rust port and wh
 - The central preview now supports cursor-centered mouse-wheel/pinch zoom and double-click fit in addition to toolbar/menu controls.
 - The central preview now shows live model-space X/Y coordinates under the pointer using the same pan/zoom/rotation transform as the drawn toolpath.
 - The Output panel and File menu now include a Use default dir action that resets G-code/SVG/DXF export paths to the current default directory with standard filenames.
+- Manual edits to settings/input/default-dir and output path fields now persist to UI preferences without requiring a browse/export action first.
 
 ## Current Shape
 
@@ -58,7 +59,7 @@ This document records what has actually been implemented in the Rust port and wh
 - The left panel includes an input catalog that scans the current input/default directory for CXF, TTF, DXF, and bitmap files; selecting an entry updates the input path and starts background generation.
 - The left panel also shows a cached input preview: CXF/TTF strokes from the current engraving text sample, DXF line artwork, or a bitmap thumbnail, with decode/parser errors shown inline and a Refresh action for changed files.
 - Current UI settings can be saved back out as reusable `fengrave_set` comments, including selected input/default directory, UI overrides, and TCODE text. Existing settings files are used as a base when present; new settings paths save from defaults.
-- UI path preferences are persisted under the platform config directory and restored on the next launch when CLI arguments do not override them.
+- UI path preferences are persisted under the platform config directory, updated from manual path edits as well as browse/export actions, and restored on the next launch when CLI arguments do not override them.
 - Common F-Engrave settings are exposed as working controls: mode, units, justification, origin, height/width/spacing, angle, text radius, flip/mirror, Add Box, safe/cut Z, stroke, feed/plunge, arc fitting, bit shape, V-bit/inlay/depth settings, cleanup diameter/step/V size/path checkboxes/normal flip, and bitmap image-size/long-curve toggles.
 - The right panel has a Bitmap section that reports Potrace detected/missing status, indicates when the selected input requires Potrace, and exposes Potrace turn policy, turd size, alpha max, and optimization tolerance.
 - The right panel has an Advanced section for core-supported settings that were previously hidden: height calculation mode, G-code preamble/postamble, recovery comments, variable output, and extended TTF/CXF character conversion.
