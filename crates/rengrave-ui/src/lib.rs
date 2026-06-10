@@ -912,16 +912,37 @@ impl eframe::App for RengraveApp {
                     number_row(ui, "Plunge", &mut self.controls.plunge, 0.5);
                     number_row(ui, "Accuracy", &mut self.controls.accuracy, 0.0005);
                     number_row(ui, "Arc segments", &mut self.controls.segarc, 0.5);
+
+                    ui.separator();
+                    ui.heading("V-carve");
                     number_row(ui, "V angle", &mut self.controls.v_bit_angle, 1.0);
                     number_row(ui, "V diameter", &mut self.controls.v_bit_dia, 0.01);
                     number_row(ui, "V step", &mut self.controls.v_step_len, 0.001);
                     number_row(ui, "Allowance", &mut self.controls.allowance, 0.001);
-                    number_row(ui, "Max cut", &mut self.controls.v_max_cut, 0.01);
-                    number_row(ui, "Rough stock", &mut self.controls.v_rough_stk, 0.01);
                     number_row(ui, "Depth limit", &mut self.controls.v_depth_lim, 0.01);
                     ui.horizontal_wrapped(|ui| {
                         ui.checkbox(&mut self.controls.inlay, "Inlay");
                     });
+
+                    ui.separator();
+                    ui.heading("Multipass");
+                    number_row(ui, "Finish stock", &mut self.controls.v_rough_stk, 0.01);
+                    let multipass_enabled = vcarve_multipass_enabled(self.controls.v_rough_stk);
+                    ui.add_enabled_ui(multipass_enabled, |ui| {
+                        number_row(ui, "Max depth/pass", &mut self.controls.v_max_cut, 0.01);
+                    });
+                    let color = if multipass_enabled {
+                        egui::Color32::from_rgb(94, 176, 132)
+                    } else {
+                        egui::Color32::from_rgb(160, 168, 172)
+                    };
+                    ui.colored_label(
+                        color,
+                        vcarve_multipass_summary(
+                            self.controls.v_rough_stk,
+                            self.controls.v_max_cut,
+                        ),
+                    );
 
                     ui.separator();
                     ui.heading("Bitmap");
@@ -2639,6 +2660,24 @@ fn input_path_requires_potrace(path_text: &str) -> bool {
         .as_deref()
         .map(requires_potrace)
         .unwrap_or(false)
+}
+
+fn vcarve_multipass_enabled(finish_stock: f64) -> bool {
+    finish_stock > 0.0
+}
+
+fn vcarve_multipass_summary(finish_stock: f64, max_depth_per_pass: f64) -> String {
+    if !vcarve_multipass_enabled(finish_stock) {
+        "Multipass disabled: finish stock is zero".to_owned()
+    } else if max_depth_per_pass >= 0.0 {
+        "Multipass configured but max depth/pass should be negative".to_owned()
+    } else {
+        format!(
+            "Multipass enabled: leave {} finish stock, max {} per pass",
+            format_setting_number(finish_stock),
+            format_setting_number(max_depth_per_pass)
+        )
+    }
 }
 
 fn input_source_summary(path_text: &str) -> String {
@@ -4726,6 +4765,25 @@ mod tests {
         assert!(input_path_requires_potrace("/tmp/image.PBM"));
         assert!(!input_path_requires_potrace("/tmp/shape.dxf"));
         assert!(!input_path_requires_potrace("  "));
+    }
+
+    #[test]
+    fn vcarve_multipass_summary_matches_f_engrave_control_policy() {
+        assert!(!vcarve_multipass_enabled(0.0));
+        assert!(!vcarve_multipass_enabled(-0.01));
+        assert!(vcarve_multipass_enabled(0.01));
+        assert_eq!(
+            vcarve_multipass_summary(0.0, -0.1),
+            "Multipass disabled: finish stock is zero"
+        );
+        assert_eq!(
+            vcarve_multipass_summary(0.05, 0.1),
+            "Multipass configured but max depth/pass should be negative"
+        );
+        assert_eq!(
+            vcarve_multipass_summary(0.05, -0.1),
+            "Multipass enabled: leave 0.05 finish stock, max -0.1 per pass"
+        );
     }
 
     #[test]
