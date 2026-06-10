@@ -398,6 +398,61 @@ impl RengraveApp {
         }
     }
 
+    fn export_all_available(&mut self) {
+        if !self.any_export_available() {
+            self.status = "No generated output to export".to_owned();
+            return;
+        }
+
+        let mut written = 0usize;
+        for (label, path, contents) in [
+            ("G-code", self.gcode_path.clone(), Some(self.gcode.clone())),
+            ("SVG", self.svg_path.clone(), self.svg.clone()),
+            ("DXF", self.dxf_path.clone(), self.dxf.clone()),
+        ] {
+            let Some(contents) = contents.filter(|contents| !contents.is_empty()) else {
+                continue;
+            };
+            if let Err(err) = write_text_file(&path, &contents) {
+                self.status = format!("{label} export failed");
+                self.warnings.push(err);
+                return;
+            }
+            written += 1;
+        }
+
+        if !self.secondary_gcode.is_empty() {
+            let primary_path = PathBuf::from(self.gcode_path.trim());
+            if primary_path.as_os_str().is_empty() {
+                self.status = "Cleanup export failed".to_owned();
+                self.warnings.push("G-code output path is empty".to_owned());
+                return;
+            }
+            for output in &self.secondary_gcode {
+                let path = secondary_output_path(&primary_path, &output.suffix);
+                if let Err(err) = fs::write(&path, &output.gcode) {
+                    self.status = "Cleanup export failed".to_owned();
+                    self.warnings
+                        .push(format!("unable to write `{}`: {err}", path.display()));
+                    return;
+                }
+                written += 1;
+            }
+        }
+
+        self.status = format!("Exported {written} files");
+        self.save_preferences();
+    }
+
+    fn any_export_available(&self) -> bool {
+        export_payloads_available(
+            &self.gcode,
+            self.svg.as_deref(),
+            self.dxf.as_deref(),
+            &self.secondary_gcode,
+        )
+    }
+
     fn export_secondary_outputs(&mut self) {
         if self.secondary_gcode.is_empty() {
             self.status = "Cleanup export unavailable".to_owned();
@@ -957,6 +1012,15 @@ impl eframe::App for RengraveApp {
                     {
                         self.copy_gcode(ui.ctx());
                     }
+                    if ui
+                        .add_enabled(
+                            self.any_export_available(),
+                            egui::Button::new("Export all available"),
+                        )
+                        .clicked()
+                    {
+                        self.export_all_available();
+                    }
 
                     ui.separator();
                     ui.heading("Preview");
@@ -1100,6 +1164,9 @@ impl RengraveApp {
                 }
                 if menu_action(ui, "Use default dir for outputs", true) {
                     self.reset_output_paths_to_default_dir();
+                }
+                if menu_action(ui, "Export all available", self.any_export_available()) {
+                    self.export_all_available();
                 }
                 if menu_action(ui, "Export G-code", !self.gcode.is_empty()) {
                     self.export_current(ExportKind::Gcode);
@@ -2850,6 +2917,18 @@ fn secondary_output_preview_text(outputs: &[SecondaryGcode]) -> Option<String> {
     Some(preview)
 }
 
+fn export_payloads_available(
+    gcode: &str,
+    svg: Option<&str>,
+    dxf: Option<&str>,
+    secondary_gcode: &[SecondaryGcode],
+) -> bool {
+    !gcode.is_empty()
+        || svg.is_some_and(|svg| !svg.is_empty())
+        || dxf.is_some_and(|dxf| !dxf.is_empty())
+        || !secondary_gcode.is_empty()
+}
+
 fn draw_vector_input_preview(
     ui: &mut egui::Ui,
     segments: &[PreviewSegment],
@@ -4202,6 +4281,23 @@ mod tests {
             "( cleanup output: _clean )\nG90\nG1 X0\n\n( cleanup output: _v_clean )\nG91\nG1 X1\n"
         );
         assert_eq!(secondary_output_preview_text(&[]), None);
+    }
+
+    #[test]
+    fn export_payload_availability_tracks_all_output_kinds() {
+        assert!(!export_payloads_available("", None, None, &[]));
+        assert!(export_payloads_available("G90\n", None, None, &[]));
+        assert!(export_payloads_available("", Some("<svg/>"), None, &[]));
+        assert!(export_payloads_available("", None, Some("0\nEOF\n"), &[]));
+        assert!(export_payloads_available(
+            "",
+            None,
+            None,
+            &[SecondaryGcode {
+                suffix: "clean".to_owned(),
+                gcode: "G90\n".to_owned()
+            }]
+        ));
     }
 
     #[test]
