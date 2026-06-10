@@ -561,7 +561,7 @@ impl RengraveApp {
 
     fn browser_value(&self, target: FileBrowserTarget) -> &str {
         match target {
-            FileBrowserTarget::Settings => &self.settings_path,
+            FileBrowserTarget::Settings | FileBrowserTarget::SettingsOutput => &self.settings_path,
             FileBrowserTarget::Input => &self.input_path,
             FileBrowserTarget::DefaultDir => &self.default_dir_path,
             FileBrowserTarget::GcodeOutput => &self.gcode_path,
@@ -578,7 +578,9 @@ impl RengraveApp {
     ) {
         let text = path.display().to_string();
         match target {
-            FileBrowserTarget::Settings => self.settings_path = text,
+            FileBrowserTarget::Settings | FileBrowserTarget::SettingsOutput => {
+                self.settings_path = text
+            }
             FileBrowserTarget::Input => {
                 self.input_path = text;
                 self.refresh_input_catalog();
@@ -596,6 +598,7 @@ impl RengraveApp {
         match selection_followup(target) {
             SelectionFollowup::None => {}
             SelectionFollowup::LoadDocument => self.reload_document(ctx),
+            SelectionFollowup::SaveSettings => self.save_current_settings(),
             SelectionFollowup::StartCalculation => self.start_calculation(ctx),
         }
     }
@@ -737,6 +740,9 @@ impl eframe::App for RengraveApp {
                             .clicked()
                         {
                             self.save_current_settings();
+                        }
+                        if ui.button("Save As").clicked() {
+                            self.choose_path(FileBrowserTarget::SettingsOutput, ui.ctx().clone());
                         }
                         if ui.button("Calculate").clicked() {
                             self.start_calculation(ui.ctx().clone());
@@ -1284,6 +1290,9 @@ impl RengraveApp {
             ui.menu_button("File", |ui| {
                 if menu_action(ui, "Open settings...", true) {
                     self.choose_path(FileBrowserTarget::Settings, ui.ctx().clone());
+                }
+                if menu_action(ui, "Save settings as...", true) {
+                    self.choose_path(FileBrowserTarget::SettingsOutput, ui.ctx().clone());
                 }
                 if menu_action(ui, "Open input...", true) {
                     self.choose_path(FileBrowserTarget::Input, ui.ctx().clone());
@@ -2163,6 +2172,7 @@ impl OriginChoice {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FileBrowserTarget {
     Settings,
+    SettingsOutput,
     Input,
     DefaultDir,
     GcodeOutput,
@@ -2174,6 +2184,7 @@ impl FileBrowserTarget {
     fn label(self) -> &'static str {
         match self {
             Self::Settings => "settings",
+            Self::SettingsOutput => "settings output",
             Self::Input => "input",
             Self::DefaultDir => "default directory",
             Self::GcodeOutput => "G-code output",
@@ -2185,6 +2196,7 @@ impl FileBrowserTarget {
     fn dialog_title(self) -> &'static str {
         match self {
             Self::Settings => "Open Settings",
+            Self::SettingsOutput => "Save Settings As",
             Self::Input => "Open Input",
             Self::DefaultDir => "Choose Default Directory",
             Self::GcodeOutput => "Choose G-code Output",
@@ -2195,6 +2207,7 @@ impl FileBrowserTarget {
 
     fn default_file_name(self) -> Option<&'static str> {
         match self {
+            Self::SettingsOutput => Some("rengrave_settings.ngc"),
             Self::GcodeOutput => Some("rengrave_output.ngc"),
             Self::SvgOutput => Some("rengrave_output.svg"),
             Self::DxfOutput => Some("rengrave_output.dxf"),
@@ -2207,7 +2220,9 @@ impl FileBrowserTarget {
             Self::DefaultDir => path.is_dir(),
             Self::Settings => path.is_file(),
             Self::Input => path.is_file() || path.is_dir(),
-            Self::GcodeOutput | Self::SvgOutput | Self::DxfOutput => !path.is_dir(),
+            Self::SettingsOutput | Self::GcodeOutput | Self::SvgOutput | Self::DxfOutput => {
+                !path.is_dir()
+            }
         }
     }
 }
@@ -2216,12 +2231,14 @@ impl FileBrowserTarget {
 enum SelectionFollowup {
     None,
     LoadDocument,
+    SaveSettings,
     StartCalculation,
 }
 
 fn selection_followup(target: FileBrowserTarget) -> SelectionFollowup {
     match target {
         FileBrowserTarget::Settings => SelectionFollowup::LoadDocument,
+        FileBrowserTarget::SettingsOutput => SelectionFollowup::SaveSettings,
         FileBrowserTarget::Input => SelectionFollowup::StartCalculation,
         FileBrowserTarget::DefaultDir
         | FileBrowserTarget::GcodeOutput
@@ -3048,6 +3065,10 @@ fn choose_native_path(
             .add_filter("F-Engrave settings", &["ngc", "nc", "tap"])
             .add_filter("All files", &["*"])
             .pick_file(),
+        FileBrowserTarget::SettingsOutput => dialog
+            .set_file_name(output_file_name(current_value, target))
+            .add_filter("F-Engrave settings", &["ngc", "nc", "tap"])
+            .save_file(),
         FileBrowserTarget::Input => dialog
             .add_filter(
                 "R-Engrave inputs",
@@ -4972,6 +4993,10 @@ mod tests {
             "custom.tap"
         );
         assert_eq!(
+            output_file_name("  ", FileBrowserTarget::SettingsOutput),
+            "rengrave_settings.ngc"
+        );
+        assert_eq!(
             output_file_name("  ", FileBrowserTarget::SvgOutput),
             "rengrave_output.svg"
         );
@@ -4986,6 +5011,10 @@ mod tests {
         assert_eq!(
             selection_followup(FileBrowserTarget::Settings),
             SelectionFollowup::LoadDocument
+        );
+        assert_eq!(
+            selection_followup(FileBrowserTarget::SettingsOutput),
+            SelectionFollowup::SaveSettings
         );
         assert_eq!(
             selection_followup(FileBrowserTarget::Input),
