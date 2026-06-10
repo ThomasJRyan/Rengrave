@@ -48,6 +48,8 @@ pub struct LayoutSettings {
     pub cut_type: CutType,
     pub outer: bool,
     pub upper: bool,
+    pub plotbox: bool,
+    pub boxgap: f64,
 }
 
 impl LayoutSettings {
@@ -73,6 +75,8 @@ impl LayoutSettings {
             cut_type: CutType::parse(settings.get_last("cut_type").unwrap_or("engrave")),
             outer: get_bool(settings, "outer", true),
             upper: get_bool(settings, "upper", true),
+            plotbox: get_bool(settings, "plotbox", false),
+            boxgap: get_f64(settings, "boxgap", 0.25),
         }
     }
 }
@@ -366,6 +370,10 @@ pub fn layout_text(font: &Font, text: &str, settings: &LayoutSettings) -> Layout
     bounds.min.y -= thick / 2.0;
     bounds.max.y += thick / 2.0;
 
+    if settings.plotbox && (circle_radius == 0.0 || settings.cut_type == CutType::VCarve) {
+        append_plotbox(&mut segments, &mut bounds, settings, thick);
+    }
+
     let zero = settings.origin.zero_point(bounds);
     for segment in &mut segments {
         segment.start.x = segment.start.x - zero.x + settings.xorigin;
@@ -384,6 +392,57 @@ pub fn layout_text(font: &Font, text: &str, settings: &LayoutSettings) -> Layout
         bounds: Some(bounds),
         missing_chars: missing.into_iter().collect(),
     }
+}
+
+fn append_plotbox(
+    segments: &mut Vec<EngraveSegment>,
+    bounds: &mut Bounds,
+    settings: &LayoutSettings,
+    thick: f64,
+) {
+    let delta = thick / 2.0 + settings.boxgap;
+    let min = Point::new(bounds.min.x - delta, bounds.min.y - delta);
+    let max = Point::new(bounds.max.x + delta, bounds.max.y + delta);
+    let loop_id = segments
+        .iter()
+        .map(|segment| segment.loop_id)
+        .max()
+        .unwrap_or(0)
+        + 1;
+
+    let corners = if settings.mirror ^ settings.flip {
+        [
+            min,
+            Point::new(min.x, max.y),
+            max,
+            Point::new(max.x, min.y),
+            min,
+        ]
+    } else {
+        [
+            min,
+            Point::new(max.x, min.y),
+            max,
+            Point::new(min.x, max.y),
+            min,
+        ]
+    };
+
+    segments.extend(corners.windows(2).map(|pair| EngraveSegment {
+        start: pair[0],
+        end: pair[1],
+        loop_id,
+    }));
+
+    let bounds_delta = if settings.cut_type == CutType::VCarve {
+        delta
+    } else {
+        delta + thick / 2.0
+    };
+    bounds.min.x -= bounds_delta;
+    bounds.min.y -= bounds_delta;
+    bounds.max.x += bounds_delta;
+    bounds.max.y += bounds_delta;
 }
 
 fn get_f64(settings: &LegacySettings, key: &str, default: f64) -> f64 {
@@ -575,5 +634,52 @@ mod tests {
         assert!((segment.start.y + 6.995).abs() < 1e-9);
         assert!(segment.end.x > 1.8);
         assert!(segment.end.y > segment.start.y);
+    }
+
+    #[test]
+    fn plotbox_adds_rectangular_border_for_flat_text() {
+        let font = parse_cxf("[A] 2\nL 0,0,10,0\nL 0,0,0,10\n", 5.0).unwrap();
+        let mut legacy = default_legacy_settings();
+        legacy.set_or_push("plotbox", "1", false);
+        legacy.set_or_push("boxgap", "0.25", false);
+        let settings = LayoutSettings::from_legacy(&legacy);
+
+        let output = layout_text(&font, "A", &settings);
+
+        assert_eq!(output.segments.len(), 6);
+        assert_eq!(output.segments[2].loop_id, 2);
+        assert!((output.segments[2].start.x + 0.260).abs() < 1e-9);
+        assert!((output.segments[2].start.y + 0.260).abs() < 1e-9);
+        assert!((output.segments[2].end.x - 2.250).abs() < 1e-9);
+        assert!((output.segments[2].end.y + 0.260).abs() < 1e-9);
+
+        let bounds = output.bounds.unwrap();
+        assert!((bounds.min.x + 0.265).abs() < 1e-9);
+        assert!((bounds.max.x - 2.255).abs() < 1e-9);
+        assert!((bounds.min.y + 0.265).abs() < 1e-9);
+        assert!((bounds.max.y - 2.255).abs() < 1e-9);
+    }
+
+    #[test]
+    fn plotbox_adds_vcarve_border_without_stroke_padding() {
+        let font = parse_cxf("[A] 2\nL 0,0,10,0\nL 0,0,0,10\n", 5.0).unwrap();
+        let mut legacy = default_legacy_settings();
+        legacy.set_or_push("cut_type", "v-carve", false);
+        legacy.set_or_push("plotbox", "1", false);
+        legacy.set_or_push("boxgap", "0.25", false);
+        let settings = LayoutSettings::from_legacy(&legacy);
+
+        let output = layout_text(&font, "A", &settings);
+
+        assert_eq!(output.segments.len(), 6);
+        assert!((output.segments[2].start.x + 0.25).abs() < 1e-9);
+        assert!((output.segments[2].start.y + 0.25).abs() < 1e-9);
+        assert!((output.segments[2].end.x - 2.25).abs() < 1e-9);
+        assert!((output.segments[2].end.y + 0.25).abs() < 1e-9);
+
+        let bounds = output.bounds.unwrap();
+        assert!((bounds.min.x + 0.25).abs() < 1e-9);
+        assert!((bounds.max.x - 2.25).abs() < 1e-9);
+        assert!((bounds.max.y - 2.25).abs() < 1e-9);
     }
 }
