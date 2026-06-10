@@ -89,8 +89,7 @@ pub fn prepare_batch_output(request: &BatchRequest) -> Result<BatchOutput, Batch
         });
     } else {
         warnings.push(
-            "toolpath generation is not available for this input yet; output contains compatible settings comments only"
-                .to_owned(),
+            "settings-only output generated because no toolpath could be produced".to_owned(),
         );
         render_settings_only_gcode(&document.settings, &document.text)
     };
@@ -359,7 +358,7 @@ fn build_exports(
 
 fn render_settings_only_gcode(settings: &LegacySettings, text: &str) -> String {
     let mut lines = render_settings_header(settings, text);
-    lines.push("( R-Engrave scaffold: toolpath generation is not implemented yet )".to_owned());
+    lines.push("( R-Engrave settings-only output: no toolpath was generated )".to_owned());
     lines.push(String::new());
     lines.join("\n")
 }
@@ -905,10 +904,14 @@ mod tests {
                 .iter()
                 .any(|warning| warning.contains("unable to decode bitmap"))
         );
+        assert!(output.warnings.iter().any(|warning| {
+            warning.contains("settings-only output generated because no toolpath could be produced")
+        }));
         assert!(
             output
                 .gcode
-                .contains("( R-Engrave scaffold: toolpath generation is not implemented yet )")
+                .contains("( R-Engrave settings-only output: no toolpath was generated )")
         );
+        assert!(!output.gcode.contains("not implemented"));
     }
 }

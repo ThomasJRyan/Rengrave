@@ -21,6 +21,7 @@ This document records what has actually been implemented in the Rust port and wh
 - Loaded settings now surface the resolved font/image path back to the UI Input field, including relative font files resolved through `fontdir` and moved image files recovered through `NGC_DIR`.
 - Launching the UI with an explicit `-g/--gcode_file` settings file no longer lets an old remembered input path silently override that settings file unless `-f/--fontdir` is also supplied.
 - The bottom output tabs now have a Copy tab action, so status logs, G-code, cleanup companion G-code, SVG, and DXF payloads can be copied directly from the visible tab.
+- Settings-only fallback output no longer describes the port as an unimplemented scaffold; it now says no toolpath was generated and points users at the warning state.
 - The Output panel and File menu now include Export all available, which writes generated G-code, SVG, DXF, and cleanup companion files in one action.
 - The Layout panel and File menu now include a defaults action that resets controls and view layers from the core F-Engrave-compatible default settings table without changing the current input/text paths.
 - The Preview panel now reports generated model extents and X/Y ranges from the combined cut and rapid bounds.
@@ -57,6 +58,7 @@ This document records what has actually been implemented in the Rust port and wh
 - Initial v-carve roughing/multipass depth caps.
 - Initial cleanup path generation and secondary cleanup G-code files.
 - Batch generation can now request secondary cleanup outputs independently of writing the primary G-code to a CLI output path.
+- Settings-only fallback G-code is still emitted for missing/invalid inputs so recovery comments remain available, but the warning/comment wording now reflects the actual no-toolpath condition rather than an old scaffold state.
 - SVG and DXF export helpers from generated layout segments.
 
 ## Implemented UI Work
@@ -90,7 +92,7 @@ The UI is now an MVP rather than only a shell, but it still lacks several expect
 
 ## Tests And Validation In Place
 
-- Core tests currently cover settings, CXF/TTF parsing, DXF entities, bitmap conversion, layout transforms, Add Box/Circle, G-code, SVG/DXF export, cleanup, v-carve options, and batch generation.
+- Core tests currently cover settings, CXF/TTF parsing, DXF entities, bitmap conversion, layout transforms, Add Box/Circle, G-code, SVG/DXF export, cleanup, v-carve options, batch generation, and settings-only fallback output.
 - A crate-level golden-output harness now exists under `crates/rengrave-core/tests/golden.rs` with a minimal CXF fixture, checked G-code/SVG regression outputs, and numeric-tolerant G-code comparison helpers. These first expected files pin current R-Engrave output; they are not yet F-Engrave-generated parity fixtures.
 - F-Engrave fixture generation was rechecked on 2026-06-10 with `python f-engrave_source/f-engrave.py -b -f crates/rengrave-core/tests/fixtures/inputs/simple.cxf -t AB`; it still fails before batch mode because `pyclipper` is missing.
 - UI tests cover default and secondary output paths, default-directory export path reset helpers, export-all availability, cleanup companion preview formatting, active-tab clipboard payload selection, cleanup path checkbox serialization, default control mapping, view-layer settings serialization, native save-dialog filename helpers, settings save serialization, path-field parsing, loaded-document input-path display policy, explicit settings launch behavior, in-app browser directory behavior, input catalog scanning, input preview loading, bitmap trace-mask preview thresholding, font text-sample selection, preference persistence, worker stale-result detection, output stale-state detection, control-to-legacy override emission, bitmap/Potrace control mapping, advanced setting mapping, preview fitting, generated extents formatting, cursor zooming, screen-to-model coordinate conversion, output preview truncation, text-file write errors, cut/rapid preview parsing, and center/radius arc preview parsing.
