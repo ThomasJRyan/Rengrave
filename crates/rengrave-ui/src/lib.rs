@@ -100,6 +100,8 @@ impl RengraveApp {
             default_dir: self.default_dir.clone(),
             text: Some(self.text.clone()),
             output: None,
+            svg_output: None,
+            dxf_output: None,
         }
     }
 

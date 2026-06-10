@@ -9,8 +9,13 @@ pub struct ExportOptions {
 
 impl ExportOptions {
     pub fn from_legacy(settings: &LegacySettings) -> Self {
+        let stroke_thickness = if settings.get_last("cut_type") == Some("v-carve") {
+            0.001
+        } else {
+            get_f64(settings, "STHICK", 0.01)
+        };
         Self {
-            stroke_thickness: get_f64(settings, "STHICK", 0.01),
+            stroke_thickness,
             units: settings.get_last("units").unwrap_or("in").to_owned(),
         }
     }
@@ -246,6 +251,17 @@ mod tests {
         assert!(dxf.contains(" 10\n0.0000\n 20\n0.0000"));
         assert!(dxf.contains(" 11\n1.0000\n 21\n1.0000"));
         assert!(dxf.ends_with("EOF\n"));
+    }
+
+    #[test]
+    fn vcarve_svg_export_uses_thin_preview_stroke() {
+        let mut settings = default_legacy_settings();
+        settings.set_or_push("cut_type", "v-carve", false);
+        settings.set_or_push("STHICK", "0.5", false);
+
+        let options = ExportOptions::from_legacy(&settings);
+
+        assert!((options.stroke_thickness - 0.001).abs() < 1e-9);
     }
 
     fn segments() -> Vec<EngraveSegment> {

@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use crate::bitmap::vectorize_bitmap_to_dxf;
 use crate::cleanup::{CleanupBit, CleanupOptions, generate_cleanup_points};
 use crate::dxf::{dxf_font_from_str, read_dxf_font};
+use crate::export::{ExportOptions, write_dxf, write_svg};
 use crate::external::requires_potrace;
 use crate::font::{read_cxf, read_ttf};
 use crate::gcode::{GcodeOptions, write_cleanup_gcode, write_engrave_gcode, write_vcarve_gcode};
@@ -21,6 +22,8 @@ pub struct BatchRequest {
     pub default_dir: Option<PathBuf>,
     pub text: Option<String>,
     pub output: Option<PathBuf>,
+    pub svg_output: Option<PathBuf>,
+    pub dxf_output: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -28,6 +31,8 @@ pub struct BatchOutput {
     pub gcode: String,
     pub warnings: Vec<String>,
     pub secondary_gcode: Vec<SecondaryGcode>,
+    pub svg: Option<String>,
+    pub dxf: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -55,6 +60,8 @@ pub fn prepare_batch_output(request: &BatchRequest) -> Result<BatchOutput, Batch
         &document.settings,
         &document.text,
         request.output.is_some(),
+        request.svg_output.is_some(),
+        request.dxf_output.is_some(),
         &mut warnings,
     );
     let gcode = if let Some(gcode_lines) = generated_gcode {
@@ -71,6 +78,8 @@ pub fn prepare_batch_output(request: &BatchRequest) -> Result<BatchOutput, Batch
             gcode: primary,
             warnings,
             secondary_gcode,
+            svg: gcode_lines.svg,
+            dxf: gcode_lines.dxf,
         });
     } else {
         warnings.push(
@@ -84,6 +93,8 @@ pub fn prepare_batch_output(request: &BatchRequest) -> Result<BatchOutput, Batch
         gcode,
         warnings,
         secondary_gcode: Vec::new(),
+        svg: None,
+        dxf: None,
     })
 }
 
@@ -91,19 +102,36 @@ fn generate_engrave_gcode(
     settings: &LegacySettings,
     text: &str,
     include_secondary: bool,
+    include_svg: bool,
+    include_dxf: bool,
     warnings: &mut Vec<String>,
 ) -> Option<GeneratedToolpaths> {
     if settings.get_last("input_type") == Some("image") {
-        return generate_dxf_engrave_gcode(settings, include_secondary, warnings);
+        return generate_dxf_engrave_gcode(
+            settings,
+            include_secondary,
+            include_svg,
+            include_dxf,
+            warnings,
+        );
     }
 
-    generate_text_engrave_gcode(settings, text, include_secondary, warnings)
+    generate_text_engrave_gcode(
+        settings,
+        text,
+        include_secondary,
+        include_svg,
+        include_dxf,
+        warnings,
+    )
 }
 
 fn generate_text_engrave_gcode(
     settings: &LegacySettings,
     text: &str,
     include_secondary: bool,
+    include_svg: bool,
+    include_dxf: bool,
     warnings: &mut Vec<String>,
 ) -> Option<GeneratedToolpaths> {
     let input = resolve_input_kind(settings);
@@ -151,12 +179,21 @@ fn generate_text_engrave_gcode(
         return None;
     }
 
-    write_layout_gcode(settings, &layout.segments, include_secondary, warnings)
+    write_layout_gcode(
+        settings,
+        &layout.segments,
+        include_secondary,
+        include_svg,
+        include_dxf,
+        warnings,
+    )
 }
 
 fn generate_dxf_engrave_gcode(
     settings: &LegacySettings,
     include_secondary: bool,
+    include_svg: bool,
+    include_dxf: bool,
     warnings: &mut Vec<String>,
 ) -> Option<GeneratedToolpaths> {
     let InputKind::Image(path) = resolve_input_kind(settings) else {
@@ -199,13 +236,22 @@ fn generate_dxf_engrave_gcode(
         return None;
     }
 
-    write_layout_gcode(settings, &layout.segments, include_secondary, warnings)
+    write_layout_gcode(
+        settings,
+        &layout.segments,
+        include_secondary,
+        include_svg,
+        include_dxf,
+        warnings,
+    )
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct GeneratedToolpaths {
     primary: Vec<String>,
     secondary: Vec<GeneratedSecondary>,
+    svg: Option<String>,
+    dxf: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -218,13 +264,18 @@ fn write_layout_gcode(
     settings: &LegacySettings,
     segments: &[crate::layout::EngraveSegment],
     include_secondary: bool,
+    include_svg: bool,
+    include_dxf: bool,
     warnings: &mut Vec<String>,
 ) -> Option<GeneratedToolpaths> {
     let gcode_options = GcodeOptions::from_legacy(settings);
+    let exports = build_exports(settings, segments, include_svg, include_dxf);
     if settings.get_last("cut_type") != Some("v-carve") {
         return Some(GeneratedToolpaths {
             primary: write_engrave_gcode(segments, &gcode_options),
             secondary: Vec::new(),
+            svg: exports.svg,
+            dxf: exports.dxf,
         });
     }
 
@@ -233,6 +284,8 @@ fn write_layout_gcode(
         return Some(GeneratedToolpaths {
             primary: write_engrave_gcode(segments, &gcode_options),
             secondary: Vec::new(),
+            svg: exports.svg,
+            dxf: exports.dxf,
         });
     }
 
@@ -272,7 +325,27 @@ fn write_layout_gcode(
     Some(GeneratedToolpaths {
         primary: write_vcarve_gcode(&points, &gcode_options, &vcarve_options),
         secondary,
+        svg: exports.svg,
+        dxf: exports.dxf,
     })
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct GeneratedExports {
+    svg: Option<String>,
+    dxf: Option<String>,
+}
+
+fn build_exports(
+    settings: &LegacySettings,
+    segments: &[crate::layout::EngraveSegment],
+    include_svg: bool,
+    include_dxf: bool,
+) -> GeneratedExports {
+    GeneratedExports {
+        svg: include_svg.then(|| write_svg(segments, &ExportOptions::from_legacy(settings))),
+        dxf: include_dxf.then(|| write_dxf(segments)),
+    }
 }
 
 fn render_settings_only_gcode(settings: &LegacySettings, text: &str) -> String {
@@ -512,6 +585,71 @@ mod tests {
                 .gcode
                 .contains("secondary cleanup operation")
         );
+    }
+
+    #[test]
+    fn batch_prepares_svg_and_dxf_exports_when_requested() {
+        let font_path = std::env::temp_dir().join(format!(
+            "rengrave-export-{}-{}.cxf",
+            std::process::id(),
+            "batch"
+        ));
+        let svg_path = std::env::temp_dir().join(format!(
+            "rengrave-export-{}-{}.svg",
+            std::process::id(),
+            "batch"
+        ));
+        let dxf_path = std::env::temp_dir().join(format!(
+            "rengrave-export-{}-{}.dxf",
+            std::process::id(),
+            "batch"
+        ));
+        fs::write(&font_path, "[A] 1\nL 0,0,10,0\n").unwrap();
+
+        let output = prepare_batch_output(&BatchRequest {
+            batch: true,
+            font_or_image: Some(font_path.clone()),
+            text: Some("A".to_owned()),
+            svg_output: Some(svg_path),
+            dxf_output: Some(dxf_path),
+            ..BatchRequest::default()
+        })
+        .unwrap();
+
+        let _ = fs::remove_file(font_path);
+        assert!(output.warnings.is_empty());
+        assert!(output.svg.as_deref().unwrap().contains("<svg"));
+        assert!(output.svg.as_deref().unwrap().contains("<path d=\"M"));
+        assert!(
+            output
+                .dxf
+                .as_deref()
+                .unwrap()
+                .contains("SECTION\n2\nENTITIES")
+        );
+        assert!(output.dxf.as_deref().unwrap().contains("LINE\n  5\n30"));
+    }
+
+    #[test]
+    fn batch_skips_exports_when_not_requested() {
+        let path = std::env::temp_dir().join(format!(
+            "rengrave-no-export-{}-{}.cxf",
+            std::process::id(),
+            "batch"
+        ));
+        fs::write(&path, "[A] 1\nL 0,0,10,0\n").unwrap();
+
+        let output = prepare_batch_output(&BatchRequest {
+            batch: true,
+            font_or_image: Some(path.clone()),
+            text: Some("A".to_owned()),
+            ..BatchRequest::default()
+        })
+        .unwrap();
+
+        let _ = fs::remove_file(path);
+        assert!(output.svg.is_none());
+        assert!(output.dxf.is_none());
     }
 
     #[test]

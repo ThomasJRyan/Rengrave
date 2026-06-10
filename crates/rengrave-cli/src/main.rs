@@ -44,6 +44,12 @@ struct Cli {
         help = "Write batch output to this path instead of stdout"
     )]
     output: Option<PathBuf>,
+
+    #[arg(long = "svg-output", help = "Write an SVG export to this path")]
+    svg_output: Option<PathBuf>,
+
+    #[arg(long = "dxf-output", help = "Write a DXF export to this path")]
+    dxf_output: Option<PathBuf>,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -70,6 +76,8 @@ fn run_batch(cli: Cli) -> anyhow::Result<()> {
         default_dir: cli.defdir,
         text: cli.text,
         output: cli.output,
+        svg_output: cli.svg_output,
+        dxf_output: cli.dxf_output,
     };
     let output = prepare_batch_output(&request)?;
 
@@ -82,6 +90,12 @@ fn run_batch(cli: Cli) -> anyhow::Result<()> {
         write_secondary_outputs(path, &output.secondary_gcode)?;
     } else {
         io::stdout().write_all(output.gcode.as_bytes())?;
+    }
+    if let (Some(path), Some(svg)) = (&request.svg_output, &output.svg) {
+        fs::write(path, svg)?;
+    }
+    if let (Some(path), Some(dxf)) = (&request.dxf_output, &output.dxf) {
+        fs::write(path, dxf)?;
     }
 
     Ok(())
