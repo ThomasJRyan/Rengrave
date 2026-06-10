@@ -5,7 +5,7 @@ use crate::cleanup::{CleanupBit, CleanupOptions, generate_cleanup_points_with_ca
 use crate::dxf::{dxf_font_from_str, read_dxf_font};
 use crate::export::{ExportOptions, write_dxf, write_svg_with_circle};
 use crate::external::requires_potrace;
-use crate::font::{read_cxf, read_ttf};
+use crate::font::{FontError, read_cxf_with_cancel, read_ttf_with_cancel};
 use crate::gcode::{
     GcodeOptions, write_cleanup_gcode, write_engrave_gcode, write_engrave_gcode_with_circle,
     write_vcarve_gcode,
@@ -228,8 +228,9 @@ fn generate_text_engrave_gcode(
         .unwrap_or(5.0);
     progress(BatchProgress::LoadingTextFont);
     let font = match input {
-        InputKind::CxfFont(path) => match read_cxf(&path, segarc) {
+        InputKind::CxfFont(path) => match read_cxf_with_cancel(&path, segarc, cancel) {
             Ok(font) => font,
+            Err(FontError::Canceled) => return Err(BatchError::Canceled),
             Err(err) => {
                 warnings.push(err.to_string());
                 return Ok(None);
@@ -237,8 +238,9 @@ fn generate_text_engrave_gcode(
         },
         InputKind::TtfFont(path) => {
             let extended_chars = get_legacy_bool(settings, "ext_char", false);
-            match read_ttf(&path, segarc, extended_chars) {
+            match read_ttf_with_cancel(&path, segarc, extended_chars, cancel) {
                 Ok(font) => font,
+                Err(FontError::Canceled) => return Err(BatchError::Canceled),
                 Err(err) => {
                     warnings.push(err.to_string());
                     return Ok(None);
@@ -746,6 +748,51 @@ mod tests {
 
         assert_eq!(err.to_string(), "generation canceled");
         assert!(in_vectorization.get());
+    }
+
+    #[test]
+    fn batch_cancel_hook_stops_during_cxf_font_parse() {
+        let path = std::env::temp_dir().join(format!(
+            "rengrave-cxf-cancel-{}-{}.cxf",
+            std::process::id(),
+            "batch"
+        ));
+        let mut contents = String::from("[O] 1\n");
+        for _ in 0..200 {
+            contents.push_str("A 0,0,1,0,360\n");
+        }
+        fs::write(&path, contents).unwrap();
+        let in_font_load = Cell::new(false);
+        let font_checks = Cell::new(0usize);
+
+        let err = prepare_batch_output_with_cancel_and_progress(
+            &BatchRequest {
+                batch: true,
+                font_or_image: Some(path.clone()),
+                text: Some("O".to_owned()),
+                settings_overrides: vec![LegacySetting::new("segarc", "0.01", false)],
+                ..BatchRequest::default()
+            },
+            || {
+                if in_font_load.get() {
+                    let next = font_checks.get() + 1;
+                    font_checks.set(next);
+                    next > 4
+                } else {
+                    false
+                }
+            },
+            |event| {
+                if event == BatchProgress::LoadingTextFont {
+                    in_font_load.set(true);
+                }
+            },
+        )
+        .unwrap_err();
+
+        let _ = fs::remove_file(path);
+        assert_eq!(err.to_string(), "generation canceled");
+        assert!(font_checks.get() > 4);
     }
 
     #[test]

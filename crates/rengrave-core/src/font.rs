@@ -120,17 +120,36 @@ pub enum FontError {
     InvalidTtf { path: PathBuf },
     #[error("TTF font `{path}` does not contain outline data for A")]
     MissingScaleGlyph { path: PathBuf },
+    #[error("font parsing canceled")]
+    Canceled,
 }
 
 pub fn read_cxf(path: &Path, segarc_degrees: f64) -> Result<Font, FontError> {
+    read_cxf_with_cancel(path, segarc_degrees, &|| false)
+}
+
+pub fn read_cxf_with_cancel(
+    path: &Path,
+    segarc_degrees: f64,
+    cancel: &dyn Fn() -> bool,
+) -> Result<Font, FontError> {
+    check_canceled(cancel)?;
     let input = fs::read_to_string(path).map_err(|source| FontError::ReadCxf {
         path: path.to_owned(),
         source,
     })?;
-    parse_cxf(&input, segarc_degrees)
+    parse_cxf_with_cancel(&input, segarc_degrees, cancel)
 }
 
 pub fn parse_cxf(input: &str, segarc_degrees: f64) -> Result<Font, FontError> {
+    parse_cxf_with_cancel(input, segarc_degrees, &|| false)
+}
+
+pub fn parse_cxf_with_cancel(
+    input: &str,
+    segarc_degrees: f64,
+    cancel: &dyn Fn() -> bool,
+) -> Result<Font, FontError> {
     let mut font = Font::default();
     let mut key = None;
     let mut strokes = Vec::new();
@@ -141,6 +160,7 @@ pub fn parse_cxf(input: &str, segarc_degrees: f64) -> Result<Font, FontError> {
     };
 
     for line in input.lines() {
+        check_canceled(cancel)?;
         let text = line.trim();
         if text.is_empty() || text.starts_with('#') {
             continue;
@@ -171,7 +191,7 @@ pub fn parse_cxf(input: &str, segarc_degrees: f64) -> Result<Font, FontError> {
             let coords = parse_numbers::<5>(coords, 5).ok_or_else(|| FontError::InvalidArc {
                 line: text.to_owned(),
             })?;
-            append_arc_segments(&mut strokes, coords, segarc_degrees);
+            append_arc_segments(&mut strokes, coords, segarc_degrees, cancel)?;
         }
     }
 
@@ -189,19 +209,31 @@ pub fn parse_cxf(input: &str, segarc_degrees: f64) -> Result<Font, FontError> {
 }
 
 pub fn read_ttf(path: &Path, segarc_degrees: f64, extended_chars: bool) -> Result<Font, FontError> {
+    read_ttf_with_cancel(path, segarc_degrees, extended_chars, &|| false)
+}
+
+pub fn read_ttf_with_cancel(
+    path: &Path,
+    segarc_degrees: f64,
+    extended_chars: bool,
+    cancel: &dyn Fn() -> bool,
+) -> Result<Font, FontError> {
+    check_canceled(cancel)?;
     let data = fs::read(path).map_err(|source| FontError::ReadTtf {
         path: path.to_owned(),
         source,
     })?;
-    parse_ttf(&data, path, segarc_degrees, extended_chars)
+    parse_ttf_with_cancel(&data, path, segarc_degrees, extended_chars, cancel)
 }
 
-fn parse_ttf(
+fn parse_ttf_with_cancel(
     data: &[u8],
     path: &Path,
     segarc_degrees: f64,
     extended_chars: bool,
+    cancel: &dyn Fn() -> bool,
 ) -> Result<Font, FontError> {
+    check_canceled(cancel)?;
     let face = Face::parse(data, 0).map_err(|_| FontError::InvalidTtf {
         path: path.to_owned(),
     })?;
@@ -212,6 +244,7 @@ fn parse_ttf(
     let mut font = Font::default();
 
     for code in 0..=max_code {
+        check_canceled(cancel)?;
         let Some(ch) = char::from_u32(code) else {
             continue;
         };
@@ -231,6 +264,14 @@ fn parse_ttf(
     }
 
     Ok(font)
+}
+
+fn check_canceled(cancel: &dyn Fn() -> bool) -> Result<(), FontError> {
+    if cancel() {
+        Err(FontError::Canceled)
+    } else {
+        Ok(())
+    }
 }
 
 fn ttf_scale_factor(face: &Face<'_>) -> Option<f64> {
@@ -274,7 +315,12 @@ fn parse_numbers<const N: usize>(text: &str, expected: usize) -> Option<[f64; N]
     (count == expected).then_some(output)
 }
 
-fn append_arc_segments(strokes: &mut Vec<Stroke>, coords: [f64; 5], segarc_degrees: f64) {
+fn append_arc_segments(
+    strokes: &mut Vec<Stroke>,
+    coords: [f64; 5],
+    segarc_degrees: f64,
+    cancel: &dyn Fn() -> bool,
+) -> Result<(), FontError> {
     let [xcenter, ycenter, radius, mut start_angle, end_angle] = coords;
     if end_angle < start_angle {
         start_angle -= 360.0;
@@ -287,6 +333,7 @@ fn append_arc_segments(strokes: &mut Vec<Stroke>, coords: [f64; 5], segarc_degre
     let mut ystart = sin_degrees(start_angle) * radius + ycenter;
 
     for _ in 0..segs {
+        check_canceled(cancel)?;
         angle += angle_increment;
         let xend = cos_degrees(angle) * radius + xcenter;
         let yend = sin_degrees(angle) * radius + ycenter;
@@ -294,6 +341,7 @@ fn append_arc_segments(strokes: &mut Vec<Stroke>, coords: [f64; 5], segarc_degre
         xstart = xend;
         ystart = yend;
     }
+    Ok(())
 }
 
 fn sin_degrees(angle: f64) -> f64 {
@@ -460,6 +508,7 @@ fn approximate_arc_angle(start: Point, midpoint: Point, end: Point) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::Cell;
 
     #[test]
     fn parses_cxf_line_glyphs() {
@@ -498,8 +547,31 @@ A 0,0,1,0,90
     }
 
     #[test]
+    fn cxf_parse_can_cancel_inside_arc_expansion() {
+        let calls = Cell::new(0usize);
+        let err = parse_cxf_with_cancel("[O] 1\nA 0,0,1,0,360\n", 0.01, &|| {
+            let next = calls.get() + 1;
+            calls.set(next);
+            next > 4
+        })
+        .unwrap_err();
+
+        assert!(matches!(err, FontError::Canceled));
+        assert!(calls.get() > 4);
+    }
+
+    #[test]
+    fn ttf_parse_can_cancel_before_font_walk() {
+        let err = parse_ttf_with_cancel(b"not a font", Path::new("bad.ttf"), 5.0, false, &|| true)
+            .unwrap_err();
+
+        assert!(matches!(err, FontError::Canceled));
+    }
+
+    #[test]
     fn invalid_ttf_data_returns_error() {
-        let err = parse_ttf(b"not a font", Path::new("bad.ttf"), 5.0, false).unwrap_err();
+        let err = parse_ttf_with_cancel(b"not a font", Path::new("bad.ttf"), 5.0, false, &|| false)
+            .unwrap_err();
         assert!(matches!(err, FontError::InvalidTtf { .. }));
     }
 }
