@@ -7,7 +7,7 @@ This document records what has actually been implemented in the Rust port and wh
 - `f-engrave_source/` is kept untouched as the behavior and licensing reference.
 - `crates/rengrave-core` contains the real porting work: settings parsing, geometry, importers, layout, toolpath generation, exports, and tests.
 - `crates/rengrave-cli` wraps the core batch workflow and preserves the main F-Engrave flags: `-b`, `-g`, `-f`, `-d`, and `-t`, plus Rust-specific output flags.
-- `crates/rengrave-ui` launches a desktop app, loads a document from editable paths, exposes common layout/tool/output controls, runs core generation, previews parsed G-code moves, and exports generated G-code/SVG/DXF. It is still not a complete F-Engrave replacement UI.
+- `crates/rengrave-ui` launches a desktop app, loads a document through editable paths or an in-app browser, exposes common layout/tool/output controls, runs core generation, previews parsed G-code moves, and exports generated G-code/SVG/DXF. It is still not a complete F-Engrave replacement UI.
 
 ## Implemented Core And CLI Work
 
@@ -36,6 +36,8 @@ This document records what has actually been implemented in the Rust port and wh
 
 - `eframe/egui` app starts at 1280x800 with a top toolbar, left input/settings panel, central preview, right output/tool panel, and bottom status/log panel.
 - The UI now has editable Settings/Input/Default-dir path fields and Load/Calculate actions, so settings files and font/image paths are reachable without CLI launch arguments.
+- Each path field has a Browse action backed by an in-app filesystem browser. It can navigate parent/home directories, select settings/input files, select the default directory, and choose output files in the current directory.
+- UI path preferences are persisted under the platform config directory and restored on the next launch when CLI arguments do not override them.
 - Common F-Engrave settings are exposed as working controls: mode, units, justification, origin, height/width/spacing, angle, text radius, flip/mirror, Add Box, safe/cut Z, stroke, feed/plunge, arc fitting, bit shape, V-bit/inlay/depth settings, cleanup diameter/step/V size, and bitmap size/long-path toggles.
 - UI controls emit legacy `fengrave_set` overrides into `rengrave-core`; they do not write temporary settings files.
 - The app can calculate through the same batch core path used by the CLI.
@@ -45,12 +47,12 @@ This document records what has actually been implemented in the Rust port and wh
 
 ## Why The UI Looks Bare
 
-The UI is now an MVP rather than only a shell, but it still lacks several expected desktop workflow pieces. There are no native file pickers, font browser, persistent user preferences, Potrace option panel, progress/cancel flow, or F-Engrave-style menus. Controls cover common settings, but not every legacy knob. Long calculations still run synchronously on the UI thread.
+The UI is now an MVP rather than only a shell, but it still lacks several expected desktop workflow pieces. There are no native OS file dialogs, font preview/list browser, Potrace option panel, progress/cancel flow, or F-Engrave-style menus. Controls cover common settings, but not every legacy knob. Long calculations still run synchronously on the UI thread.
 
 ## Tests And Validation In Place
 
 - Core tests currently cover settings, CXF/TTF parsing, DXF entities, bitmap conversion, layout transforms, Add Box/Circle, G-code, SVG/DXF export, cleanup, v-carve options, and batch generation.
-- UI tests cover default output paths, path-field parsing, control-to-legacy override emission, text-file write errors, linear preview parsing, and full-circle arc preview parsing.
+- UI tests cover default output paths, path-field parsing, in-app browser directory behavior, preference persistence, control-to-legacy override emission, text-file write errors, linear preview parsing, and full-circle arc preview parsing.
 - Recent validation has been run with:
   - `cargo test -p rengrave-core`
   - `cargo test -p rengrave-ui`
@@ -59,7 +61,7 @@ The UI is now an MVP rather than only a shell, but it still lacks several expect
 ## Major Work Remaining For Parity
 
 - Golden fixtures from F-Engrave output. Current tests are focused unit/batch checks, not broad golden comparisons against F-Engrave-generated `.ngc`, `.svg`, and `.dxf` files.
-- Full F-Engrave UI workflow: file open/save dialogs, font browser, complete settings panels, complete v-carve/cleanup parity controls, bitmap controls, config save/load, clipboard operations, and parity menus.
+- Full F-Engrave UI workflow: native file open/save dialogs, font browser with previews, complete settings panels, complete v-carve/cleanup parity controls, bitmap controls, config save/load, clipboard operations, and parity menus.
 - Worker-thread calculation model with progress, cancellation, stale-state handling, and no UI freeze.
 - Stronger V-carve parity. The current V-carve implementation is initial and not proven equivalent to F-Engrave’s full algorithm for complex glyphs and artwork.
 - Full prismatic/inlay parity, including all F-Engrave edge cases around Add Box/Flip Normals, cleanup, depth limits, and output ordering.
@@ -75,7 +77,7 @@ The UI is now an MVP rather than only a shell, but it still lacks several expect
 ## Recommended Next Checkpoints
 
 1. Build a golden-fixture harness that can compare generated output against checked-in F-Engrave fixtures with tolerances.
-2. Add native file pickers, font/image browsing, a broader settings editor, and persistent user preferences.
+2. Replace or supplement the in-app browser with native file pickers, add font/image previews, and broaden the settings editor.
 3. Expand parity tests for default text, multiline text, text-on-circle, flip/mirror/origin/justify, DXF imports, bitmap imports, Add Box/Circle, arc-fit modes, and settings round trips.
 4. Audit V-carve and cleanup output against F-Engrave fixtures before adding more UI around those features.
 5. Add progress/cancel worker execution for long calculations.

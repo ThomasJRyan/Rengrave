@@ -1,5 +1,6 @@
+use std::env;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use eframe::egui;
 use rengrave_core::batch::{BatchOutput, BatchRequest, prepare_batch_output};
@@ -51,17 +52,36 @@ struct RengraveApp {
     show_toolpath: bool,
     show_bounds: bool,
     show_v_area: bool,
+    browser: Option<FileBrowser>,
+    preferences_path: Option<PathBuf>,
     warnings: Vec<String>,
 }
 
 impl RengraveApp {
     fn new(cc: &eframe::CreationContext<'_>, options: UiLaunchOptions) -> Self {
         apply_theme(&cc.egui_ctx);
+        let preferences_path = default_preferences_path();
+        let preferences = preferences_path
+            .as_deref()
+            .and_then(|path| UiPreferences::load(path).ok())
+            .unwrap_or_default();
+        let gcode_file = options
+            .gcode_file
+            .clone()
+            .or_else(|| path_from_text(&preferences.settings_path));
+        let font_or_image = options
+            .font_or_image
+            .clone()
+            .or_else(|| path_from_text(&preferences.input_path));
+        let default_dir = options
+            .default_dir
+            .clone()
+            .or_else(|| path_from_text(&preferences.default_dir_path));
         let document_request = DocumentRequest {
-            gcode_file: options.gcode_file.clone(),
-            font_or_image: options.font_or_image.clone(),
-            default_dir: options.default_dir.clone(),
-            text: options.text,
+            gcode_file: gcode_file.clone(),
+            font_or_image: font_or_image.clone(),
+            default_dir: default_dir.clone(),
+            text: options.text.clone(),
             settings_overrides: Vec::new(),
         };
         let document = match load_document(&document_request) {
@@ -85,9 +105,9 @@ impl RengraveApp {
             },
             status,
             settings_count: document.settings.entries.len(),
-            settings_path: path_to_text(&options.gcode_file),
-            input_path: path_to_text(&options.font_or_image),
-            default_dir_path: path_to_text(&options.default_dir),
+            settings_path: path_to_text(&gcode_file),
+            input_path: path_to_text(&font_or_image),
+            default_dir_path: path_to_text(&default_dir),
             controls: UiControls::from_settings(&document.settings),
             gcode: String::new(),
             svg: None,
@@ -95,12 +115,26 @@ impl RengraveApp {
             gcode_lines: 0,
             preview_segments: Vec::new(),
             preview_bounds: None,
-            gcode_path: default_output_path(&options.default_dir, "rengrave_output.ngc"),
-            svg_path: default_output_path(&options.default_dir, "rengrave_output.svg"),
-            dxf_path: default_output_path(&options.default_dir, "rengrave_output.dxf"),
+            gcode_path: if preferences.gcode_path.trim().is_empty() {
+                default_output_path(&default_dir, "rengrave_output.ngc")
+            } else {
+                preferences.gcode_path
+            },
+            svg_path: if preferences.svg_path.trim().is_empty() {
+                default_output_path(&default_dir, "rengrave_output.svg")
+            } else {
+                preferences.svg_path
+            },
+            dxf_path: if preferences.dxf_path.trim().is_empty() {
+                default_output_path(&default_dir, "rengrave_output.dxf")
+            } else {
+                preferences.dxf_path
+            },
             show_toolpath: true,
             show_bounds: true,
             show_v_area: false,
+            browser: None,
+            preferences_path,
             warnings: document.warnings,
         };
         app.calculate();
@@ -135,6 +169,7 @@ impl RengraveApp {
                 self.settings_count = document.settings.entries.len();
                 self.warnings = document.warnings;
                 self.status = "Document loaded".to_owned();
+                self.save_preferences();
                 self.calculate();
             }
             Err(err) => {
@@ -146,7 +181,10 @@ impl RengraveApp {
 
     fn calculate(&mut self) {
         match prepare_batch_output(&self.batch_request(true)) {
-            Ok(output) => self.apply_batch_output(output),
+            Ok(output) => {
+                self.apply_batch_output(output);
+                self.save_preferences();
+            }
             Err(err) => {
                 self.status = "Generation failed".to_owned();
                 self.warnings = vec![err.to_string()];
@@ -188,11 +226,66 @@ impl RengraveApp {
         };
 
         match write_text_file(&path, &contents) {
-            Ok(path) => self.status = format!("{label} exported: {}", path.display()),
+            Ok(path) => {
+                self.status = format!("{label} exported: {}", path.display());
+                self.save_preferences();
+            }
             Err(err) => {
                 self.status = format!("{label} export failed");
                 self.warnings.push(err);
             }
+        }
+    }
+
+    fn open_browser(&mut self, target: FileBrowserTarget) {
+        let start_dir = browser_start_dir(
+            target,
+            self.browser_value(target),
+            path_from_text(&self.default_dir_path),
+        );
+        self.browser = Some(FileBrowser::new(target, start_dir));
+    }
+
+    fn browser_value(&self, target: FileBrowserTarget) -> &str {
+        match target {
+            FileBrowserTarget::Settings => &self.settings_path,
+            FileBrowserTarget::Input => &self.input_path,
+            FileBrowserTarget::DefaultDir => &self.default_dir_path,
+            FileBrowserTarget::GcodeOutput => &self.gcode_path,
+            FileBrowserTarget::SvgOutput => &self.svg_path,
+            FileBrowserTarget::DxfOutput => &self.dxf_path,
+        }
+    }
+
+    fn apply_browser_selection(&mut self, target: FileBrowserTarget, path: PathBuf) {
+        let text = path.display().to_string();
+        match target {
+            FileBrowserTarget::Settings => self.settings_path = text,
+            FileBrowserTarget::Input => self.input_path = text,
+            FileBrowserTarget::DefaultDir => self.default_dir_path = text,
+            FileBrowserTarget::GcodeOutput => self.gcode_path = text,
+            FileBrowserTarget::SvgOutput => self.svg_path = text,
+            FileBrowserTarget::DxfOutput => self.dxf_path = text,
+        }
+        self.status = format!("Selected {}", target.label());
+        self.save_preferences();
+    }
+
+    fn save_preferences(&mut self) {
+        let Some(path) = &self.preferences_path else {
+            return;
+        };
+        let preferences = UiPreferences {
+            settings_path: self.settings_path.clone(),
+            input_path: self.input_path.clone(),
+            default_dir_path: self.default_dir_path.clone(),
+            gcode_path: self.gcode_path.clone(),
+            svg_path: self.svg_path.clone(),
+            dxf_path: self.dxf_path.clone(),
+        };
+        if let Err(err) = preferences.save(path) {
+            self.warnings
+                .push(format!("unable to save UI preferences: {err}"));
         }
     }
 }
@@ -238,9 +331,15 @@ impl eframe::App for RengraveApp {
             .show_inside(ui, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     ui.heading("Input");
-                    path_row(ui, "Settings", &mut self.settings_path);
-                    path_row(ui, "Input", &mut self.input_path);
-                    path_row(ui, "Default dir", &mut self.default_dir_path);
+                    if path_row(ui, "Settings", &mut self.settings_path) {
+                        self.open_browser(FileBrowserTarget::Settings);
+                    }
+                    if path_row(ui, "Input", &mut self.input_path) {
+                        self.open_browser(FileBrowserTarget::Input);
+                    }
+                    if path_row(ui, "Default dir", &mut self.default_dir_path) {
+                        self.open_browser(FileBrowserTarget::DefaultDir);
+                    }
                     ui.horizontal(|ui| {
                         if ui.button("Load").clicked() {
                             self.reload_document();
@@ -390,21 +489,27 @@ impl eframe::App for RengraveApp {
 
                     ui.separator();
                     ui.heading("Output");
-                    path_row(ui, "G-code", &mut self.gcode_path);
+                    if path_row(ui, "G-code", &mut self.gcode_path) {
+                        self.open_browser(FileBrowserTarget::GcodeOutput);
+                    }
                     if ui
                         .add_enabled(!self.gcode.is_empty(), egui::Button::new("Export G-code"))
                         .clicked()
                     {
                         self.export_current(ExportKind::Gcode);
                     }
-                    path_row(ui, "SVG", &mut self.svg_path);
+                    if path_row(ui, "SVG", &mut self.svg_path) {
+                        self.open_browser(FileBrowserTarget::SvgOutput);
+                    }
                     if ui
                         .add_enabled(self.svg.is_some(), egui::Button::new("Export SVG"))
                         .clicked()
                     {
                         self.export_current(ExportKind::Svg);
                     }
-                    path_row(ui, "DXF", &mut self.dxf_path);
+                    if path_row(ui, "DXF", &mut self.dxf_path) {
+                        self.open_browser(FileBrowserTarget::DxfOutput);
+                    }
                     if ui
                         .add_enabled(self.dxf.is_some(), egui::Button::new("Export DXF"))
                         .clicked()
@@ -470,6 +575,8 @@ impl eframe::App for RengraveApp {
                 self.show_bounds,
             );
         });
+
+        self.show_browser(ui.ctx());
     }
 }
 
@@ -477,6 +584,28 @@ impl RengraveApp {
     fn fit_preview(&mut self) {
         self.transform.pan = Point::default();
         self.transform.zoom = 80.0;
+    }
+
+    fn show_browser(&mut self, ctx: &egui::Context) {
+        let Some(mut browser) = self.browser.take() else {
+            return;
+        };
+        let mut action = BrowserAction::Keep;
+        egui::Window::new(format!("Browse {}", browser.target.label()))
+            .collapsible(false)
+            .resizable(true)
+            .default_size([640.0, 440.0])
+            .show(ctx, |ui| {
+                action = browser.ui(ui);
+            });
+
+        match action {
+            BrowserAction::Keep => self.browser = Some(browser),
+            BrowserAction::Close => {}
+            BrowserAction::Select(path) => {
+                self.apply_browser_selection(browser.target, path);
+            }
+        }
     }
 }
 
@@ -975,6 +1104,184 @@ impl OriginChoice {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FileBrowserTarget {
+    Settings,
+    Input,
+    DefaultDir,
+    GcodeOutput,
+    SvgOutput,
+    DxfOutput,
+}
+
+impl FileBrowserTarget {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Settings => "settings",
+            Self::Input => "input",
+            Self::DefaultDir => "default directory",
+            Self::GcodeOutput => "G-code output",
+            Self::SvgOutput => "SVG output",
+            Self::DxfOutput => "DXF output",
+        }
+    }
+
+    fn default_file_name(self) -> Option<&'static str> {
+        match self {
+            Self::GcodeOutput => Some("rengrave_output.ngc"),
+            Self::SvgOutput => Some("rengrave_output.svg"),
+            Self::DxfOutput => Some("rengrave_output.dxf"),
+            _ => None,
+        }
+    }
+
+    fn can_select(self, path: &Path) -> bool {
+        match self {
+            Self::DefaultDir => path.is_dir(),
+            Self::Settings | Self::Input => path.is_file(),
+            Self::GcodeOutput | Self::SvgOutput | Self::DxfOutput => !path.is_dir(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BrowserEntry {
+    path: PathBuf,
+    name: String,
+    is_dir: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FileBrowser {
+    target: FileBrowserTarget,
+    current_dir: PathBuf,
+    selected_path: Option<PathBuf>,
+    entries: Vec<BrowserEntry>,
+    error: Option<String>,
+}
+
+impl FileBrowser {
+    fn new(target: FileBrowserTarget, current_dir: PathBuf) -> Self {
+        let mut browser = Self {
+            target,
+            current_dir,
+            selected_path: None,
+            entries: Vec::new(),
+            error: None,
+        };
+        browser.refresh();
+        browser
+    }
+
+    fn refresh(&mut self) {
+        match read_browser_entries(&self.current_dir) {
+            Ok(entries) => {
+                self.entries = entries;
+                self.error = None;
+            }
+            Err(err) => {
+                self.entries.clear();
+                self.error = Some(err);
+            }
+        }
+    }
+
+    fn set_dir(&mut self, path: PathBuf) {
+        if path.is_dir() {
+            self.current_dir = path;
+            self.selected_path = None;
+            self.refresh();
+        } else {
+            self.error = Some(format!("not a directory: {}", path.display()));
+        }
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui) -> BrowserAction {
+        let mut action = BrowserAction::Keep;
+        ui.horizontal(|ui| {
+            if ui.button("Parent").clicked() {
+                if let Some(parent) = self.current_dir.parent() {
+                    self.set_dir(parent.to_path_buf());
+                }
+            }
+            if ui.button("Home").clicked() {
+                if let Some(home) = user_home_dir() {
+                    self.set_dir(home);
+                }
+            }
+            if ui.button("Refresh").clicked() {
+                self.refresh();
+            }
+            ui.monospace(self.current_dir.display().to_string());
+        });
+
+        if let Some(error) = &self.error {
+            ui.colored_label(egui::Color32::from_rgb(225, 176, 84), error);
+        }
+
+        ui.separator();
+        egui::ScrollArea::vertical()
+            .max_height(300.0)
+            .show(ui, |ui| {
+                for entry in self.entries.clone() {
+                    let selected = self.selected_path.as_ref() == Some(&entry.path);
+                    let label = if entry.is_dir {
+                        format!("[DIR] {}", entry.name)
+                    } else {
+                        entry.name.clone()
+                    };
+                    let response = ui.selectable_label(selected, label);
+                    if response.clicked() {
+                        self.selected_path = Some(entry.path.clone());
+                    }
+                    if response.double_clicked() && entry.is_dir {
+                        self.set_dir(entry.path);
+                    }
+                }
+            });
+
+        ui.separator();
+        ui.horizontal(|ui| {
+            let selected = self.selected_path.clone();
+            let can_use_selected = selected
+                .as_deref()
+                .map(|path| self.target.can_select(path))
+                .unwrap_or(false);
+            if ui
+                .add_enabled(can_use_selected, egui::Button::new("Use selected"))
+                .clicked()
+            {
+                if let Some(path) = selected {
+                    action = BrowserAction::Select(path);
+                }
+            }
+
+            if let Some(file_name) = self.target.default_file_name() {
+                if ui.button("Use current dir").clicked() {
+                    action = BrowserAction::Select(self.current_dir.join(file_name));
+                }
+            } else if self.target == FileBrowserTarget::DefaultDir
+                && ui.button("Use current dir").clicked()
+            {
+                action = BrowserAction::Select(self.current_dir.clone());
+            }
+
+            if ui.button("Cancel").clicked() {
+                action = BrowserAction::Close;
+            }
+        });
+
+        action
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum BrowserAction {
+    Keep,
+    Close,
+    Select(PathBuf),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ExportKind {
     Gcode,
     Svg,
@@ -1011,14 +1318,15 @@ fn path_from_text(text: &str) -> Option<PathBuf> {
     (!trimmed.is_empty()).then(|| PathBuf::from(trimmed))
 }
 
-fn path_row(ui: &mut egui::Ui, label: &str, value: &mut String) {
+fn path_row(ui: &mut egui::Ui, label: &str, value: &mut String) -> bool {
+    let mut browse_clicked = false;
     ui.horizontal(|ui| {
         ui.add_sized([88.0, 20.0], egui::Label::new(label));
-        ui.add_sized(
-            [ui.available_width(), 22.0],
-            egui::TextEdit::singleline(value),
-        );
+        let text_width = (ui.available_width() - 74.0).max(80.0);
+        ui.add_sized([text_width, 22.0], egui::TextEdit::singleline(value));
+        browse_clicked = ui.button("Browse").clicked();
     });
+    browse_clicked
 }
 
 fn number_row(ui: &mut egui::Ui, label: &str, value: &mut f64, speed: f64) {
@@ -1076,6 +1384,194 @@ fn push_setting(
 
 fn push_bool(entries: &mut Vec<LegacySetting>, key: &'static str, value: bool) {
     push_setting(entries, key, if value { "1" } else { "0" }, false);
+}
+
+fn browser_start_dir(
+    target: FileBrowserTarget,
+    current_value: &str,
+    default_dir: Option<PathBuf>,
+) -> PathBuf {
+    if let Some(path) = path_from_text(current_value) {
+        if target == FileBrowserTarget::DefaultDir && path.is_dir() {
+            return path;
+        }
+        if path.is_dir() {
+            return path;
+        }
+        if let Some(parent) = non_empty_parent(&path) {
+            return parent.to_path_buf();
+        }
+    }
+
+    if let Some(default_dir) = default_dir {
+        if default_dir.is_dir() {
+            return default_dir;
+        }
+        if let Some(parent) = non_empty_parent(&default_dir) {
+            return parent.to_path_buf();
+        }
+    }
+
+    env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+}
+
+fn non_empty_parent(path: &Path) -> Option<&Path> {
+    path.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+}
+
+fn read_browser_entries(dir: &Path) -> Result<Vec<BrowserEntry>, String> {
+    let mut entries = Vec::new();
+    for entry in fs::read_dir(dir).map_err(|err| format!("unable to read directory: {err}"))? {
+        let entry = entry.map_err(|err| format!("unable to read directory entry: {err}"))?;
+        let path = entry.path();
+        let file_type = entry
+            .file_type()
+            .map_err(|err| format!("unable to read file type: {err}"))?;
+        let Some(name) = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(str::to_owned)
+        else {
+            continue;
+        };
+        entries.push(BrowserEntry {
+            path,
+            name,
+            is_dir: file_type.is_dir(),
+        });
+    }
+    entries.sort_by(|left, right| {
+        right
+            .is_dir
+            .cmp(&left.is_dir)
+            .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
+    });
+    Ok(entries)
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct UiPreferences {
+    settings_path: String,
+    input_path: String,
+    default_dir_path: String,
+    gcode_path: String,
+    svg_path: String,
+    dxf_path: String,
+}
+
+impl UiPreferences {
+    fn load(path: &Path) -> Result<Self, String> {
+        let input = fs::read_to_string(path)
+            .map_err(|err| format!("unable to read `{}`: {err}", path.display()))?;
+        Ok(Self::parse(&input))
+    }
+
+    fn save(&self, path: &Path) -> Result<(), String> {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|err| format!("unable to create `{}`: {err}", parent.display()))?;
+        }
+        fs::write(path, self.to_text())
+            .map_err(|err| format!("unable to write `{}`: {err}", path.display()))
+    }
+
+    fn parse(input: &str) -> Self {
+        let mut preferences = Self::default();
+        for line in input.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let Some((key, value)) = line.split_once('=') else {
+                continue;
+            };
+            let value = unescape_pref_value(value);
+            match key {
+                "settings_path" => preferences.settings_path = value,
+                "input_path" => preferences.input_path = value,
+                "default_dir_path" => preferences.default_dir_path = value,
+                "gcode_path" => preferences.gcode_path = value,
+                "svg_path" => preferences.svg_path = value,
+                "dxf_path" => preferences.dxf_path = value,
+                _ => {}
+            }
+        }
+        preferences
+    }
+
+    fn to_text(&self) -> String {
+        [
+            ("settings_path", self.settings_path.as_str()),
+            ("input_path", self.input_path.as_str()),
+            ("default_dir_path", self.default_dir_path.as_str()),
+            ("gcode_path", self.gcode_path.as_str()),
+            ("svg_path", self.svg_path.as_str()),
+            ("dxf_path", self.dxf_path.as_str()),
+        ]
+        .into_iter()
+        .map(|(key, value)| format!("{key}={}", escape_pref_value(value)))
+        .collect::<Vec<_>>()
+        .join("\n")
+            + "\n"
+    }
+}
+
+fn default_preferences_path() -> Option<PathBuf> {
+    config_base_dir().map(|dir| dir.join("rengrave").join("ui-state.conf"))
+}
+
+fn config_base_dir() -> Option<PathBuf> {
+    if cfg!(target_os = "windows") {
+        env::var_os("APPDATA").map(PathBuf::from)
+    } else if cfg!(target_os = "macos") {
+        user_home_dir().map(|home| home.join("Library").join("Application Support"))
+    } else {
+        env::var_os("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .or_else(|| user_home_dir().map(|home| home.join(".config")))
+    }
+}
+
+fn user_home_dir() -> Option<PathBuf> {
+    env::var_os("HOME")
+        .or_else(|| env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+}
+
+fn escape_pref_value(value: &str) -> String {
+    let mut escaped = String::new();
+    for ch in value.chars() {
+        match ch {
+            '\\' => escaped.push_str("\\\\"),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            _ => escaped.push(ch),
+        }
+    }
+    escaped
+}
+
+fn unescape_pref_value(value: &str) -> String {
+    let mut output = String::new();
+    let mut chars = value.chars();
+    while let Some(ch) = chars.next() {
+        if ch != '\\' {
+            output.push(ch);
+            continue;
+        }
+        match chars.next() {
+            Some('\\') => output.push('\\'),
+            Some('n') => output.push('\n'),
+            Some('r') => output.push('\r'),
+            Some(other) => {
+                output.push('\\');
+                output.push(other);
+            }
+            None => output.push('\\'),
+        }
+    }
+    output
 }
 
 fn apply_theme(ctx: &egui::Context) {
@@ -1406,6 +1902,86 @@ mod tests {
             path_to_text(&Some(PathBuf::from("/tmp/rengrave.ngc"))),
             "/tmp/rengrave.ngc"
         );
+    }
+
+    #[test]
+    fn browser_start_dir_prefers_current_directory_or_parent() {
+        let dir =
+            std::env::temp_dir().join(format!("rengrave-ui-browser-start-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("settings.ngc");
+        fs::write(&file, "G90").unwrap();
+
+        assert_eq!(
+            browser_start_dir(
+                FileBrowserTarget::DefaultDir,
+                &dir.display().to_string(),
+                None
+            ),
+            dir
+        );
+        assert_eq!(
+            browser_start_dir(
+                FileBrowserTarget::Settings,
+                &file.display().to_string(),
+                None
+            ),
+            file.parent().unwrap()
+        );
+
+        let _ = fs::remove_dir_all(file.parent().unwrap());
+    }
+
+    #[test]
+    fn browser_entries_sort_directories_before_files() {
+        let dir = std::env::temp_dir().join(format!(
+            "rengrave-ui-browser-entries-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(dir.join("z_dir")).unwrap();
+        fs::write(dir.join("a_file.ngc"), "G90").unwrap();
+
+        let entries = read_browser_entries(&dir).unwrap();
+
+        let _ = fs::remove_dir_all(&dir);
+        assert_eq!(entries[0].name, "z_dir");
+        assert!(entries[0].is_dir);
+        assert_eq!(entries[1].name, "a_file.ngc");
+        assert!(!entries[1].is_dir);
+    }
+
+    #[test]
+    fn ui_preferences_round_trip_escaped_values() {
+        let preferences = UiPreferences {
+            settings_path: "/tmp/settings=a.ngc".to_owned(),
+            input_path: "/tmp/font\\romanc.cxf".to_owned(),
+            default_dir_path: "/tmp/default".to_owned(),
+            gcode_path: "/tmp/out.ngc".to_owned(),
+            svg_path: "/tmp/out.svg".to_owned(),
+            dxf_path: "/tmp/out.dxf".to_owned(),
+        };
+
+        let encoded = preferences.to_text();
+        let parsed = UiPreferences::parse(&encoded);
+
+        assert_eq!(parsed, preferences);
+    }
+
+    #[test]
+    fn ui_preferences_save_and_load_file() {
+        let dir =
+            std::env::temp_dir().join(format!("rengrave-ui-preferences-{}", std::process::id()));
+        let path = dir.join("ui-state.conf");
+        let preferences = UiPreferences {
+            input_path: "/tmp/example.cxf".to_owned(),
+            ..UiPreferences::default()
+        };
+
+        preferences.save(&path).unwrap();
+        let loaded = UiPreferences::load(&path).unwrap();
+
+        let _ = fs::remove_dir_all(dir);
+        assert_eq!(loaded, preferences);
     }
 
     #[test]
