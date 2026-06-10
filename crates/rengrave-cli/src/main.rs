@@ -3,7 +3,7 @@ use std::io::{self, Write};
 use std::path::PathBuf;
 
 use clap::Parser;
-use rengrave_core::batch::{BatchRequest, prepare_batch_output};
+use rengrave_core::batch::{BatchRequest, SecondaryGcode, prepare_batch_output};
 use rengrave_ui::UiLaunchOptions;
 
 #[derive(Debug, Parser)]
@@ -79,9 +79,31 @@ fn run_batch(cli: Cli) -> anyhow::Result<()> {
 
     if let Some(path) = &request.output {
         fs::write(path, output.gcode)?;
+        write_secondary_outputs(path, &output.secondary_gcode)?;
     } else {
         io::stdout().write_all(output.gcode.as_bytes())?;
     }
 
     Ok(())
+}
+
+fn write_secondary_outputs(path: &PathBuf, outputs: &[SecondaryGcode]) -> anyhow::Result<()> {
+    for output in outputs {
+        fs::write(secondary_output_path(path, &output.suffix), &output.gcode)?;
+    }
+    Ok(())
+}
+
+fn secondary_output_path(path: &PathBuf, suffix: &str) -> PathBuf {
+    let stem = path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("output");
+    let extension = path.extension().and_then(|value| value.to_str());
+    let mut file_name = format!("{stem}_{suffix}");
+    if let Some(extension) = extension {
+        file_name.push('.');
+        file_name.push_str(extension);
+    }
+    path.with_file_name(file_name)
 }

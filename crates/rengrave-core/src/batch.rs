@@ -1,10 +1,11 @@
 use std::path::PathBuf;
 
 use crate::bitmap::vectorize_bitmap_to_dxf;
+use crate::cleanup::{CleanupBit, CleanupOptions, generate_cleanup_points};
 use crate::dxf::{dxf_font_from_str, read_dxf_font};
 use crate::external::requires_potrace;
 use crate::font::{read_cxf, read_ttf};
-use crate::gcode::{GcodeOptions, write_engrave_gcode, write_vcarve_gcode};
+use crate::gcode::{GcodeOptions, write_cleanup_gcode, write_engrave_gcode, write_vcarve_gcode};
 use crate::layout::{LayoutSettings, layout_text};
 use crate::project::{DocumentError, DocumentRequest, load_document};
 use crate::project::{InputKind, resolve_input_kind};
@@ -26,6 +27,13 @@ pub struct BatchRequest {
 pub struct BatchOutput {
     pub gcode: String,
     pub warnings: Vec<String>,
+    pub secondary_gcode: Vec<SecondaryGcode>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SecondaryGcode {
+    pub suffix: String,
+    pub gcode: String,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -43,9 +51,27 @@ pub fn prepare_batch_output(request: &BatchRequest) -> Result<BatchOutput, Batch
     })?;
 
     let mut warnings = document.warnings;
-    let generated_gcode = generate_engrave_gcode(&document.settings, &document.text, &mut warnings);
+    let generated_gcode = generate_engrave_gcode(
+        &document.settings,
+        &document.text,
+        request.output.is_some(),
+        &mut warnings,
+    );
     let gcode = if let Some(gcode_lines) = generated_gcode {
-        render_gcode(&document.settings, &document.text, &gcode_lines)
+        let primary = render_gcode(&document.settings, &document.text, &gcode_lines.primary);
+        let secondary_gcode = gcode_lines
+            .secondary
+            .into_iter()
+            .map(|secondary| SecondaryGcode {
+                suffix: secondary.suffix,
+                gcode: render_secondary_gcode(&document.settings, &document.text, &secondary.lines),
+            })
+            .collect();
+        return Ok(BatchOutput {
+            gcode: primary,
+            warnings,
+            secondary_gcode,
+        });
     } else {
         warnings.push(
             "toolpath generation is not available for this input yet; output contains compatible settings comments only"
@@ -54,26 +80,32 @@ pub fn prepare_batch_output(request: &BatchRequest) -> Result<BatchOutput, Batch
         render_settings_only_gcode(&document.settings, &document.text)
     };
 
-    Ok(BatchOutput { gcode, warnings })
+    Ok(BatchOutput {
+        gcode,
+        warnings,
+        secondary_gcode: Vec::new(),
+    })
 }
 
 fn generate_engrave_gcode(
     settings: &LegacySettings,
     text: &str,
+    include_secondary: bool,
     warnings: &mut Vec<String>,
-) -> Option<Vec<String>> {
+) -> Option<GeneratedToolpaths> {
     if settings.get_last("input_type") == Some("image") {
-        return generate_dxf_engrave_gcode(settings, warnings);
+        return generate_dxf_engrave_gcode(settings, include_secondary, warnings);
     }
 
-    generate_text_engrave_gcode(settings, text, warnings)
+    generate_text_engrave_gcode(settings, text, include_secondary, warnings)
 }
 
 fn generate_text_engrave_gcode(
     settings: &LegacySettings,
     text: &str,
+    include_secondary: bool,
     warnings: &mut Vec<String>,
-) -> Option<Vec<String>> {
+) -> Option<GeneratedToolpaths> {
     let input = resolve_input_kind(settings);
     let segarc = settings
         .get_last("segarc")
@@ -119,13 +151,14 @@ fn generate_text_engrave_gcode(
         return None;
     }
 
-    write_layout_gcode(settings, &layout.segments, warnings)
+    write_layout_gcode(settings, &layout.segments, include_secondary, warnings)
 }
 
 fn generate_dxf_engrave_gcode(
     settings: &LegacySettings,
+    include_secondary: bool,
     warnings: &mut Vec<String>,
-) -> Option<Vec<String>> {
+) -> Option<GeneratedToolpaths> {
     let InputKind::Image(path) = resolve_input_kind(settings) else {
         warnings.push("image input path is missing".to_owned());
         return None;
@@ -166,22 +199,41 @@ fn generate_dxf_engrave_gcode(
         return None;
     }
 
-    write_layout_gcode(settings, &layout.segments, warnings)
+    write_layout_gcode(settings, &layout.segments, include_secondary, warnings)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct GeneratedToolpaths {
+    primary: Vec<String>,
+    secondary: Vec<GeneratedSecondary>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct GeneratedSecondary {
+    suffix: String,
+    lines: Vec<String>,
 }
 
 fn write_layout_gcode(
     settings: &LegacySettings,
     segments: &[crate::layout::EngraveSegment],
+    include_secondary: bool,
     warnings: &mut Vec<String>,
-) -> Option<Vec<String>> {
+) -> Option<GeneratedToolpaths> {
     let gcode_options = GcodeOptions::from_legacy(settings);
     if settings.get_last("cut_type") != Some("v-carve") {
-        return Some(write_engrave_gcode(segments, &gcode_options));
+        return Some(GeneratedToolpaths {
+            primary: write_engrave_gcode(segments, &gcode_options),
+            secondary: Vec::new(),
+        });
     }
 
     let vcarve_options = VCarveOptions::from_legacy(settings);
     if vcarve_options.bit_shape == crate::vcarve::BitShape::Flat {
-        return Some(write_engrave_gcode(segments, &gcode_options));
+        return Some(GeneratedToolpaths {
+            primary: write_engrave_gcode(segments, &gcode_options),
+            secondary: Vec::new(),
+        });
     }
 
     let points = generate_vcarve_points(segments, &vcarve_options, gcode_options.accuracy);
@@ -189,7 +241,38 @@ fn write_layout_gcode(
         warnings.push("v-carve generated no toolpath points".to_owned());
         return None;
     }
-    Some(write_vcarve_gcode(&points, &gcode_options, &vcarve_options))
+
+    let mut secondary = Vec::new();
+    if include_secondary {
+        let cleanup_options = CleanupOptions::from_legacy(settings);
+        for bit in [CleanupBit::Straight, CleanupBit::VBit] {
+            let cleanup_points = generate_cleanup_points(
+                segments,
+                &cleanup_options,
+                &vcarve_options,
+                bit,
+                gcode_options.accuracy,
+            );
+            if cleanup_points.is_empty() {
+                continue;
+            }
+            secondary.push(GeneratedSecondary {
+                suffix: bit.suffix().to_owned(),
+                lines: write_cleanup_gcode(
+                    &cleanup_points,
+                    &gcode_options,
+                    &cleanup_options,
+                    &vcarve_options,
+                    bit,
+                ),
+            });
+        }
+    }
+
+    Some(GeneratedToolpaths {
+        primary: write_vcarve_gcode(&points, &gcode_options, &vcarve_options),
+        secondary,
+    })
 }
 
 fn render_settings_only_gcode(settings: &LegacySettings, text: &str) -> String {
@@ -200,6 +283,13 @@ fn render_settings_only_gcode(settings: &LegacySettings, text: &str) -> String {
 }
 
 fn render_gcode(settings: &LegacySettings, text: &str, gcode_lines: &[String]) -> String {
+    let mut lines = render_settings_header(settings, text);
+    lines.extend(gcode_lines.iter().cloned());
+    lines.push(String::new());
+    lines.join("\n")
+}
+
+fn render_secondary_gcode(settings: &LegacySettings, text: &str, gcode_lines: &[String]) -> String {
     let mut lines = render_settings_header(settings, text);
     lines.extend(gcode_lines.iter().cloned());
     lines.push(String::new());
@@ -370,6 +460,57 @@ mod tests {
             !output
                 .gcode
                 .contains("v-carve generation is not ported yet")
+        );
+        assert!(output.secondary_gcode.is_empty());
+    }
+
+    #[test]
+    fn batch_prepares_cleanup_companion_gcode_when_output_path_is_set() {
+        let font_path = std::env::temp_dir().join(format!(
+            "rengrave-cleanup-{}-{}.cxf",
+            std::process::id(),
+            "batch"
+        ));
+        let settings_path = std::env::temp_dir().join(format!(
+            "rengrave-cleanup-{}-{}.ngc",
+            std::process::id(),
+            "batch"
+        ));
+        let output_path = std::env::temp_dir().join(format!(
+            "rengrave-cleanup-{}-{}.out.ngc",
+            std::process::id(),
+            "batch"
+        ));
+        fs::write(
+            &font_path,
+            "[A] 4\nL 0,0,10,0\nL 10,0,10,10\nL 10,10,0,10\nL 0,10,0,0\n",
+        )
+        .unwrap();
+        fs::write(
+            &settings_path,
+            "(fengrave_set cut_type   v-carve )\n(fengrave_set clean_paths  1,0,0,0,0,0,0,0 )\n",
+        )
+        .unwrap();
+
+        let output = prepare_batch_output(&BatchRequest {
+            batch: true,
+            gcode_file: Some(settings_path.clone()),
+            font_or_image: Some(font_path.clone()),
+            text: Some("A".to_owned()),
+            output: Some(output_path),
+            ..BatchRequest::default()
+        })
+        .unwrap();
+
+        let _ = fs::remove_file(font_path);
+        let _ = fs::remove_file(settings_path);
+        assert!(output.warnings.is_empty());
+        assert_eq!(output.secondary_gcode.len(), 1);
+        assert_eq!(output.secondary_gcode[0].suffix, "clean");
+        assert!(
+            output.secondary_gcode[0]
+                .gcode
+                .contains("secondary cleanup operation")
         );
     }
 

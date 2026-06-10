@@ -1,3 +1,4 @@
+use crate::cleanup::{CleanupBit, CleanupOptions, CleanupPoint};
 use crate::layout::EngraveSegment;
 use crate::settings::LegacySettings;
 use crate::vcarve::{VCarveOptions, VCarvePoint};
@@ -224,6 +225,98 @@ pub fn write_vcarve_gcode(
     lines
 }
 
+pub fn write_cleanup_gcode(
+    points: &[CleanupPoint],
+    gcode_options: &GcodeOptions,
+    cleanup_options: &CleanupOptions,
+    vcarve_options: &VCarveOptions,
+    bit: CleanupBit,
+) -> Vec<String> {
+    let dp = gcode_options.coord_digits();
+    let dpfeed = gcode_options.feed_digits();
+    let safe_number = format_number(gcode_options.safe_z, dp);
+    let safe_value = if gcode_options.variables_disabled {
+        safe_number.clone()
+    } else {
+        "#1".to_owned()
+    };
+    let feed = format_number(gcode_options.feed, dpfeed);
+    let mut plunge = format_number(gcode_options.plunge, dpfeed);
+    let zero_feed = format_number(0.0, dpfeed);
+    if plunge == zero_feed {
+        plunge = feed.clone();
+    }
+
+    let mut lines = Vec::new();
+    lines.push("( R-Engrave secondary cleanup operation )".to_owned());
+    match bit {
+        CleanupBit::Straight => lines.push(format!(
+            "( Straight cleanup bit diameter: {} )",
+            format_number(cleanup_options.bit_diameter, dp)
+        )),
+        CleanupBit::VBit => lines.push(format!(
+            "( V-bit cleanup effective diameter: {} )",
+            format_number(cleanup_options.vbit_diameter, dp)
+        )),
+    }
+    if !gcode_options.variables_disabled {
+        lines.push(format!("#1 = {}  ( Safe Z )", safe_number));
+    }
+    lines.push("G90".to_owned());
+    if gcode_options.arc_fit == ArcFit::Center {
+        lines.push("G91.1".to_owned());
+    }
+    lines.push(gcode_options.units.gcode().to_owned());
+    lines.extend(split_gcode_lines(&gcode_options.preamble));
+
+    let paths = cleanup_paths(points);
+    for depth in cleanup_pass_depths(gcode_options.depth_z, vcarve_options) {
+        let depth_value = format_number(depth, dp);
+        let mut feed_current = String::new();
+        for path in sort_paths(paths.clone()) {
+            let Some(first) = path.first() else {
+                continue;
+            };
+            lines.push(format!("G0 Z{safe_value}"));
+            lines.push(format!(
+                "G0 X{} Y{}",
+                format_number(first.x, dp),
+                format_number(first.y, dp)
+            ));
+            if plunge == feed {
+                lines.push(format!("G1 Z{depth_value}"));
+                feed_current = feed.clone();
+            } else if feed_current == plunge {
+                lines.push(format!("G1 Z{depth_value}"));
+            } else {
+                lines.push(format!("G1 Z{depth_value} F{plunge}"));
+                feed_current = plunge.clone();
+            }
+
+            for point in path.iter().skip(1) {
+                if feed_current == feed {
+                    lines.push(format!(
+                        "G1 X{} Y{}",
+                        format_number(point.x, dp),
+                        format_number(point.y, dp)
+                    ));
+                } else {
+                    lines.push(format!(
+                        "G1 X{} Y{} F{feed}",
+                        format_number(point.x, dp),
+                        format_number(point.y, dp)
+                    ));
+                    feed_current = feed.clone();
+                }
+            }
+        }
+    }
+
+    lines.push(format!("G0 Z{safe_value}"));
+    lines.extend(split_gcode_lines(&gcode_options.postamble));
+    lines
+}
+
 fn emit_cut_path(
     lines: &mut Vec<String>,
     path: &[crate::geometry::Point],
@@ -303,6 +396,58 @@ fn order_paths(segments: &[EngraveSegment], accuracy: f64) -> Vec<Vec<crate::geo
     }
 
     sort_paths(paths)
+}
+
+fn cleanup_paths(points: &[CleanupPoint]) -> Vec<Vec<crate::geometry::Point>> {
+    let mut paths = Vec::new();
+    let mut current_loop = None;
+    for point in points {
+        if current_loop != Some(point.loop_id) {
+            paths.push(Vec::new());
+            current_loop = Some(point.loop_id);
+        }
+        paths.last_mut().unwrap().push(point.position);
+    }
+    paths.into_iter().filter(|path| !path.is_empty()).collect()
+}
+
+fn cleanup_pass_depths(depth: f64, vcarve_options: &VCarveOptions) -> Vec<f64> {
+    if vcarve_options.rough_stock <= 0.0 || vcarve_options.max_cut >= 0.0 {
+        return vec![depth];
+    }
+
+    let mut max_dz = vcarve_options.max_cut;
+    let mut rough_stock = vcarve_options.rough_stock;
+    if -max_dz < rough_stock {
+        rough_stock = -max_dz;
+    }
+
+    let mut zmin = 0.0;
+    let mut roughing = true;
+    let mut rough_again = true;
+    let mut depths = Vec::new();
+
+    while rough_again || roughing {
+        if !rough_again {
+            roughing = false;
+            max_dz = -99999.0;
+        }
+        rough_again = false;
+        zmin += max_dz;
+
+        let mut z = if roughing { depth + rough_stock } else { depth };
+        if z < zmin {
+            z = zmin;
+            rough_again = true;
+        }
+        depths.push(z);
+
+        if depths.len() > 1000 {
+            break;
+        }
+    }
+
+    depths
 }
 
 fn sort_paths(mut paths: Vec<Vec<crate::geometry::Point>>) -> Vec<Vec<crate::geometry::Point>> {
@@ -869,6 +1014,100 @@ mod tests {
                 .count(),
             3
         );
+    }
+
+    #[test]
+    fn writes_cleanup_gcode_with_fixed_depth_paths() {
+        let options = GcodeOptions {
+            safe_z: 0.25,
+            depth_z: -0.1,
+            feed: 5.0,
+            plunge: 1.0,
+            accuracy: 0.001,
+            units: Units::Inch,
+            preamble: "G17 G64 P0.001 M3 S3000".to_owned(),
+            postamble: "M5|M2".to_owned(),
+            variables_disabled: true,
+            arc_fit: ArcFit::None,
+        };
+        let cleanup = crate::cleanup::CleanupOptions::from_legacy(
+            &crate::settings::default_legacy_settings(),
+        );
+        let vcarve = VCarveOptions::from_legacy(&crate::settings::default_legacy_settings());
+
+        let lines = write_cleanup_gcode(
+            &[
+                CleanupPoint {
+                    position: Point::new(0.0, 0.0),
+                    radius: 0.125,
+                    loop_id: 1,
+                },
+                CleanupPoint {
+                    position: Point::new(1.0, 0.0),
+                    radius: 0.125,
+                    loop_id: 1,
+                },
+            ],
+            &options,
+            &cleanup,
+            &vcarve,
+            CleanupBit::Straight,
+        );
+
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("secondary cleanup operation"))
+        );
+        assert!(lines.contains(&"G1 Z-0.1000 F1.00".to_owned()));
+        assert!(lines.contains(&"G1 X1.0000 Y0.0000 F5.00".to_owned()));
+    }
+
+    #[test]
+    fn cleanup_gcode_uses_vcarve_roughing_passes() {
+        let options = GcodeOptions {
+            safe_z: 0.25,
+            depth_z: -0.3,
+            feed: 5.0,
+            plunge: 0.0,
+            accuracy: 0.001,
+            units: Units::Inch,
+            preamble: "G17 G64 P0.001 M3 S3000".to_owned(),
+            postamble: "M5|M2".to_owned(),
+            variables_disabled: true,
+            arc_fit: ArcFit::None,
+        };
+        let cleanup = crate::cleanup::CleanupOptions::from_legacy(
+            &crate::settings::default_legacy_settings(),
+        );
+        let mut settings = crate::settings::default_legacy_settings();
+        settings.set_or_push("v_rough_stk", "0.05", false);
+        settings.set_or_push("v_max_cut", "-0.1", false);
+        let vcarve = VCarveOptions::from_legacy(&settings);
+
+        let lines = write_cleanup_gcode(
+            &[
+                CleanupPoint {
+                    position: Point::new(0.0, 0.0),
+                    radius: 0.125,
+                    loop_id: 1,
+                },
+                CleanupPoint {
+                    position: Point::new(1.0, 0.0),
+                    radius: 0.125,
+                    loop_id: 1,
+                },
+            ],
+            &options,
+            &cleanup,
+            &vcarve,
+            CleanupBit::Straight,
+        );
+
+        assert!(lines.contains(&"G1 Z-0.1000".to_owned()));
+        assert!(lines.contains(&"G1 Z-0.2000".to_owned()));
+        assert!(lines.contains(&"G1 Z-0.2500".to_owned()));
+        assert!(lines.contains(&"G1 Z-0.3000".to_owned()));
     }
 
     fn shallow_circle_segments() -> Vec<EngraveSegment> {
