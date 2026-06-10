@@ -11,7 +11,7 @@ This document records what has actually been implemented in the Rust port and wh
 - The input preview area is larger and has an explicit Refresh action for reloading changed source files from disk.
 - R-Engrave now defaults to emitting recovery settings comments, honors legacy `no_comments 1` when loaded, and exposes that behavior in the UI as a Recovery comments toggle.
 - Cleanup path selection is now exposed as explicit Straight/V-bit profile, X, Y, and loop checkboxes while still serializing to F-Engrave-compatible `clean_paths`.
-- Preview axes are now a selectable view layer and initialize from legacy `show_axis`.
+- Preview axes are now a selectable view layer, and toolpath/bounds/axes layer flags initialize from and save back to legacy view settings.
 
 ## Current Shape
 
@@ -66,7 +66,7 @@ This document records what has actually been implemented in the Rust port and wh
 - File, Run, and View menus expose the same load/save/export/calculate/cancel/copy/Fit/layer actions as the panels and toolbar.
 - The bottom panel has Status, G-code, Cleanup, SVG, and DXF tabs so generated text output can be inspected without exporting first.
 - It previews cut moves, separately parses and draws rapid XY moves as a toggleable dashed layer, and approximates center-format full-circle arcs for display.
-- It has basic toggles for toolpath, rapid, bounds, and axes layers, simple zoom/view rotation controls, and a bounds-aware Fit action that recenters generated geometry in the preview.
+- It has basic toggles for toolpath, rapid, bounds, and axes layers, simple zoom/view rotation controls, and a bounds-aware Fit action that recenters generated geometry in the preview. Legacy toolpath, bounds, and axes layer flags round-trip through saved settings.
 
 ## Why The UI Looks Bare
 
@@ -77,7 +77,7 @@ The UI is now an MVP rather than only a shell, but it still lacks several expect
 - Core tests currently cover settings, CXF/TTF parsing, DXF entities, bitmap conversion, layout transforms, Add Box/Circle, G-code, SVG/DXF export, cleanup, v-carve options, and batch generation.
 - A crate-level golden-output harness now exists under `crates/rengrave-core/tests/golden.rs` with a minimal CXF fixture, checked G-code/SVG regression outputs, and numeric-tolerant G-code comparison helpers. These first expected files pin current R-Engrave output; they are not yet F-Engrave-generated parity fixtures.
 - F-Engrave fixture generation was rechecked on 2026-06-10 with `python f-engrave_source/f-engrave.py -b -f crates/rengrave-core/tests/fixtures/inputs/simple.cxf -t AB`; it still fails before batch mode because `pyclipper` is missing.
-- UI tests cover default and secondary output paths, cleanup companion preview formatting, cleanup path checkbox serialization, native save-dialog filename helpers, settings save serialization, path-field parsing, in-app browser directory behavior, input catalog scanning, input preview loading, preference persistence, worker stale-result detection, output stale-state detection, control-to-legacy override emission, bitmap/Potrace control mapping, advanced setting mapping, preview fitting, output preview truncation, text-file write errors, cut/rapid preview parsing, and full-circle arc preview parsing.
+- UI tests cover default and secondary output paths, cleanup companion preview formatting, cleanup path checkbox serialization, view-layer settings serialization, native save-dialog filename helpers, settings save serialization, path-field parsing, in-app browser directory behavior, input catalog scanning, input preview loading, preference persistence, worker stale-result detection, output stale-state detection, control-to-legacy override emission, bitmap/Potrace control mapping, advanced setting mapping, preview fitting, output preview truncation, text-file write errors, cut/rapid preview parsing, and full-circle arc preview parsing.
 - Recent validation has been run with:
   - `cargo test -p rengrave-core`
   - `cargo test -p rengrave-ui`

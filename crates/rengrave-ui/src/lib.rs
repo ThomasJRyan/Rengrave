@@ -162,9 +162,9 @@ impl RengraveApp {
             } else {
                 preferences.dxf_path
             },
-            show_toolpath: true,
+            show_toolpath: get_legacy_bool(&document.settings, "show_v_path", true),
             show_rapids: true,
-            show_bounds: true,
+            show_bounds: get_legacy_bool(&document.settings, "show_box", true),
             show_axes: get_legacy_bool(&document.settings, "show_axis", true),
             browser: None,
             input_catalog,
@@ -198,12 +198,20 @@ impl RengraveApp {
     }
 
     fn settings_request_for_save(&self) -> DocumentRequest {
+        let mut settings_overrides = self.controls.overrides();
+        append_view_setting_overrides(
+            &mut settings_overrides,
+            self.show_toolpath,
+            self.show_bounds,
+            self.show_axes,
+        );
+
         DocumentRequest {
             gcode_file: settings_base_path_for_save(&self.settings_path),
             font_or_image: path_from_text(&self.input_path),
             default_dir: path_from_text(&self.default_dir_path),
             text: Some(self.text.clone()),
-            settings_overrides: self.controls.overrides(),
+            settings_overrides,
         }
     }
 
@@ -218,6 +226,8 @@ impl RengraveApp {
             Ok(document) => {
                 self.text = document.text;
                 self.controls = UiControls::from_settings(&document.settings);
+                self.show_toolpath = get_legacy_bool(&document.settings, "show_v_path", true);
+                self.show_bounds = get_legacy_bool(&document.settings, "show_box", true);
                 self.show_axes = get_legacy_bool(&document.settings, "show_axis", true);
                 self.settings_count = document.settings.entries.len();
                 self.warnings = document.warnings;
@@ -2330,6 +2340,17 @@ fn push_bool(entries: &mut Vec<LegacySetting>, key: &'static str, value: bool) {
     push_setting(entries, key, if value { "1" } else { "0" }, false);
 }
 
+fn append_view_setting_overrides(
+    entries: &mut Vec<LegacySetting>,
+    show_toolpath: bool,
+    show_bounds: bool,
+    show_axes: bool,
+) {
+    push_bool(entries, "show_v_path", show_toolpath);
+    push_bool(entries, "show_box", show_bounds);
+    push_bool(entries, "show_axis", show_axes);
+}
+
 fn browser_start_dir(
     target: FileBrowserTarget,
     current_value: &str,
@@ -3636,6 +3657,23 @@ mod tests {
             format_clean_path_values([true, false, true, false, true, false, true, false]),
             "1,0,1,0,1,0,1,0"
         );
+    }
+
+    #[test]
+    fn view_setting_overrides_emit_legacy_layer_flags() {
+        let mut entries = Vec::new();
+
+        append_view_setting_overrides(&mut entries, false, true, false);
+
+        let value_for = |key: &str| {
+            entries
+                .iter()
+                .find(|entry| entry.key == key)
+                .map(|entry| entry.value.as_str())
+        };
+        assert_eq!(value_for("show_v_path"), Some("0"));
+        assert_eq!(value_for("show_box"), Some("1"));
+        assert_eq!(value_for("show_axis"), Some("0"));
     }
 
     #[test]
