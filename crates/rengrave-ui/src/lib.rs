@@ -19,6 +19,7 @@ use rengrave_core::settings::{LegacySetting, LegacySettings, get_legacy_bool};
 
 const DEFAULT_PREVIEW_ZOOM: f64 = 80.0;
 const PREVIEW_FIT_PADDING: f32 = 24.0;
+const OUTPUT_PREVIEW_CHARS: usize = 8000;
 
 #[derive(Debug, Clone, Default)]
 pub struct UiLaunchOptions {
@@ -73,6 +74,7 @@ struct RengraveApp {
     warnings: Vec<String>,
     potrace_status: PotraceStatus,
     fit_preview_requested: bool,
+    bottom_tab: BottomTab,
 }
 
 impl RengraveApp {
@@ -162,6 +164,7 @@ impl RengraveApp {
             warnings: document.warnings,
             potrace_status: detect_potrace(),
             fit_preview_requested: false,
+            bottom_tab: BottomTab::Status,
         };
         app.start_calculation(cc.egui_ctx.clone());
         app
@@ -799,10 +802,14 @@ impl eframe::App for RengraveApp {
             });
 
         egui::Panel::bottom("status_log")
-            .exact_size(96.0)
+            .exact_size(150.0)
             .show_inside(ui, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label("Status:");
+                    ui.selectable_value(&mut self.bottom_tab, BottomTab::Status, "Status");
+                    ui.selectable_value(&mut self.bottom_tab, BottomTab::Gcode, "G-code");
+                    ui.selectable_value(&mut self.bottom_tab, BottomTab::Svg, "SVG");
+                    ui.selectable_value(&mut self.bottom_tab, BottomTab::Dxf, "DXF");
+                    ui.separator();
                     ui.monospace(&self.status);
                     ui.separator();
                     ui.monospace(format!(
@@ -812,11 +819,18 @@ impl eframe::App for RengraveApp {
                     ));
                 });
                 ui.separator();
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    for warning in &self.warnings {
-                        ui.colored_label(egui::Color32::from_rgb(225, 176, 84), warning);
+                match self.bottom_tab {
+                    BottomTab::Status => draw_status_log(ui, &self.warnings),
+                    BottomTab::Gcode => {
+                        draw_output_preview(ui, Some(&self.gcode), "No G-code generated")
                     }
-                });
+                    BottomTab::Svg => {
+                        draw_output_preview(ui, self.svg.as_deref(), "No SVG generated")
+                    }
+                    BottomTab::Dxf => {
+                        draw_output_preview(ui, self.dxf.as_deref(), "No DXF generated")
+                    }
+                }
             });
 
         egui::CentralPanel::default().show_inside(ui, |ui| {
@@ -1887,6 +1901,14 @@ enum ExportKind {
     Dxf,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BottomTab {
+    Status,
+    Gcode,
+    Svg,
+    Dxf,
+}
+
 fn default_output_path(default_dir: &Option<PathBuf>, file_name: &str) -> String {
     default_dir
         .as_ref()
@@ -2289,6 +2311,44 @@ fn draw_input_preview(ui: &mut egui::Ui, preview: &mut InputPreview) {
             }
         }
     }
+}
+
+fn draw_status_log(ui: &mut egui::Ui, warnings: &[String]) {
+    if warnings.is_empty() {
+        ui.label("No warnings");
+        return;
+    }
+
+    egui::ScrollArea::vertical().show(ui, |ui| {
+        for warning in warnings {
+            ui.colored_label(egui::Color32::from_rgb(225, 176, 84), warning);
+        }
+    });
+}
+
+fn draw_output_preview(ui: &mut egui::Ui, text: Option<&str>, empty_label: &str) {
+    let Some(text) = text.filter(|text| !text.trim().is_empty()) else {
+        ui.label(empty_label);
+        return;
+    };
+
+    let mut preview = output_preview_text(text, OUTPUT_PREVIEW_CHARS);
+    ui.add_sized(
+        [ui.available_width(), ui.available_height().max(40.0)],
+        egui::TextEdit::multiline(&mut preview)
+            .font(egui::TextStyle::Monospace)
+            .interactive(false),
+    );
+}
+
+fn output_preview_text(text: &str, max_chars: usize) -> String {
+    if text.chars().count() <= max_chars {
+        return text.to_owned();
+    }
+
+    let mut output = text.chars().take(max_chars).collect::<String>();
+    output.push_str("\n... output truncated in preview ...");
+    output
 }
 
 fn draw_vector_input_preview(
@@ -3169,6 +3229,15 @@ mod tests {
             }
             other => panic!("unexpected preview: {other:?}"),
         }
+    }
+
+    #[test]
+    fn output_preview_text_truncates_large_payloads() {
+        assert_eq!(output_preview_text("G90\nG0 X0\n", 100), "G90\nG0 X0\n");
+
+        let preview = output_preview_text("abcdefghij", 4);
+
+        assert_eq!(preview, "abcd\n... output truncated in preview ...");
     }
 
     #[test]

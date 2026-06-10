@@ -48,6 +48,7 @@ This document records what has actually been implemented in the Rust port and wh
 - Calculation has an indeterminate progress indicator, a Cancel action, and stale-result handling. If inputs change while a worker is running, the old result is ignored instead of replacing the current state.
 - It stores generated G-code/SVG/DXF payloads and can write them to user-editable paths.
 - File, Run, and View menus expose the same load/save/export/calculate/cancel/copy/Fit/layer actions as the panels and toolbar.
+- The bottom panel has Status, G-code, SVG, and DXF tabs so generated text output can be inspected without exporting first.
 - It previews linear G-code moves and now approximates center-format full-circle arcs for display.
 - It has basic toggles for toolpath and bounds layers, simple zoom/view rotation controls, and a bounds-aware Fit action that recenters generated geometry in the preview.
 
@@ -58,7 +59,7 @@ The UI is now an MVP rather than only a shell, but it still lacks several expect
 ## Tests And Validation In Place
 
 - Core tests currently cover settings, CXF/TTF parsing, DXF entities, bitmap conversion, layout transforms, Add Box/Circle, G-code, SVG/DXF export, cleanup, v-carve options, and batch generation.
-- UI tests cover default output paths, settings save serialization, path-field parsing, in-app browser directory behavior, input catalog scanning, input preview loading, preference persistence, worker stale-result detection, control-to-legacy override emission, bitmap/Potrace control mapping, preview fitting, text-file write errors, linear preview parsing, and full-circle arc preview parsing.
+- UI tests cover default output paths, settings save serialization, path-field parsing, in-app browser directory behavior, input catalog scanning, input preview loading, preference persistence, worker stale-result detection, control-to-legacy override emission, bitmap/Potrace control mapping, preview fitting, output preview truncation, text-file write errors, linear preview parsing, and full-circle arc preview parsing.
 - Recent validation has been run with:
   - `cargo test -p rengrave-core`
   - `cargo test -p rengrave-ui`
