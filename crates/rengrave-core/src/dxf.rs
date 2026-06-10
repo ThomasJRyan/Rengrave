@@ -9,6 +9,8 @@ pub enum DxfError {
         path: std::path::PathBuf,
         source: std::io::Error,
     },
+    #[error("DXF parsing canceled")]
+    Canceled,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -56,15 +58,33 @@ impl Transform {
 }
 
 pub fn read_dxf_font(path: &std::path::Path, segarc_degrees: f64) -> Result<Font, DxfError> {
+    read_dxf_font_with_cancel(path, segarc_degrees, &|| false)
+}
+
+pub fn read_dxf_font_with_cancel(
+    path: &std::path::Path,
+    segarc_degrees: f64,
+    cancel: &dyn Fn() -> bool,
+) -> Result<Font, DxfError> {
+    check_canceled(cancel)?;
     let input = std::fs::read_to_string(path).map_err(|source| DxfError::Read {
         path: path.to_owned(),
         source,
     })?;
-    Ok(dxf_font_from_str(&input, segarc_degrees))
+    dxf_font_from_str_with_cancel(&input, segarc_degrees, cancel)
 }
 
 pub fn dxf_font_from_str(input: &str, segarc_degrees: f64) -> Font {
-    let strokes = parse_dxf_segments(input, segarc_degrees);
+    dxf_font_from_str_with_cancel(input, segarc_degrees, &|| false)
+        .expect("non-canceling DXF parsing should not cancel")
+}
+
+pub fn dxf_font_from_str_with_cancel(
+    input: &str,
+    segarc_degrees: f64,
+    cancel: &dyn Fn() -> bool,
+) -> Result<Font, DxfError> {
+    let strokes = parse_dxf_segments_with_cancel(input, segarc_degrees, cancel)?;
     let mut font = Font::default();
     font.glyphs.insert(
         'F' as u32,
@@ -73,13 +93,23 @@ pub fn dxf_font_from_str(input: &str, segarc_degrees: f64) -> Font {
             strokes,
         },
     );
-    font
+    Ok(font)
 }
 
 pub fn parse_dxf_segments(input: &str, segarc_degrees: f64) -> Vec<Stroke> {
-    let pairs = group_pairs(input);
-    let blocks = collect_blocks(&pairs);
-    let entity_ranges = section_ranges(&pairs, "ENTITIES");
+    parse_dxf_segments_with_cancel(input, segarc_degrees, &|| false)
+        .expect("non-canceling DXF parsing should not cancel")
+}
+
+pub fn parse_dxf_segments_with_cancel(
+    input: &str,
+    segarc_degrees: f64,
+    cancel: &dyn Fn() -> bool,
+) -> Result<Vec<Stroke>, DxfError> {
+    check_canceled(cancel)?;
+    let pairs = group_pairs(input, cancel)?;
+    let blocks = collect_blocks(&pairs, cancel)?;
+    let entity_ranges = section_ranges(&pairs, "ENTITIES", cancel)?;
     let mut strokes = Vec::new();
 
     if entity_ranges.is_empty() {
@@ -89,20 +119,31 @@ pub fn parse_dxf_segments(input: &str, segarc_degrees: f64) -> Vec<Stroke> {
             &blocks,
             Transform::identity(),
             &mut strokes,
-        );
+            cancel,
+        )?;
     } else {
         for (start, end) in entity_ranges {
+            check_canceled(cancel)?;
             parse_entity_pairs(
                 &pairs[start..end],
                 segarc_degrees,
                 &blocks,
                 Transform::identity(),
                 &mut strokes,
-            );
+                cancel,
+            )?;
         }
     }
 
-    strokes
+    Ok(strokes)
+}
+
+fn check_canceled(cancel: &dyn Fn() -> bool) -> Result<(), DxfError> {
+    if cancel() {
+        Err(DxfError::Canceled)
+    } else {
+        Ok(())
+    }
 }
 
 fn parse_entity_pairs(
@@ -111,10 +152,12 @@ fn parse_entity_pairs(
     blocks: &BTreeMap<String, Block>,
     transform: Transform,
     strokes: &mut Vec<Stroke>,
-) {
+    cancel: &dyn Fn() -> bool,
+) -> Result<(), DxfError> {
     let mut idx = 0;
 
     while idx < pairs.len() {
+        check_canceled(cancel)?;
         if pairs[idx].0 != 0 {
             idx += 1;
             continue;
@@ -125,78 +168,87 @@ fn parse_entity_pairs(
                 let (entity, next) = collect_entity(pairs, idx + 1);
                 let mut entity_strokes = Vec::new();
                 parse_line_entity(entity, &mut entity_strokes);
-                append_transformed_strokes(&entity_strokes, transform, strokes);
+                append_transformed_strokes(&entity_strokes, transform, strokes, cancel)?;
                 idx = next;
             }
             "ARC" => {
                 let (entity, next) = collect_entity(pairs, idx + 1);
                 let mut entity_strokes = Vec::new();
-                parse_arc_entity(entity, segarc_degrees, &mut entity_strokes);
-                append_transformed_strokes(&entity_strokes, transform, strokes);
+                parse_arc_entity(entity, segarc_degrees, &mut entity_strokes, cancel)?;
+                append_transformed_strokes(&entity_strokes, transform, strokes, cancel)?;
                 idx = next;
             }
             "CIRCLE" => {
                 let (entity, next) = collect_entity(pairs, idx + 1);
                 let mut entity_strokes = Vec::new();
-                parse_circle_entity(entity, segarc_degrees, &mut entity_strokes);
-                append_transformed_strokes(&entity_strokes, transform, strokes);
+                parse_circle_entity(entity, segarc_degrees, &mut entity_strokes, cancel)?;
+                append_transformed_strokes(&entity_strokes, transform, strokes, cancel)?;
                 idx = next;
             }
             "ELLIPSE" => {
                 let (entity, next) = collect_entity(pairs, idx + 1);
                 let mut entity_strokes = Vec::new();
-                parse_ellipse_entity(entity, segarc_degrees, &mut entity_strokes);
-                append_transformed_strokes(&entity_strokes, transform, strokes);
+                parse_ellipse_entity(entity, segarc_degrees, &mut entity_strokes, cancel)?;
+                append_transformed_strokes(&entity_strokes, transform, strokes, cancel)?;
                 idx = next;
             }
             "LEADER" => {
                 let (entity, next) = collect_entity(pairs, idx + 1);
                 let mut entity_strokes = Vec::new();
                 parse_leader_entity(entity, &mut entity_strokes);
-                append_transformed_strokes(&entity_strokes, transform, strokes);
+                append_transformed_strokes(&entity_strokes, transform, strokes, cancel)?;
                 idx = next;
             }
             "SOLID" => {
                 let (entity, next) = collect_entity(pairs, idx + 1);
                 let mut entity_strokes = Vec::new();
                 parse_solid_entity(entity, &mut entity_strokes);
-                append_transformed_strokes(&entity_strokes, transform, strokes);
+                append_transformed_strokes(&entity_strokes, transform, strokes, cancel)?;
                 idx = next;
             }
             "SPLINE" => {
                 let (entity, next) = collect_entity(pairs, idx + 1);
                 let mut entity_strokes = Vec::new();
-                parse_spline_entity(entity, segarc_degrees, &mut entity_strokes);
-                append_transformed_strokes(&entity_strokes, transform, strokes);
+                parse_spline_entity(entity, segarc_degrees, &mut entity_strokes, cancel)?;
+                append_transformed_strokes(&entity_strokes, transform, strokes, cancel)?;
                 idx = next;
             }
             "LWPOLYLINE" => {
                 let (entity, next) = collect_entity(pairs, idx + 1);
                 let mut entity_strokes = Vec::new();
-                parse_lwpolyline_entity(entity, segarc_degrees, &mut entity_strokes);
-                append_transformed_strokes(&entity_strokes, transform, strokes);
+                parse_lwpolyline_entity(entity, segarc_degrees, &mut entity_strokes, cancel)?;
+                append_transformed_strokes(&entity_strokes, transform, strokes, cancel)?;
                 idx = next;
             }
             "POLYLINE" => {
                 let mut entity_strokes = Vec::new();
-                idx = parse_polyline_entities(pairs, idx + 1, segarc_degrees, &mut entity_strokes);
-                append_transformed_strokes(&entity_strokes, transform, strokes);
+                idx = parse_polyline_entities(
+                    pairs,
+                    idx + 1,
+                    segarc_degrees,
+                    &mut entity_strokes,
+                    cancel,
+                )?;
+                append_transformed_strokes(&entity_strokes, transform, strokes, cancel)?;
             }
             "INSERT" => {
                 let (entity, next) = collect_entity(pairs, idx + 1);
-                parse_insert_entity(entity, segarc_degrees, blocks, transform, strokes);
+                parse_insert_entity(entity, segarc_degrees, blocks, transform, strokes, cancel)?;
                 idx = next;
             }
             _ => idx += 1,
         }
     }
+
+    Ok(())
 }
 
-fn group_pairs(input: &str) -> Vec<(i32, String)> {
+fn group_pairs(input: &str, cancel: &dyn Fn() -> bool) -> Result<Vec<(i32, String)>, DxfError> {
     let mut lines = input.lines();
     let mut pairs = Vec::new();
 
     while let Some(code) = lines.next() {
+        check_canceled(cancel)?;
         let Some(value) = lines.next() else {
             break;
         };
@@ -205,7 +257,7 @@ fn group_pairs(input: &str) -> Vec<(i32, String)> {
         }
     }
 
-    pairs
+    Ok(pairs)
 }
 
 fn collect_entity(pairs: &[(i32, String)], mut idx: usize) -> (&[(i32, String)], usize) {
@@ -216,11 +268,16 @@ fn collect_entity(pairs: &[(i32, String)], mut idx: usize) -> (&[(i32, String)],
     (&pairs[start..idx], idx)
 }
 
-fn section_ranges(pairs: &[(i32, String)], name: &str) -> Vec<(usize, usize)> {
+fn section_ranges(
+    pairs: &[(i32, String)],
+    name: &str,
+    cancel: &dyn Fn() -> bool,
+) -> Result<Vec<(usize, usize)>, DxfError> {
     let mut ranges = Vec::new();
     let mut idx = 0;
 
     while idx < pairs.len() {
+        check_canceled(cancel)?;
         if pairs[idx].0 == 0 && pairs[idx].1 == "SECTION" {
             idx += 1;
             let section_name = if idx < pairs.len() && pairs[idx].0 == 2 {
@@ -232,6 +289,7 @@ fn section_ranges(pairs: &[(i32, String)], name: &str) -> Vec<(usize, usize)> {
             };
             let start = idx;
             while idx < pairs.len() && !(pairs[idx].0 == 0 && pairs[idx].1 == "ENDSEC") {
+                check_canceled(cancel)?;
                 idx += 1;
             }
             if section_name == name {
@@ -241,15 +299,19 @@ fn section_ranges(pairs: &[(i32, String)], name: &str) -> Vec<(usize, usize)> {
         idx += 1;
     }
 
-    ranges
+    Ok(ranges)
 }
 
-fn collect_blocks(pairs: &[(i32, String)]) -> BTreeMap<String, Block> {
+fn collect_blocks(
+    pairs: &[(i32, String)],
+    cancel: &dyn Fn() -> bool,
+) -> Result<BTreeMap<String, Block>, DxfError> {
     let mut blocks = BTreeMap::new();
 
-    for (start, end) in section_ranges(pairs, "BLOCKS") {
+    for (start, end) in section_ranges(pairs, "BLOCKS", cancel)? {
         let mut idx = start;
         while idx < end {
+            check_canceled(cancel)?;
             if !(pairs[idx].0 == 0 && pairs[idx].1 == "BLOCK") {
                 idx += 1;
                 continue;
@@ -273,6 +335,7 @@ fn collect_blocks(pairs: &[(i32, String)]) -> BTreeMap<String, Block> {
             while content_end < end
                 && !(pairs[content_end].0 == 0 && pairs[content_end].1 == "ENDBLK")
             {
+                check_canceled(cancel)?;
                 content_end += 1;
             }
 
@@ -294,14 +357,23 @@ fn collect_blocks(pairs: &[(i32, String)]) -> BTreeMap<String, Block> {
         }
     }
 
-    blocks
+    Ok(blocks)
 }
 
-fn append_transformed_strokes(source: &[Stroke], transform: Transform, strokes: &mut Vec<Stroke>) {
-    strokes.extend(source.iter().map(|stroke| Stroke {
-        start: transform.apply(stroke.start),
-        end: transform.apply(stroke.end),
-    }));
+fn append_transformed_strokes(
+    source: &[Stroke],
+    transform: Transform,
+    strokes: &mut Vec<Stroke>,
+    cancel: &dyn Fn() -> bool,
+) -> Result<(), DxfError> {
+    for stroke in source {
+        check_canceled(cancel)?;
+        strokes.push(Stroke {
+            start: transform.apply(stroke.start),
+            end: transform.apply(stroke.end),
+        });
+    }
+    Ok(())
 }
 
 fn parse_line_entity(entity: &[(i32, String)], strokes: &mut Vec<Stroke>) {
@@ -331,7 +403,8 @@ fn parse_insert_entity(
     blocks: &BTreeMap<String, Block>,
     parent_transform: Transform,
     strokes: &mut Vec<Stroke>,
-) {
+    cancel: &dyn Fn() -> bool,
+) -> Result<(), DxfError> {
     let mut name: Option<&str> = None;
     let mut x: Option<f64> = None;
     let mut y: Option<f64> = None;
@@ -352,10 +425,10 @@ fn parse_insert_entity(
     }
 
     let (Some(name), Some(x), Some(y)) = (name, x, y) else {
-        return;
+        return Ok(());
     };
     let Some(block) = blocks.get(name) else {
-        return;
+        return Ok(());
     };
 
     let transform = Transform {
@@ -366,7 +439,14 @@ fn parse_insert_entity(
         scale: Point::new(xscale, yscale),
         rotate_degrees: rotate,
     };
-    parse_entity_pairs(&block.pairs, segarc_degrees, blocks, transform, strokes);
+    parse_entity_pairs(
+        &block.pairs,
+        segarc_degrees,
+        blocks,
+        transform,
+        strokes,
+        cancel,
+    )
 }
 
 fn parse_solid_entity(entity: &[(i32, String)], strokes: &mut Vec<Stroke>) {
@@ -400,7 +480,12 @@ fn parse_solid_entity(entity: &[(i32, String)], strokes: &mut Vec<Stroke>) {
     strokes.push(Stroke { start: p2, end: p0 });
 }
 
-fn parse_ellipse_entity(entity: &[(i32, String)], segarc_degrees: f64, strokes: &mut Vec<Stroke>) {
+fn parse_ellipse_entity(
+    entity: &[(i32, String)],
+    segarc_degrees: f64,
+    strokes: &mut Vec<Stroke>,
+    cancel: &dyn Fn() -> bool,
+) -> Result<(), DxfError> {
     let mut center = PartialPoint::default();
     let mut major = PartialPoint::default();
     let mut ratio: Option<f64> = None;
@@ -423,16 +508,17 @@ fn parse_ellipse_entity(entity: &[(i32, String)], segarc_degrees: f64, strokes: 
     let (Some(center), Some(major), Some(ratio), Some(start), Some(mut end)) =
         (center.into_point(), major.into_point(), ratio, start, end)
     else {
-        return;
+        return Ok(());
     };
 
     let major_radius = (major.x * major.x + major.y * major.y).sqrt();
     let minor_radius = major_radius * ratio;
     if major_radius <= 1.0e-12 || minor_radius.abs() <= 1.0e-12 {
-        return;
+        return Ok(());
     }
 
     while end < start {
+        check_canceled(cancel)?;
         end += std::f64::consts::TAU;
     }
 
@@ -443,6 +529,7 @@ fn parse_ellipse_entity(entity: &[(i32, String)], segarc_degrees: f64, strokes: 
     let mut previous = ellipse_point(center, major_radius, minor_radius, rotation, phi);
 
     while phi < end {
+        check_canceled(cancel)?;
         if phi + step > end {
             step = end - phi;
         }
@@ -479,9 +566,16 @@ fn parse_ellipse_entity(entity: &[(i32, String)], segarc_degrees: f64, strokes: 
             previous = next;
         }
     }
+
+    Ok(())
 }
 
-fn parse_spline_entity(entity: &[(i32, String)], segarc_degrees: f64, strokes: &mut Vec<Stroke>) {
+fn parse_spline_entity(
+    entity: &[(i32, String)],
+    segarc_degrees: f64,
+    strokes: &mut Vec<Stroke>,
+    cancel: &dyn Fn() -> bool,
+) -> Result<(), DxfError> {
     let mut degree = None;
     let mut knots = Vec::new();
     let mut weights = Vec::new();
@@ -519,7 +613,7 @@ fn parse_spline_entity(entity: &[(i32, String)], segarc_degrees: f64, strokes: &
     }
 
     let Some(degree) = degree else {
-        return;
+        return Ok(());
     };
     append_spline_segments(
         degree,
@@ -528,7 +622,8 @@ fn parse_spline_entity(entity: &[(i32, String)], segarc_degrees: f64, strokes: &
         control_points,
         segarc_degrees,
         strokes,
-    );
+        cancel,
+    )
 }
 
 fn append_spline_segments(
@@ -538,38 +633,49 @@ fn append_spline_segments(
     control_points: Vec<Point>,
     segarc_degrees: f64,
     strokes: &mut Vec<Stroke>,
-) {
+    cancel: &dyn Fn() -> bool,
+) -> Result<(), DxfError> {
     if degree == 0
         || control_points.len() <= degree
         || knots.len() != control_points.len() + degree + 1
     {
-        return;
+        return Ok(());
     }
     if weights.len() < control_points.len() {
         weights.resize(control_points.len(), 1.0);
     }
 
     let Some((&min_knot, &max_knot)) = knots.first().zip(knots.last()) else {
-        return;
+        return Ok(());
     };
     let knot_span = max_knot - min_knot;
     if knot_span.abs() <= 1.0e-12 {
-        return;
+        return Ok(());
     }
     for knot in &mut knots {
+        check_canceled(cancel)?;
         *knot = (*knot - min_knot) / knot_span;
     }
 
-    let Some(points) = sample_spline(&knots, &weights, &control_points, degree, segarc_degrees)
+    let Some(points) = sample_spline(
+        &knots,
+        &weights,
+        &control_points,
+        degree,
+        segarc_degrees,
+        cancel,
+    )?
     else {
-        return;
+        return Ok(());
     };
     for pair in points.windows(2) {
+        check_canceled(cancel)?;
         strokes.push(Stroke {
             start: pair[0],
             end: pair[1],
         });
     }
+    Ok(())
 }
 
 fn sample_spline(
@@ -578,14 +684,18 @@ fn sample_spline(
     control_points: &[Point],
     degree: usize,
     segarc_degrees: f64,
-) -> Option<Vec<Point>> {
-    let end_u = *knots.last()?;
+    cancel: &dyn Fn() -> bool,
+) -> Result<Option<Vec<Point>>, DxfError> {
+    let Some(&end_u) = knots.last() else {
+        return Ok(None);
+    };
     let mut first_nonzero = 1;
     while first_nonzero < knots.len() && knots[first_nonzero].abs() <= 1.0e-12 {
+        check_canceled(cancel)?;
         first_nonzero += 1;
     }
     if first_nonzero >= knots.len() {
-        return None;
+        return Ok(None);
     }
 
     let tolerance = segarc_degrees.max(1.0).to_radians();
@@ -595,14 +705,17 @@ fn sample_spline(
         step = end_u / ((control_points.len() * 3).max(1) as f64);
     }
     if step <= 1.0e-12 {
-        return None;
+        return Ok(None);
     }
 
     let mut points = Vec::new();
-    let mut previous = evaluate_spline(knots, weights, control_points, degree, 0.0)?;
+    let Some(mut previous) = evaluate_spline(knots, weights, control_points, degree, 0.0) else {
+        return Ok(None);
+    };
     points.push(previous);
 
     while u < end_u {
+        check_canceled(cancel)?;
         if u + step > end_u {
             step = end_u - u;
         }
@@ -610,8 +723,13 @@ fn sample_spline(
             break;
         }
 
-        let next = evaluate_spline(knots, weights, control_points, degree, u + step)?;
-        let test = evaluate_spline(knots, weights, control_points, degree, u + step / 2.0)?;
+        let Some(next) = evaluate_spline(knots, weights, control_points, degree, u + step) else {
+            return Ok(None);
+        };
+        let Some(test) = evaluate_spline(knots, weights, control_points, degree, u + step / 2.0)
+        else {
+            return Ok(None);
+        };
         let chord = point_distance(previous, next);
         let sagitta = point_distance(
             test,
@@ -645,7 +763,7 @@ fn sample_spline(
         }
     }
 
-    Some(points)
+    Ok(Some(points))
 }
 
 fn evaluate_spline(
@@ -802,7 +920,12 @@ fn collect_xy_vertices(entity: &[(i32, String)]) -> Vec<Point> {
     vertices
 }
 
-fn parse_arc_entity(entity: &[(i32, String)], segarc_degrees: f64, strokes: &mut Vec<Stroke>) {
+fn parse_arc_entity(
+    entity: &[(i32, String)],
+    segarc_degrees: f64,
+    strokes: &mut Vec<Stroke>,
+    cancel: &dyn Fn() -> bool,
+) -> Result<(), DxfError> {
     let mut center_x = None;
     let mut center_y = None;
     let mut radius = None;
@@ -830,11 +953,18 @@ fn parse_arc_entity(entity: &[(i32, String)], segarc_degrees: f64, strokes: &mut
             end,
             segarc_degrees,
             strokes,
-        );
+            cancel,
+        )?;
     }
+    Ok(())
 }
 
-fn parse_circle_entity(entity: &[(i32, String)], segarc_degrees: f64, strokes: &mut Vec<Stroke>) {
+fn parse_circle_entity(
+    entity: &[(i32, String)],
+    segarc_degrees: f64,
+    strokes: &mut Vec<Stroke>,
+    cancel: &dyn Fn() -> bool,
+) -> Result<(), DxfError> {
     let mut center_x = None;
     let mut center_y = None;
     let mut radius = None;
@@ -856,8 +986,10 @@ fn parse_circle_entity(entity: &[(i32, String)], segarc_degrees: f64, strokes: &
             360.0,
             segarc_degrees,
             strokes,
-        );
+            cancel,
+        )?;
     }
+    Ok(())
 }
 
 fn append_arc_segments(
@@ -867,12 +999,14 @@ fn append_arc_segments(
     mut end_degrees: f64,
     segarc_degrees: f64,
     strokes: &mut Vec<Stroke>,
-) {
+    cancel: &dyn Fn() -> bool,
+) -> Result<(), DxfError> {
     if radius.abs() <= 1.0e-12 {
-        return;
+        return Ok(());
     }
 
     while end_degrees < start_degrees {
+        check_canceled(cancel)?;
         end_degrees += 360.0;
     }
     let delta = end_degrees - start_degrees;
@@ -885,6 +1019,7 @@ fn append_arc_segments(
     );
 
     for _ in 0..steps {
+        check_canceled(cancel)?;
         let next_angle = previous_angle + step;
         let next = Point::new(
             center.x + radius * next_angle.cos(),
@@ -897,13 +1032,15 @@ fn append_arc_segments(
         previous_angle = next_angle;
         previous = next;
     }
+    Ok(())
 }
 
 fn parse_lwpolyline_entity(
     entity: &[(i32, String)],
     segarc_degrees: f64,
     strokes: &mut Vec<Stroke>,
-) {
+    cancel: &dyn Fn() -> bool,
+) -> Result<(), DxfError> {
     let mut closed = false;
     let mut vertices = Vec::new();
     let mut current_x = None;
@@ -939,7 +1076,7 @@ fn parse_lwpolyline_entity(
         });
     }
 
-    append_polyline_segments(&vertices, closed, segarc_degrees, strokes);
+    append_polyline_segments(&vertices, closed, segarc_degrees, strokes, cancel)
 }
 
 fn parse_polyline_entities(
@@ -947,11 +1084,13 @@ fn parse_polyline_entities(
     mut idx: usize,
     segarc_degrees: f64,
     strokes: &mut Vec<Stroke>,
-) -> usize {
+    cancel: &dyn Fn() -> bool,
+) -> Result<usize, DxfError> {
     let mut closed = false;
     let mut vertices = Vec::new();
 
     while idx < pairs.len() {
+        check_canceled(cancel)?;
         if pairs[idx].0 != 0 {
             if pairs[idx].0 == 70 {
                 let flags = pairs[idx].1.parse::<i32>().unwrap_or(0);
@@ -970,15 +1109,15 @@ fn parse_polyline_entities(
                 idx = next;
             }
             "SEQEND" => {
-                append_polyline_segments(&vertices, closed, segarc_degrees, strokes);
-                return idx + 1;
+                append_polyline_segments(&vertices, closed, segarc_degrees, strokes, cancel)?;
+                return Ok(idx + 1);
             }
-            _ => return idx,
+            _ => return Ok(idx),
         }
     }
 
-    append_polyline_segments(&vertices, closed, segarc_degrees, strokes);
-    idx
+    append_polyline_segments(&vertices, closed, segarc_degrees, strokes, cancel)?;
+    Ok(idx)
 }
 
 fn parse_vertex_entity(entity: &[(i32, String)]) -> Option<Vertex> {
@@ -1006,9 +1145,11 @@ fn append_polyline_segments(
     closed: bool,
     segarc_degrees: f64,
     strokes: &mut Vec<Stroke>,
-) {
+    cancel: &dyn Fn() -> bool,
+) -> Result<(), DxfError> {
     for pair in vertices.windows(2) {
-        append_segment_or_bulge(pair[0], pair[1], segarc_degrees, strokes);
+        check_canceled(cancel)?;
+        append_segment_or_bulge(pair[0], pair[1], segarc_degrees, strokes, cancel)?;
     }
 
     if closed && vertices.len() > 1 {
@@ -1017,8 +1158,10 @@ fn append_polyline_segments(
             vertices[0],
             segarc_degrees,
             strokes,
-        );
+            cancel,
+        )?;
     }
+    Ok(())
 }
 
 fn append_segment_or_bulge(
@@ -1026,16 +1169,24 @@ fn append_segment_or_bulge(
     to: Vertex,
     segarc_degrees: f64,
     strokes: &mut Vec<Stroke>,
-) {
+    cancel: &dyn Fn() -> bool,
+) -> Result<(), DxfError> {
     if from.bulge.abs() < 1.0e-12 {
         strokes.push(Stroke {
             start: from.point,
             end: to.point,
         });
-        return;
+        return Ok(());
     }
 
-    append_bulge_segments(from.point, to.point, from.bulge, segarc_degrees, strokes);
+    append_bulge_segments(
+        from.point,
+        to.point,
+        from.bulge,
+        segarc_degrees,
+        strokes,
+        cancel,
+    )
 }
 
 fn append_bulge_segments(
@@ -1044,12 +1195,13 @@ fn append_bulge_segments(
     bulge: f64,
     segarc_degrees: f64,
     strokes: &mut Vec<Stroke>,
-) {
+    cancel: &dyn Fn() -> bool,
+) -> Result<(), DxfError> {
     let dx = end.x - start.x;
     let dy = end.y - start.y;
     let chord = (dx * dx + dy * dy).sqrt();
     if chord <= 1.0e-12 {
-        return;
+        return Ok(());
     }
 
     let theta = 4.0 * bulge.atan();
@@ -1066,6 +1218,7 @@ fn append_bulge_segments(
 
     let mut previous = start;
     for step in 1..=steps {
+        check_canceled(cancel)?;
         let angle = start_angle + theta * (step as f64 / steps as f64);
         let next = Point::new(
             center.x + radius * angle.cos(),
@@ -1077,11 +1230,13 @@ fn append_bulge_segments(
         });
         previous = next;
     }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::Cell;
 
     #[test]
     fn parses_line_entities() {
@@ -1460,6 +1615,24 @@ ENDSEC
             Point::new(2.0f64.sqrt() / 2.0, 2.0f64.sqrt() / 2.0),
         );
         assert_point_close(strokes[1].end, Point::new(0.0, 1.0));
+    }
+
+    #[test]
+    fn parse_segments_can_cancel_during_arc_expansion() {
+        let checks = Cell::new(0usize);
+        let err = parse_dxf_segments_with_cancel(
+            "0\nARC\n10\n0\n20\n0\n40\n1\n50\n0\n51\n360\n0\nENDSEC\n",
+            1.0,
+            &|| {
+                let next = checks.get() + 1;
+                checks.set(next);
+                next > 4
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(err, DxfError::Canceled));
+        assert!(checks.get() > 4);
     }
 
     #[test]

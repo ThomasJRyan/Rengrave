@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use crate::bitmap::{BitmapError, vectorize_bitmap_to_dxf_with_cancel};
 use crate::cleanup::{CleanupBit, CleanupOptions, generate_cleanup_points_with_cancel};
-use crate::dxf::{dxf_font_from_str, read_dxf_font};
+use crate::dxf::{DxfError, dxf_font_from_str_with_cancel, read_dxf_font_with_cancel};
 use crate::export::{ExportOptions, write_dxf, write_svg_with_circle};
 use crate::external::requires_potrace;
 use crate::font::{FontError, read_cxf_with_cancel, read_ttf_with_cancel};
@@ -308,8 +308,9 @@ fn generate_dxf_engrave_gcode(
         .unwrap_or(5.0);
     let font = if is_dxf {
         progress(BatchProgress::LoadingDxf);
-        match read_dxf_font(&path, segarc) {
+        match read_dxf_font_with_cancel(&path, segarc, cancel) {
             Ok(font) => font,
+            Err(DxfError::Canceled) => return Err(BatchError::Canceled),
             Err(err) => {
                 warnings.push(err.to_string());
                 return Ok(None);
@@ -318,7 +319,14 @@ fn generate_dxf_engrave_gcode(
     } else if requires_potrace(&path) {
         progress(BatchProgress::VectorizingBitmap);
         match vectorize_bitmap_to_dxf_with_cancel(&path, settings, cancel) {
-            Ok(dxf) => dxf_font_from_str(&dxf, segarc),
+            Ok(dxf) => match dxf_font_from_str_with_cancel(&dxf, segarc, cancel) {
+                Ok(font) => font,
+                Err(DxfError::Canceled) => return Err(BatchError::Canceled),
+                Err(err) => {
+                    warnings.push(err.to_string());
+                    return Ok(None);
+                }
+            },
             Err(BitmapError::Canceled) => return Err(BatchError::Canceled),
             Err(err) => {
                 warnings.push(err.to_string());
@@ -793,6 +801,50 @@ mod tests {
         let _ = fs::remove_file(path);
         assert_eq!(err.to_string(), "generation canceled");
         assert!(font_checks.get() > 4);
+    }
+
+    #[test]
+    fn batch_cancel_hook_stops_during_dxf_parse() {
+        let path = std::env::temp_dir().join(format!(
+            "rengrave-dxf-cancel-{}-{}.dxf",
+            std::process::id(),
+            "batch"
+        ));
+        fs::write(
+            &path,
+            "0\nSECTION\n2\nENTITIES\n0\nARC\n10\n0\n20\n0\n40\n1\n50\n0\n51\n360\n0\nENDSEC\n0\nEOF\n",
+        )
+        .unwrap();
+        let in_dxf = Cell::new(false);
+        let dxf_checks = Cell::new(0usize);
+
+        let err = prepare_batch_output_with_cancel_and_progress(
+            &BatchRequest {
+                batch: true,
+                font_or_image: Some(path.clone()),
+                settings_overrides: vec![LegacySetting::new("segarc", "1.0", false)],
+                ..BatchRequest::default()
+            },
+            || {
+                if in_dxf.get() {
+                    let next = dxf_checks.get() + 1;
+                    dxf_checks.set(next);
+                    next > 50
+                } else {
+                    false
+                }
+            },
+            |event| {
+                if event == BatchProgress::LoadingDxf {
+                    in_dxf.set(true);
+                }
+            },
+        )
+        .unwrap_err();
+
+        let _ = fs::remove_file(path);
+        assert_eq!(err.to_string(), "generation canceled");
+        assert!(dxf_checks.get() > 50);
     }
 
     #[test]

@@ -37,6 +37,7 @@ This document records what has actually been implemented in the Rust port and wh
 - Cleanup generation now has internal cancellation checks across closed-path collection, offset loops, X/Y scanlines, path ordering, and point emission, so UI Cancel can stop during long cleanup calculations.
 - Bitmap vectorization now has cancellation checks during image-to-PBM conversion and while Potrace is running; canceling kills and waits for the Potrace sidecar instead of blocking on process completion.
 - CXF and TTF font loading now have cancellable parser paths used by batch generation; CXF checks during line parsing and arc expansion, while TTF checks before parsing and during the glyph codepoint walk.
+- DXF import now has cancellable parser paths used by batch generation; checks cover code/value grouping, section and block discovery, entity walking, block insert recursion, arc/bulge/polyline expansion, ellipse/spline sampling, and bitmap-vectorized DXF parsing.
 - The Preview panel now reports total cut length and rapid length from the parsed generated G-code, alongside move counts and bounds.
 - Stale-output indicators in the toolbar and bottom status bar now offer a direct Recalculate action when the worker is idle.
 - Stale-output and active-calculation indicators now name the changed areas, such as text, controls, input file, cleanup request, or export set, instead of only saying output is stale.
@@ -65,7 +66,7 @@ This document records what has actually been implemented in the Rust port and wh
 - Document loading exposes the resolved input path that generation will use, so frontends can display the effective font/image source instead of only the path the user typed.
 - CXF font parsing with line and arc support.
 - TTF outline conversion through `ttf-parser`; the GPLv2-only F-Engrave helper is not copied.
-- DXF import for lines, arcs, circles, LWPOLYLINE bulges, leaders, solids, ellipses, splines, weighted splines, and block inserts.
+- DXF import for lines, arcs, circles, LWPOLYLINE bulges, leaders, solids, ellipses, splines, weighted splines, and block inserts, with cancellable batch parsing.
 - Bitmap vectorization via Potrace sidecar for PBM/PNM/BMP and converted PNG/JPEG/TIFF/GIF inputs.
 - Text layout with scaling, line spacing, character/word spacing, justification, origin handling, flip, mirror, rotation, text-on-circle, outside/inside and upper/lower circle modes.
 - Add Box rectangular border support for engrave/v-carve cases.
@@ -101,7 +102,7 @@ This document records what has actually been implemented in the Rust port and wh
 - After a successful calculation, the UI tracks the batch request that produced the displayed output, marks the output stale if text, input paths, or generation settings change before recalculation, names the changed areas in the stale indicator, and exposes direct Recalculate buttons from stale indicators.
 - It stores generated G-code/SVG/DXF payloads and can write them to user-editable paths individually or with one Export all available action; output paths can also be reset to the current default directory.
 - It stores generated secondary cleanup G-code payloads, displays the available cleanup-file count, and exports cleanup files beside the primary G-code path.
-- UI Cancel now sets a worker flag consumed by the core batch generator at stage boundaries, inside font parsing, inside V-carve/cleanup loops, and through bitmap vectorization, so canceled jobs can stop during long font, V-carve, cleanup, and Potrace-backed bitmap calculations instead of only being ignored after completion.
+- UI Cancel now sets a worker flag consumed by the core batch generator at stage boundaries, inside font/DXF parsing, inside V-carve/cleanup loops, and through bitmap vectorization, so canceled jobs can stop during long font, DXF, V-carve, cleanup, and Potrace-backed bitmap calculations instead of only being ignored after completion.
 - File, Run, and View menus expose the same load/save/export-all/export/calculate/cancel/copy/Fit/layer actions as the panels and toolbar, including output path selection for G-code, SVG, and DXF.
 - The toolbar includes a compact job summary row so source, mode/tool/units, output state, artifacts, warnings, and bitmap tracing readiness are visible without switching panels.
 - The bottom panel has Status, G-code, Cleanup, SVG, and DXF tabs so generated text output can be inspected without exporting first.
@@ -111,11 +112,11 @@ This document records what has actually been implemented in the Rust port and wh
 
 ## Why The UI Looks Bare
 
-The UI is now an MVP rather than only a shell, but it still lacks several expected desktop workflow pieces. Native dialogs are attempted with in-app fallback, but there are still no rich font/image preview editing controls, cooperative cancellation inside the full DXF parser, or full F-Engrave-style menu coverage. Controls cover common and several advanced settings, but not every legacy knob. Background jobs keep the UI responsive, report real core stages, and now cancel at batch stage boundaries, inside font/V-carve/cleanup loops, and during bitmap vectorization.
+The UI is now an MVP rather than only a shell, but it still lacks several expected desktop workflow pieces. Native dialogs are attempted with in-app fallback, but there are still no rich font/image preview editing controls or full F-Engrave-style menu coverage. Controls cover common and several advanced settings, but not every legacy knob. Background jobs keep the UI responsive, report real core stages, and now cancel at batch stage boundaries, inside font/DXF/V-carve/cleanup loops, and during bitmap vectorization.
 
 ## Tests And Validation In Place
 
-- Core tests currently cover settings, CXF/TTF parsing, DXF entities, bitmap conversion, layout transforms, Add Box/Circle, G-code, SVG/DXF export, cleanup, v-carve options, batch generation, cancellation stage boundaries, CXF/TTF parser cancellation, V-carve sampling cancellation, cleanup scanline cancellation, bitmap conversion/vectorization cancellation, and settings-only fallback output.
+- Core tests currently cover settings, CXF/TTF parsing, DXF entities, bitmap conversion, layout transforms, Add Box/Circle, G-code, SVG/DXF export, cleanup, v-carve options, batch generation, cancellation stage boundaries, CXF/TTF/DXF parser cancellation, V-carve sampling cancellation, cleanup scanline cancellation, bitmap conversion/vectorization cancellation, and settings-only fallback output.
 - A crate-level golden-output harness now exists under `crates/rengrave-core/tests/golden.rs` with a minimal CXF fixture, checked G-code/SVG regression outputs, and numeric-tolerant G-code comparison helpers. These first expected files pin current R-Engrave output; they are not yet F-Engrave-generated parity fixtures.
 - F-Engrave fixture generation was rechecked on 2026-06-10 with `python f-engrave_source/f-engrave.py -b -f crates/rengrave-core/tests/fixtures/inputs/simple.cxf -t AB`; it still fails before batch mode because `pyclipper` is missing.
 - UI tests cover default and secondary output paths, default-directory export path reset helpers, export-all availability, cleanup companion preview formatting, active-tab clipboard payload selection, demo-font first-run generation, core progress status labels, toolbar job-summary formatting, V-carve multipass state formatting, cleanup path checkbox serialization, default control mapping, view-layer settings serialization, native save-dialog filename helpers, settings Save As follow-up policy, browse-selection follow-up policy, settings save serialization, path-field parsing, loaded-document input-path display policy, explicit settings launch behavior, in-app browser directory behavior, input catalog scanning/filtering, input preview loading, vector input preview readouts, font missing-character preview warnings, bitmap trace-mask preview thresholding and coverage stats, font text-sample selection, preference persistence, worker stale-result detection, output stale-state detection, stale-reason summaries, recalculation availability, control-to-legacy override emission, bitmap/Potrace control mapping, advanced setting mapping, preview fitting, generated extents and path-length formatting, cursor zooming, screen-to-model coordinate conversion, output preview truncation, text-file write errors, cut/rapid preview parsing, and center/radius arc preview parsing.
@@ -128,7 +129,7 @@ The UI is now an MVP rather than only a shell, but it still lacks several expect
 
 - Golden fixtures from F-Engrave output. The harness and first R-Engrave regression fixture now exist, but broad comparisons against F-Engrave-generated `.ngc`, `.svg`, and `.dxf` files are still missing because local F-Engrave batch execution currently lacks `pyclipper`.
 - Full F-Engrave UI workflow: richer font/image preview editing controls, complete settings panels, complete v-carve/cleanup parity controls, full config parity, and parity menus.
-- Deeper cooperative cancellation inside remaining long parser/import algorithms. The UI has a background worker, indeterminate progress, core stage reporting, Cancel, stale-state handling, CXF/TTF parser cancellation, V-carve/cleanup inner-loop cancellation, and bitmap vectorization cancellation, but the DXF parser still does not stop mid-parse.
+- Deeper cooperative cancellation inside remaining lower-level blocking operations. The UI has a background worker, indeterminate progress, core stage reporting, Cancel, stale-state handling, CXF/TTF/DXF parser cancellation, V-carve/cleanup inner-loop cancellation, and bitmap vectorization cancellation; native file reads and some third-party library calls are still not interruptible mid-call.
 - Stronger V-carve parity. The current V-carve implementation is initial and not proven equivalent to F-Engrave’s full algorithm for complex glyphs and artwork.
 - Full prismatic/inlay parity, including all F-Engrave edge cases around Add Box/Flip Normals, cleanup, depth limits, and output ordering.
 - Multipass parity for ordinary engraving and v-carve workflows beyond the currently ported roughing/depth-cap behavior.
@@ -146,4 +147,4 @@ The UI is now an MVP rather than only a shell, but it still lacks several expect
 2. Continue enriching font/image preview controls and add more complete F-Engrave-style setting panels.
 3. Expand parity tests for default text, multiline text, text-on-circle, flip/mirror/origin/justify, DXF imports, bitmap imports, Add Box/Circle, arc-fit modes, and settings round trips.
 4. Audit V-carve and cleanup output against F-Engrave fixtures before adding more UI around those features.
-5. Add cooperative cancellation checks inside expensive DXF parser/import paths.
+5. Add UI smoke checks for the 1280x800 and 1920x1080 layouts, including rotated preview at 0, 45, and 90 degrees with no overlapping controls.
