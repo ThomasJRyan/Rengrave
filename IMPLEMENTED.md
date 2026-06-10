@@ -34,7 +34,7 @@ This document records what has actually been implemented in the Rust port and wh
 
 ## Implemented UI Work
 
-- `eframe/egui` app starts at 1280x800 with a top toolbar, left input/settings panel, central preview, right output/tool panel, and bottom status/log panel.
+- `eframe/egui` app starts at 1280x800 with a top File/Run/View menu row, toolbar, left input/settings panel, central preview, right output/tool panel, and bottom status/log panel.
 - The UI now has editable Settings/Input/Default-dir path fields and Load/Calculate actions, so settings files and font/image paths are reachable without CLI launch arguments.
 - Each path field has a Browse action backed by an in-app filesystem browser. It can navigate parent/home directories, select settings/input files, select the default directory, and choose output files in the current directory.
 - The left panel includes an input catalog that scans the current input/default directory for CXF, TTF, DXF, and bitmap files; selecting an entry updates the input path and starts background generation.
@@ -47,12 +47,13 @@ This document records what has actually been implemented in the Rust port and wh
 - The app calculates through the same batch core path used by the CLI, now on a background worker so the preview and controls stay responsive.
 - Calculation has an indeterminate progress indicator, a Cancel action, and stale-result handling. If inputs change while a worker is running, the old result is ignored instead of replacing the current state.
 - It stores generated G-code/SVG/DXF payloads and can write them to user-editable paths.
+- File, Run, and View menus expose the same load/save/export/calculate/cancel/copy/Fit/layer actions as the panels and toolbar.
 - It previews linear G-code moves and now approximates center-format full-circle arcs for display.
 - It has basic toggles for toolpath and bounds layers, simple zoom/view rotation controls, and a bounds-aware Fit action that recenters generated geometry in the preview.
 
 ## Why The UI Looks Bare
 
-The UI is now an MVP rather than only a shell, but it still lacks several expected desktop workflow pieces. There are no native OS file dialogs, rich font/image preview editing controls, cooperative mid-algorithm cancellation, or F-Engrave-style menus. Controls cover common settings, but not every legacy knob. Background jobs keep the UI responsive, but the current Cancel action ignores late worker results rather than interrupting every core loop immediately.
+The UI is now an MVP rather than only a shell, but it still lacks several expected desktop workflow pieces. There are no native OS file dialogs, rich font/image preview editing controls, cooperative mid-algorithm cancellation, or full F-Engrave-style menu coverage. Controls cover common settings, but not every legacy knob. Background jobs keep the UI responsive, but the current Cancel action ignores late worker results rather than interrupting every core loop immediately.
 
 ## Tests And Validation In Place
 
@@ -66,7 +67,7 @@ The UI is now an MVP rather than only a shell, but it still lacks several expect
 ## Major Work Remaining For Parity
 
 - Golden fixtures from F-Engrave output. Current tests are focused unit/batch checks, not broad golden comparisons against F-Engrave-generated `.ngc`, `.svg`, and `.dxf` files.
-- Full F-Engrave UI workflow: native file open/save dialogs, richer font/image preview editing controls, complete settings panels, complete v-carve/cleanup parity controls, full config parity, clipboard operations, and parity menus.
+- Full F-Engrave UI workflow: native file open/save dialogs, richer font/image preview editing controls, complete settings panels, complete v-carve/cleanup parity controls, full config parity, and parity menus.
 - Deeper cooperative cancellation/progress inside long core algorithms. The UI has a background worker, indeterminate progress, Cancel, and stale-state handling, but core routines do not yet report detailed progress or stop mid-loop.
 - Stronger V-carve parity. The current V-carve implementation is initial and not proven equivalent to F-Engrave’s full algorithm for complex glyphs and artwork.
 - Full prismatic/inlay parity, including all F-Engrave edge cases around Add Box/Flip Normals, cleanup, depth limits, and output ordering.

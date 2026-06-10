@@ -448,8 +448,9 @@ impl eframe::App for RengraveApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.poll_calculation();
         egui::Panel::top("toolbar")
-            .exact_size(42.0)
+            .exact_size(68.0)
             .show_inside(ui, |ui| {
+                self.show_menu_bar(ui);
                 ui.horizontal(|ui| {
                     if ui.button("Load").clicked() {
                         self.reload_document(ui.ctx().clone());
@@ -784,8 +785,7 @@ impl eframe::App for RengraveApp {
                         .add_enabled(!self.gcode.is_empty(), egui::Button::new("Copy G-code"))
                         .clicked()
                     {
-                        ui.ctx().copy_text(self.gcode.clone());
-                        self.status = "G-code copied".to_owned();
+                        self.copy_gcode(ui.ctx());
                     }
 
                     ui.separator();
@@ -849,8 +849,85 @@ impl eframe::App for RengraveApp {
 }
 
 impl RengraveApp {
+    fn show_menu_bar(&mut self, ui: &mut egui::Ui) {
+        egui::MenuBar::new().ui(ui, |ui| {
+            ui.menu_button("File", |ui| {
+                if menu_action(ui, "Open settings...", true) {
+                    self.open_browser(FileBrowserTarget::Settings);
+                }
+                if menu_action(ui, "Open input...", true) {
+                    self.open_browser(FileBrowserTarget::Input);
+                }
+                if menu_action(ui, "Set default directory...", true) {
+                    self.open_browser(FileBrowserTarget::DefaultDir);
+                }
+                ui.separator();
+                if menu_action(ui, "Load", true) {
+                    self.reload_document(ui.ctx().clone());
+                }
+                if menu_action(ui, "Save settings", !self.settings_path.trim().is_empty()) {
+                    self.save_current_settings();
+                }
+                ui.separator();
+                if menu_action(ui, "Choose G-code output...", true) {
+                    self.open_browser(FileBrowserTarget::GcodeOutput);
+                }
+                if menu_action(ui, "Export G-code", !self.gcode.is_empty()) {
+                    self.export_current(ExportKind::Gcode);
+                }
+                if menu_action(ui, "Export SVG", self.svg.is_some()) {
+                    self.export_current(ExportKind::Svg);
+                }
+                if menu_action(ui, "Export DXF", self.dxf.is_some()) {
+                    self.export_current(ExportKind::Dxf);
+                }
+                ui.separator();
+                if menu_action(ui, "Copy G-code", !self.gcode.is_empty()) {
+                    self.copy_gcode(ui.ctx());
+                }
+            });
+
+            ui.menu_button("Run", |ui| {
+                if menu_action(ui, "Calculate", true) {
+                    self.start_calculation(ui.ctx().clone());
+                }
+                if menu_action(ui, "Cancel calculation", self.calculation.is_some()) {
+                    self.cancel_calculation("Calculation canceled");
+                }
+                if self.active_calculation_is_stale() {
+                    ui.colored_label(egui::Color32::from_rgb(225, 176, 84), "Input changed");
+                }
+                ui.separator();
+                if menu_action(ui, "Refresh Potrace", true) {
+                    self.refresh_potrace_status();
+                }
+            });
+
+            ui.menu_button("View", |ui| {
+                if menu_action(ui, "Fit preview", self.preview_bounds.is_some()) {
+                    self.fit_preview_requested = true;
+                }
+                if menu_action(ui, "Reset pan/zoom", true) {
+                    self.reset_preview_pan_zoom();
+                }
+                if menu_action(ui, "Reset view rotation", true) {
+                    self.transform.viewport_rotation_degrees = 0.0;
+                }
+                ui.separator();
+                ui.checkbox(&mut self.show_toolpath, "Toolpath layer");
+                ui.checkbox(&mut self.show_bounds, "Bounds layer");
+                ui.checkbox(&mut self.show_v_area, "V-carve area layer");
+            });
+        });
+    }
+
     fn fit_preview_to_rect(&mut self, rect: egui::Rect) {
         fit_transform_to_bounds(&mut self.transform, self.preview_bounds, rect);
+    }
+
+    fn reset_preview_pan_zoom(&mut self) {
+        self.transform.pan = Point::default();
+        self.transform.zoom = DEFAULT_PREVIEW_ZOOM;
     }
 
     fn show_browser(&mut self, ctx: &egui::Context) {
@@ -887,6 +964,11 @@ impl RengraveApp {
         if self.input_preview.path != path {
             self.input_preview = InputPreview::load(path);
         }
+    }
+
+    fn copy_gcode(&mut self, ctx: &egui::Context) {
+        ctx.copy_text(self.gcode.clone());
+        self.status = "G-code copied".to_owned();
     }
 }
 
@@ -1892,6 +1974,14 @@ fn combo_row(
             .selected_text(selected_text)
             .show_ui(ui, body);
     });
+}
+
+fn menu_action(ui: &mut egui::Ui, label: &str, enabled: bool) -> bool {
+    let clicked = ui.add_enabled(enabled, egui::Button::new(label)).clicked();
+    if clicked {
+        ui.close();
+    }
+    clicked
 }
 
 fn setting_f64(settings: &LegacySettings, key: &str, default: f64) -> f64 {
