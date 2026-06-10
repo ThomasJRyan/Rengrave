@@ -1,7 +1,9 @@
 use std::ffi::OsString;
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::process::{Command, Stdio};
+use std::thread;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use image::DynamicImage;
 
@@ -23,20 +25,31 @@ pub enum BitmapError {
     RunPotrace { source: std::io::Error },
     #[error("Potrace failed: {stderr}")]
     PotraceFailed { stderr: String },
+    #[error("bitmap vectorization canceled")]
+    Canceled,
 }
 
 pub fn vectorize_bitmap_to_dxf(
     path: &Path,
     settings: &LegacySettings,
 ) -> Result<String, BitmapError> {
+    vectorize_bitmap_to_dxf_with_cancel(path, settings, &|| false)
+}
+
+pub fn vectorize_bitmap_to_dxf_with_cancel(
+    path: &Path,
+    settings: &LegacySettings,
+    cancel: &dyn Fn() -> bool,
+) -> Result<String, BitmapError> {
+    check_canceled(cancel)?;
     let options = PotraceOptions::from_settings(settings);
     let temp_path = if needs_image_conversion(path) {
-        Some(write_temp_pbm(path)?)
+        Some(write_temp_pbm(path, cancel)?)
     } else {
         None
     };
     let input = temp_path.as_deref().unwrap_or(path);
-    let output = run_potrace(input, &options);
+    let output = run_potrace(input, &options, cancel);
 
     if let Some(path) = temp_path {
         let _ = std::fs::remove_file(path);
@@ -45,27 +58,85 @@ pub fn vectorize_bitmap_to_dxf(
     output
 }
 
-fn run_potrace(input: &Path, options: &PotraceOptions) -> Result<String, BitmapError> {
-    let output = Command::new("potrace")
+fn run_potrace(
+    input: &Path,
+    options: &PotraceOptions,
+    cancel: &dyn Fn() -> bool,
+) -> Result<String, BitmapError> {
+    check_canceled(cancel)?;
+    let mut child = Command::new("potrace")
         .args(options.args(input))
-        .output()
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .map_err(|source| BitmapError::RunPotrace { source })?;
+    let mut stdout = child.stdout.take().ok_or_else(pipe_error)?;
+    let mut stderr = child.stderr.take().ok_or_else(pipe_error)?;
+    let stdout_reader = thread::spawn(move || {
+        let mut bytes = Vec::new();
+        stdout.read_to_end(&mut bytes).map(|_| bytes)
+    });
+    let stderr_reader = thread::spawn(move || {
+        let mut bytes = Vec::new();
+        stderr.read_to_end(&mut bytes).map(|_| bytes)
+    });
 
-    if !output.status.success() {
+    let status = loop {
+        if cancel() {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = join_reader(stdout_reader);
+            let _ = join_reader(stderr_reader);
+            return Err(BitmapError::Canceled);
+        }
+        if let Some(status) = child.try_wait().map_err(|source| {
+            let _ = child.kill();
+            BitmapError::RunPotrace { source }
+        })? {
+            break status;
+        }
+        thread::sleep(Duration::from_millis(10));
+    };
+
+    let stdout = join_reader(stdout_reader)?;
+    let stderr = join_reader(stderr_reader)?;
+
+    if !status.success() {
         return Err(BitmapError::PotraceFailed {
-            stderr: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+            stderr: String::from_utf8_lossy(&stderr).trim().to_owned(),
         });
     }
 
-    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    Ok(String::from_utf8_lossy(&stdout).into_owned())
 }
 
-fn write_temp_pbm(path: &Path) -> Result<PathBuf, BitmapError> {
+fn join_reader(
+    reader: thread::JoinHandle<std::io::Result<Vec<u8>>>,
+) -> Result<Vec<u8>, BitmapError> {
+    reader
+        .join()
+        .map_err(|_| BitmapError::RunPotrace {
+            source: std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "Potrace pipe reader thread stopped",
+            ),
+        })?
+        .map_err(|source| BitmapError::RunPotrace { source })
+}
+
+fn pipe_error() -> BitmapError {
+    BitmapError::RunPotrace {
+        source: std::io::Error::new(std::io::ErrorKind::Other, "Potrace pipe was not available"),
+    }
+}
+
+fn write_temp_pbm(path: &Path, cancel: &dyn Fn() -> bool) -> Result<PathBuf, BitmapError> {
+    check_canceled(cancel)?;
     let image = image::open(path).map_err(|source| BitmapError::Decode {
         path: path.to_owned(),
         source,
     })?;
-    let bytes = image_to_pbm_bytes(image);
+    let bytes = image_to_pbm_bytes_with_cancel(image, cancel)?;
     let temp_path = std::env::temp_dir().join(format!(
         "rengrave-potrace-{}-{}.pbm",
         std::process::id(),
@@ -81,12 +152,16 @@ fn write_temp_pbm(path: &Path) -> Result<PathBuf, BitmapError> {
     Ok(temp_path)
 }
 
-fn image_to_pbm_bytes(image: DynamicImage) -> Vec<u8> {
+fn image_to_pbm_bytes_with_cancel(
+    image: DynamicImage,
+    cancel: &dyn Fn() -> bool,
+) -> Result<Vec<u8>, BitmapError> {
     let rgba = image.to_rgba8();
     let (width, height) = rgba.dimensions();
     let mut output = format!("P4\n{width} {height}\n").into_bytes();
 
     for y in 0..height {
+        check_canceled(cancel)?;
         let mut byte = 0u8;
         let mut bit = 0;
         for x in 0..width {
@@ -111,7 +186,15 @@ fn image_to_pbm_bytes(image: DynamicImage) -> Vec<u8> {
         }
     }
 
-    output
+    Ok(output)
+}
+
+fn check_canceled(cancel: &dyn Fn() -> bool) -> Result<(), BitmapError> {
+    if cancel() {
+        Err(BitmapError::Canceled)
+    } else {
+        Ok(())
+    }
 }
 
 fn composite_over_white(channel: u32, alpha: u32) -> u32 {
@@ -181,6 +264,7 @@ impl PotraceOptions {
 mod tests {
     use super::*;
     use image::{DynamicImage, Rgba, RgbaImage};
+    use std::cell::Cell;
 
     #[test]
     fn bitmap_conversion_writes_packed_pbm_bits() {
@@ -190,7 +274,8 @@ mod tests {
             image.put_pixel(x, 0, Rgba([value, value, value, 255]));
         }
 
-        let bytes = image_to_pbm_bytes(DynamicImage::ImageRgba8(image));
+        let bytes =
+            image_to_pbm_bytes_with_cancel(DynamicImage::ImageRgba8(image), &|| false).unwrap();
 
         assert_eq!(&bytes[..8], b"P4\n10 1\n");
         assert_eq!(bytes[8], 0b1110_0000);
@@ -202,9 +287,26 @@ mod tests {
         let mut image = RgbaImage::new(1, 1);
         image.put_pixel(0, 0, Rgba([0, 0, 0, 0]));
 
-        let bytes = image_to_pbm_bytes(DynamicImage::ImageRgba8(image));
+        let bytes =
+            image_to_pbm_bytes_with_cancel(DynamicImage::ImageRgba8(image), &|| false).unwrap();
 
         assert_eq!(bytes.last(), Some(&0));
+    }
+
+    #[test]
+    fn pbm_conversion_can_cancel_between_rows() {
+        let image = RgbaImage::from_pixel(1, 3, Rgba([0, 0, 0, 255]));
+        let calls = Cell::new(0usize);
+
+        let err = image_to_pbm_bytes_with_cancel(DynamicImage::ImageRgba8(image), &|| {
+            let next = calls.get() + 1;
+            calls.set(next);
+            next > 1
+        })
+        .unwrap_err();
+
+        assert!(matches!(err, BitmapError::Canceled));
+        assert!(calls.get() > 1);
     }
 
     #[test]
@@ -212,7 +314,7 @@ mod tests {
         let gif = b"GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02D\x01\x00;";
         let image = image::load_from_memory(gif).unwrap();
 
-        let bytes = image_to_pbm_bytes(image);
+        let bytes = image_to_pbm_bytes_with_cancel(image, &|| false).unwrap();
 
         assert_eq!(&bytes[..7], b"P4\n1 1\n");
         assert_eq!(bytes[7], 0b1000_0000);

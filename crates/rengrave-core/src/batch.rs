@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use crate::bitmap::vectorize_bitmap_to_dxf;
+use crate::bitmap::{BitmapError, vectorize_bitmap_to_dxf_with_cancel};
 use crate::cleanup::{CleanupBit, CleanupOptions, generate_cleanup_points_with_cancel};
 use crate::dxf::{dxf_font_from_str, read_dxf_font};
 use crate::export::{ExportOptions, write_dxf, write_svg_with_circle};
@@ -315,8 +315,9 @@ fn generate_dxf_engrave_gcode(
         }
     } else if requires_potrace(&path) {
         progress(BatchProgress::VectorizingBitmap);
-        match vectorize_bitmap_to_dxf(&path, settings) {
+        match vectorize_bitmap_to_dxf_with_cancel(&path, settings, cancel) {
             Ok(dxf) => dxf_font_from_str(&dxf, segarc),
+            Err(BitmapError::Canceled) => return Err(BatchError::Canceled),
             Err(err) => {
                 warnings.push(err.to_string());
                 return Ok(None);
@@ -722,6 +723,29 @@ mod tests {
         let _ = fs::remove_file(path);
         assert_eq!(err.to_string(), "generation canceled");
         assert!(cleanup_checks.get() > 4);
+    }
+
+    #[test]
+    fn batch_cancel_hook_stops_before_bitmap_vectorization_work() {
+        let in_vectorization = Cell::new(false);
+
+        let err = prepare_batch_output_with_cancel_and_progress(
+            &BatchRequest {
+                batch: true,
+                font_or_image: Some(PathBuf::from("/tmp/rengrave-cancel-image.png")),
+                ..BatchRequest::default()
+            },
+            || in_vectorization.get(),
+            |event| {
+                if event == BatchProgress::VectorizingBitmap {
+                    in_vectorization.set(true);
+                }
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(err.to_string(), "generation canceled");
+        assert!(in_vectorization.get());
     }
 
     #[test]
