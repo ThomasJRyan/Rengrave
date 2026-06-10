@@ -1,0 +1,24 @@
+<?xml version="1.0" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN"
+  "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg width="3.990000in" height="2.000000in" viewBox="0 0 399.000000 200.000000"
+     xmlns="http://www.w3.org/2000/svg" version="1.1">
+  <title> R-Engrave Output </title>
+  <desc>SVG File Created By R-Engrave</desc>
+  <path d="M 0.500000 199.500000 L 100.000000 0.500000"
+        fill="none" stroke="blue" stroke-width="1.000000" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M 100.000000 0.500000 L 199.500000 199.500000"
+        fill="none" stroke="blue" stroke-width="1.000000" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M 50.250000 100.000000 L 149.750000 100.000000"
+        fill="none" stroke="blue" stroke-width="1.000000" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M 249.250000 199.500000 L 249.250000 0.500000"
+        fill="none" stroke="blue" stroke-width="1.000000" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M 249.250000 0.500000 L 388.550000 30.350000"
+        fill="none" stroke="blue" stroke-width="1.000000" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M 388.550000 30.350000 L 249.250000 100.000000"
+        fill="none" stroke="blue" stroke-width="1.000000" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M 249.250000 100.000000 L 398.500000 129.850000"
+        fill="none" stroke="blue" stroke-width="1.000000" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M 398.500000 129.850000 L 249.250000 199.500000"
+        fill="none" stroke="blue" stroke-width="1.000000" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
