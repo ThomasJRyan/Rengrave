@@ -1070,6 +1070,8 @@ impl eframe::App for RengraveApp {
                     ui.label(format!("G-code lines: {}", self.gcode_lines));
                     ui.label(format!("Cut moves: {}", self.preview_segments.len()));
                     ui.label(format!("Rapid moves: {}", self.preview_rapids.len()));
+                    ui.label(preview_length_readout("Cut length", &self.preview_segments));
+                    ui.label(preview_length_readout("Rapid length", &self.preview_rapids));
                     if let Some((size, range)) = preview_bounds_readout(self.preview_bounds) {
                         ui.label(size);
                         ui.monospace(range);
@@ -3444,6 +3446,24 @@ fn preview_bounds_readout(bounds: Option<PreviewBounds>) -> Option<(String, Stri
     ))
 }
 
+fn preview_length_readout(label: &str, segments: &[PreviewSegment]) -> String {
+    format!(
+        "{label}: {}",
+        format_preview_coord(total_segment_length(segments))
+    )
+}
+
+fn total_segment_length(segments: &[PreviewSegment]) -> f64 {
+    segments
+        .iter()
+        .map(|segment| {
+            let dx = segment.end.x - segment.start.x;
+            let dy = segment.end.y - segment.start.y;
+            (dx * dx + dy * dy).sqrt()
+        })
+        .sum()
+}
+
 fn format_preview_coord(value: f64) -> String {
     let value = if value.abs() < 0.00005 { 0.0 } else { value };
     format!("{value:.4}")
@@ -3992,6 +4012,30 @@ mod tests {
         assert_eq!(size, "Extents: 3.7500 x 4.1250");
         assert_eq!(range, "X -1.2500..2.5000  Y 0.0000..4.1250");
         assert_eq!(preview_bounds_readout(None), None);
+    }
+
+    #[test]
+    fn preview_length_readout_sums_segment_lengths() {
+        let segments = vec![
+            PreviewSegment {
+                start: Point::new(0.0, 0.0),
+                end: Point::new(3.0, 4.0),
+            },
+            PreviewSegment {
+                start: Point::new(3.0, 4.0),
+                end: Point::new(3.0, 5.25),
+            },
+        ];
+
+        assert_eq!(total_segment_length(&segments), 6.25);
+        assert_eq!(
+            preview_length_readout("Cut length", &segments),
+            "Cut length: 6.2500"
+        );
+        assert_eq!(
+            preview_length_readout("Rapid length", &[]),
+            "Rapid length: 0.0000"
+        );
     }
 
     #[test]
