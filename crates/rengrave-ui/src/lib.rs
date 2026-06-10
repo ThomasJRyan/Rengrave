@@ -76,6 +76,7 @@ struct RengraveApp {
     warnings: Vec<String>,
     potrace_status: PotraceStatus,
     fit_preview_requested: bool,
+    last_output_request: Option<BatchRequest>,
     bottom_tab: BottomTab,
 }
 
@@ -167,6 +168,7 @@ impl RengraveApp {
             warnings: document.warnings,
             potrace_status: detect_potrace(),
             fit_preview_requested: false,
+            last_output_request: None,
             bottom_tab: BottomTab::Status,
         };
         app.start_calculation(cc.egui_ctx.clone());
@@ -310,6 +312,7 @@ impl RengraveApp {
         match message.result {
             Ok(output) => {
                 self.apply_batch_output(output);
+                self.last_output_request = Some(job.request);
                 self.save_preferences();
             }
             Err(err) => {
@@ -322,6 +325,7 @@ impl RengraveApp {
                 self.preview_segments.clear();
                 self.preview_rapids.clear();
                 self.preview_bounds = None;
+                self.last_output_request = None;
             }
         }
     }
@@ -496,6 +500,8 @@ impl eframe::App for RengraveApp {
                         if ui.button("Cancel").clicked() {
                             self.cancel_calculation("Calculation canceled");
                         }
+                    } else if self.output_is_stale() {
+                        ui.colored_label(egui::Color32::from_rgb(225, 176, 84), "Output stale");
                     }
                     ui.separator();
                     ui.add(
@@ -855,6 +861,10 @@ impl eframe::App for RengraveApp {
                     ui.selectable_value(&mut self.bottom_tab, BottomTab::Dxf, "DXF");
                     ui.separator();
                     ui.monospace(&self.status);
+                    if self.output_is_stale() {
+                        ui.separator();
+                        ui.colored_label(egui::Color32::from_rgb(225, 176, 84), "Output stale");
+                    }
                     ui.separator();
                     ui.monospace(format!(
                         "{} lines, {} cut moves, {} rapid moves",
@@ -1018,6 +1028,14 @@ impl RengraveApp {
             .as_ref()
             .map(|job| calculation_request_is_stale(&self.batch_request(true), &job.request))
             .unwrap_or(false)
+    }
+
+    fn output_is_stale(&self) -> bool {
+        output_request_is_stale(
+            &self.batch_request(true),
+            self.last_output_request.as_ref(),
+            !self.gcode.is_empty(),
+        )
     }
 
     fn ensure_input_preview(&mut self) {
@@ -2042,6 +2060,17 @@ fn calculation_request_is_stale(current: &BatchRequest, expected: &BatchRequest)
         || current.settings_overrides != expected.settings_overrides
         || current.svg_output.is_some() != expected.svg_output.is_some()
         || current.dxf_output.is_some() != expected.dxf_output.is_some()
+}
+
+fn output_request_is_stale(
+    current: &BatchRequest,
+    last_output: Option<&BatchRequest>,
+    has_output: bool,
+) -> bool {
+    has_output
+        && last_output
+            .map(|last_output| calculation_request_is_stale(current, last_output))
+            .unwrap_or(false)
 }
 
 fn settings_base_path_for_save(path_text: &str) -> Option<PathBuf> {
@@ -3250,6 +3279,36 @@ mod tests {
             &export_toggle_changed,
             &expected
         ));
+    }
+
+    #[test]
+    fn output_staleness_tracks_last_generated_request() {
+        let expected = BatchRequest {
+            batch: true,
+            text: Some("A".to_owned()),
+            settings_overrides: vec![LegacySetting::new("YSCALE", "2", false)],
+            svg_output: Some(PathBuf::from("/tmp/out.svg")),
+            dxf_output: Some(PathBuf::from("/tmp/out.dxf")),
+            ..BatchRequest::default()
+        };
+        let current = BatchRequest {
+            text: Some("B".to_owned()),
+            ..expected.clone()
+        };
+        let output_path_changed = BatchRequest {
+            svg_output: Some(PathBuf::from("/tmp/other.svg")),
+            dxf_output: Some(PathBuf::from("/tmp/other.dxf")),
+            ..expected.clone()
+        };
+
+        assert!(output_request_is_stale(&current, Some(&expected), true));
+        assert!(!output_request_is_stale(
+            &output_path_changed,
+            Some(&expected),
+            true
+        ));
+        assert!(!output_request_is_stale(&current, Some(&expected), false));
+        assert!(!output_request_is_stale(&current, None, true));
     }
 
     #[test]

@@ -47,6 +47,7 @@ This document records what has actually been implemented in the Rust port and wh
 - UI controls emit legacy `fengrave_set` overrides into `rengrave-core`; they do not write temporary settings files.
 - The app calculates through the same batch core path used by the CLI, now on a background worker so the preview and controls stay responsive.
 - Calculation has an indeterminate progress indicator, a Cancel action, and stale-result handling. If inputs change while a worker is running, the old result is ignored instead of replacing the current state.
+- After a successful calculation, the UI tracks the batch request that produced the displayed output and marks the output stale if text, input paths, or generation settings change before recalculation.
 - It stores generated G-code/SVG/DXF payloads and can write them to user-editable paths.
 - File, Run, and View menus expose the same load/save/export/calculate/cancel/copy/Fit/layer actions as the panels and toolbar.
 - The bottom panel has Status, G-code, SVG, and DXF tabs so generated text output can be inspected without exporting first.
@@ -61,7 +62,7 @@ The UI is now an MVP rather than only a shell, but it still lacks several expect
 
 - Core tests currently cover settings, CXF/TTF parsing, DXF entities, bitmap conversion, layout transforms, Add Box/Circle, G-code, SVG/DXF export, cleanup, v-carve options, and batch generation.
 - A crate-level golden-output harness now exists under `crates/rengrave-core/tests/golden.rs` with a minimal CXF fixture and checked G-code/SVG regression outputs. These first expected files pin current R-Engrave output; they are not yet F-Engrave-generated parity fixtures.
-- UI tests cover default output paths, native save-dialog filename helpers, settings save serialization, path-field parsing, in-app browser directory behavior, input catalog scanning, input preview loading, preference persistence, worker stale-result detection, control-to-legacy override emission, bitmap/Potrace control mapping, advanced setting mapping, preview fitting, output preview truncation, text-file write errors, cut/rapid preview parsing, and full-circle arc preview parsing.
+- UI tests cover default output paths, native save-dialog filename helpers, settings save serialization, path-field parsing, in-app browser directory behavior, input catalog scanning, input preview loading, preference persistence, worker stale-result detection, output stale-state detection, control-to-legacy override emission, bitmap/Potrace control mapping, advanced setting mapping, preview fitting, output preview truncation, text-file write errors, cut/rapid preview parsing, and full-circle arc preview parsing.
 - Recent validation has been run with:
   - `cargo test -p rengrave-core`
   - `cargo test -p rengrave-ui`
