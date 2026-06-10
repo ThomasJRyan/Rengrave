@@ -71,6 +71,7 @@ struct RengraveApp {
     show_toolpath: bool,
     show_rapids: bool,
     show_bounds: bool,
+    show_axes: bool,
     browser: Option<FileBrowser>,
     input_catalog: InputCatalog,
     input_preview: InputPreview,
@@ -164,6 +165,7 @@ impl RengraveApp {
             show_toolpath: true,
             show_rapids: true,
             show_bounds: true,
+            show_axes: get_legacy_bool(&document.settings, "show_axis", true),
             browser: None,
             input_catalog,
             input_preview: InputPreview::default(),
@@ -216,6 +218,7 @@ impl RengraveApp {
             Ok(document) => {
                 self.text = document.text;
                 self.controls = UiControls::from_settings(&document.settings);
+                self.show_axes = get_legacy_bool(&document.settings, "show_axis", true);
                 self.settings_count = document.settings.entries.len();
                 self.warnings = document.warnings;
                 self.status = "Document loaded".to_owned();
@@ -913,6 +916,7 @@ impl eframe::App for RengraveApp {
                     ui.checkbox(&mut self.show_toolpath, "Toolpath");
                     ui.checkbox(&mut self.show_rapids, "Rapids");
                     ui.checkbox(&mut self.show_bounds, "Bounds");
+                    ui.checkbox(&mut self.show_axes, "Axes");
                     ui.label(format!("G-code lines: {}", self.gcode_lines));
                     ui.label(format!("Cut moves: {}", self.preview_segments.len()));
                     ui.label(format!("Rapid moves: {}", self.preview_rapids.len()));
@@ -985,6 +989,7 @@ impl eframe::App for RengraveApp {
                 self.show_toolpath,
                 self.show_rapids,
                 self.show_bounds,
+                self.show_axes,
             );
         });
 
@@ -1064,6 +1069,7 @@ impl RengraveApp {
                 ui.checkbox(&mut self.show_toolpath, "Toolpath layer");
                 ui.checkbox(&mut self.show_rapids, "Rapid layer");
                 ui.checkbox(&mut self.show_bounds, "Bounds layer");
+                ui.checkbox(&mut self.show_axes, "Axes layer");
             });
         });
     }
@@ -3164,6 +3170,7 @@ fn draw_preview(
     show_toolpath: bool,
     show_rapids: bool,
     show_bounds: bool,
+    show_axes: bool,
 ) {
     painter.rect_filled(rect, 0.0, egui::Color32::from_rgb(28, 30, 32));
 
@@ -3218,27 +3225,29 @@ fn draw_preview(
         }
     }
 
-    let axis_span = bounds
-        .map(|bounds| {
-            let width = (bounds.max.x - bounds.min.x).abs().max(2.0);
-            let height = (bounds.max.y - bounds.min.y).abs().max(2.0);
-            width.max(height)
-        })
-        .unwrap_or(4.0);
-    painter.line_segment(
-        [
-            to_screen(Point::new(-axis_span, 0.0)),
-            to_screen(Point::new(axis_span, 0.0)),
-        ],
-        egui::Stroke::new(1.0, egui::Color32::from_rgb(180, 150, 80)),
-    );
-    painter.line_segment(
-        [
-            to_screen(Point::new(0.0, -axis_span)),
-            to_screen(Point::new(0.0, axis_span)),
-        ],
-        egui::Stroke::new(1.0, egui::Color32::from_rgb(80, 130, 160)),
-    );
+    if show_axes {
+        let axis_span = bounds
+            .map(|bounds| {
+                let width = (bounds.max.x - bounds.min.x).abs().max(2.0);
+                let height = (bounds.max.y - bounds.min.y).abs().max(2.0);
+                width.max(height)
+            })
+            .unwrap_or(4.0);
+        painter.line_segment(
+            [
+                to_screen(Point::new(-axis_span, 0.0)),
+                to_screen(Point::new(axis_span, 0.0)),
+            ],
+            egui::Stroke::new(1.0, egui::Color32::from_rgb(180, 150, 80)),
+        );
+        painter.line_segment(
+            [
+                to_screen(Point::new(0.0, -axis_span)),
+                to_screen(Point::new(0.0, axis_span)),
+            ],
+            egui::Stroke::new(1.0, egui::Color32::from_rgb(80, 130, 160)),
+        );
+    }
 }
 
 fn draw_dashed_line(
