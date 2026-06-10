@@ -127,6 +127,8 @@ impl RengraveApp {
         } else {
             "Startup warning".to_owned()
         };
+        let (default_gcode_path, default_svg_path, default_dxf_path) =
+            default_output_paths(&default_dir);
         let mut app = Self {
             text: document.text,
             transform: ViewTransform {
@@ -148,17 +150,17 @@ impl RengraveApp {
             preview_rapids: Vec::new(),
             preview_bounds: None,
             gcode_path: if preferences.gcode_path.trim().is_empty() {
-                default_output_path(&default_dir, "rengrave_output.ngc")
+                default_gcode_path
             } else {
                 preferences.gcode_path
             },
             svg_path: if preferences.svg_path.trim().is_empty() {
-                default_output_path(&default_dir, "rengrave_output.svg")
+                default_svg_path
             } else {
                 preferences.svg_path
             },
             dxf_path: if preferences.dxf_path.trim().is_empty() {
-                default_output_path(&default_dir, "rengrave_output.dxf")
+                default_dxf_path
             } else {
                 preferences.dxf_path
             },
@@ -424,6 +426,16 @@ impl RengraveApp {
         }
 
         self.status = format!("Cleanup exported: {written} files");
+        self.save_preferences();
+    }
+
+    fn reset_output_paths_to_default_dir(&mut self) {
+        let default_dir = path_from_text(&self.default_dir_path);
+        let (gcode_path, svg_path, dxf_path) = default_output_paths(&default_dir);
+        self.gcode_path = gcode_path;
+        self.svg_path = svg_path;
+        self.dxf_path = dxf_path;
+        self.status = "Output paths updated from default directory".to_owned();
         self.save_preferences();
     }
 
@@ -877,6 +889,9 @@ impl eframe::App for RengraveApp {
 
                     ui.separator();
                     ui.heading("Output");
+                    if ui.button("Use default dir").clicked() {
+                        self.reset_output_paths_to_default_dir();
+                    }
                     if path_row(ui, "G-code", &mut self.gcode_path) {
                         self.choose_path(FileBrowserTarget::GcodeOutput);
                     }
@@ -1060,6 +1075,9 @@ impl RengraveApp {
                 ui.separator();
                 if menu_action(ui, "Choose G-code output...", true) {
                     self.choose_path(FileBrowserTarget::GcodeOutput);
+                }
+                if menu_action(ui, "Use default dir for outputs", true) {
+                    self.reset_output_paths_to_default_dir();
                 }
                 if menu_action(ui, "Export G-code", !self.gcode.is_empty()) {
                     self.export_current(ExportKind::Gcode);
@@ -2186,6 +2204,14 @@ fn default_output_path(default_dir: &Option<PathBuf>, file_name: &str) -> String
         .unwrap_or_else(|| PathBuf::from(file_name))
         .display()
         .to_string()
+}
+
+fn default_output_paths(default_dir: &Option<PathBuf>) -> (String, String, String) {
+    (
+        default_output_path(default_dir, "rengrave_output.ngc"),
+        default_output_path(default_dir, "rengrave_output.svg"),
+        default_output_path(default_dir, "rengrave_output.dxf"),
+    )
 }
 
 fn secondary_output_path(path: &Path, suffix: &str) -> PathBuf {
@@ -3668,8 +3694,24 @@ mod tests {
             "/tmp/rengrave-ui/rengrave_output.ngc"
         );
         assert_eq!(
+            default_output_paths(&dir),
+            (
+                "/tmp/rengrave-ui/rengrave_output.ngc".to_owned(),
+                "/tmp/rengrave-ui/rengrave_output.svg".to_owned(),
+                "/tmp/rengrave-ui/rengrave_output.dxf".to_owned()
+            )
+        );
+        assert_eq!(
             default_output_path(&None, "rengrave_output.ngc"),
             "rengrave_output.ngc"
+        );
+        assert_eq!(
+            default_output_paths(&None),
+            (
+                "rengrave_output.ngc".to_owned(),
+                "rengrave_output.svg".to_owned(),
+                "rengrave_output.dxf".to_owned()
+            )
         );
     }
 
