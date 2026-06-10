@@ -13,7 +13,7 @@ use crate::gcode::{
 use crate::layout::{EngraveCircle, LayoutSettings, layout_text};
 use crate::project::{DocumentError, DocumentRequest, load_document};
 use crate::project::{InputKind, resolve_input_kind};
-use crate::settings::{LegacySettings, get_legacy_bool};
+use crate::settings::{LegacySetting, LegacySettings, get_legacy_bool};
 use crate::vcarve::{VCarveOptions, generate_vcarve_points};
 use crate::{FENGRAVE_VERSION, RENGRAVE_VERSION};
 
@@ -27,6 +27,7 @@ pub struct BatchRequest {
     pub output: Option<PathBuf>,
     pub svg_output: Option<PathBuf>,
     pub dxf_output: Option<PathBuf>,
+    pub settings_overrides: Vec<LegacySetting>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -56,6 +57,7 @@ pub fn prepare_batch_output(request: &BatchRequest) -> Result<BatchOutput, Batch
         font_or_image: request.font_or_image.clone(),
         default_dir: request.default_dir.clone(),
         text: request.text.clone(),
+        settings_overrides: request.settings_overrides.clone(),
     })?;
 
     let mut warnings = document.warnings;
@@ -467,6 +469,35 @@ mod tests {
         assert!(output.gcode.contains("G90\nG20\nG17 G64 P0.001 M3 S3000"));
         assert!(output.gcode.contains("G1 Z-0.0050"));
         assert!(output.gcode.contains("G1 X0.0000 Y1.9900"));
+    }
+
+    #[test]
+    fn batch_applies_settings_overrides() {
+        let path = std::env::temp_dir().join(format!(
+            "rengrave-overrides-{}-{}.cxf",
+            std::process::id(),
+            "batch"
+        ));
+        fs::write(&path, "[A] 2\nL 0,0,10,0\nL 0,0,0,10\n").unwrap();
+
+        let output = prepare_batch_output(&BatchRequest {
+            batch: true,
+            font_or_image: Some(path.clone()),
+            text: Some("A".to_owned()),
+            settings_overrides: vec![
+                LegacySetting::new("YSCALE", "3.0", false),
+                LegacySetting::new("plotbox", "1", false),
+                LegacySetting::new("boxgap", "0.5", false),
+            ],
+            ..BatchRequest::default()
+        })
+        .unwrap();
+
+        let _ = fs::remove_file(path);
+        assert!(output.warnings.is_empty());
+        assert!(output.gcode.contains("(fengrave_set YSCALE      3.0 )"));
+        assert!(output.gcode.contains("(fengrave_set plotbox     1 )"));
+        assert!(output.gcode.contains("G1 X3.5000 Y-0.5100"));
     }
 
     #[test]

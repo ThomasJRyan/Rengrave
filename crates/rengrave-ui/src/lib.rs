@@ -5,6 +5,7 @@ use eframe::egui;
 use rengrave_core::batch::{BatchOutput, BatchRequest, prepare_batch_output};
 use rengrave_core::geometry::{Point, ViewTransform};
 use rengrave_core::project::{DocumentRequest, RengraveDocument, load_document};
+use rengrave_core::settings::{LegacySetting, LegacySettings, get_legacy_bool};
 
 #[derive(Debug, Clone, Default)]
 pub struct UiLaunchOptions {
@@ -34,6 +35,10 @@ struct RengraveApp {
     transform: ViewTransform,
     status: String,
     settings_count: usize,
+    settings_path: String,
+    input_path: String,
+    default_dir_path: String,
+    controls: UiControls,
     gcode: String,
     svg: Option<String>,
     dxf: Option<String>,
@@ -46,9 +51,6 @@ struct RengraveApp {
     show_toolpath: bool,
     show_bounds: bool,
     show_v_area: bool,
-    gcode_file: Option<PathBuf>,
-    font_or_image: Option<PathBuf>,
-    default_dir: Option<PathBuf>,
     warnings: Vec<String>,
 }
 
@@ -60,6 +62,7 @@ impl RengraveApp {
             font_or_image: options.font_or_image.clone(),
             default_dir: options.default_dir.clone(),
             text: options.text,
+            settings_overrides: Vec::new(),
         };
         let document = match load_document(&document_request) {
             Ok(document) => document,
@@ -82,6 +85,10 @@ impl RengraveApp {
             },
             status,
             settings_count: document.settings.entries.len(),
+            settings_path: path_to_text(&options.gcode_file),
+            input_path: path_to_text(&options.font_or_image),
+            default_dir_path: path_to_text(&options.default_dir),
+            controls: UiControls::from_settings(&document.settings),
             gcode: String::new(),
             svg: None,
             dxf: None,
@@ -94,9 +101,6 @@ impl RengraveApp {
             show_toolpath: true,
             show_bounds: true,
             show_v_area: false,
-            gcode_file: options.gcode_file,
-            font_or_image: options.font_or_image,
-            default_dir: options.default_dir,
             warnings: document.warnings,
         };
         app.calculate();
@@ -106,13 +110,37 @@ impl RengraveApp {
     fn batch_request(&self, include_exports: bool) -> BatchRequest {
         BatchRequest {
             batch: true,
-            gcode_file: self.gcode_file.clone(),
-            font_or_image: self.font_or_image.clone(),
-            default_dir: self.default_dir.clone(),
+            gcode_file: path_from_text(&self.settings_path),
+            font_or_image: path_from_text(&self.input_path),
+            default_dir: path_from_text(&self.default_dir_path),
             text: Some(self.text.clone()),
             output: None,
             svg_output: include_exports.then(|| PathBuf::from(&self.svg_path)),
             dxf_output: include_exports.then(|| PathBuf::from(&self.dxf_path)),
+            settings_overrides: self.controls.overrides(),
+        }
+    }
+
+    fn reload_document(&mut self) {
+        match load_document(&DocumentRequest {
+            gcode_file: path_from_text(&self.settings_path),
+            font_or_image: path_from_text(&self.input_path),
+            default_dir: path_from_text(&self.default_dir_path),
+            text: None,
+            settings_overrides: Vec::new(),
+        }) {
+            Ok(document) => {
+                self.text = document.text;
+                self.controls = UiControls::from_settings(&document.settings);
+                self.settings_count = document.settings.entries.len();
+                self.warnings = document.warnings;
+                self.status = "Document loaded".to_owned();
+                self.calculate();
+            }
+            Err(err) => {
+                self.status = "Load failed".to_owned();
+                self.warnings = vec![err.to_string()];
+            }
         }
     }
 
@@ -172,116 +200,233 @@ impl RengraveApp {
 impl eframe::App for RengraveApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         egui::Panel::top("toolbar")
-            .exact_size(34.0)
+            .exact_size(42.0)
             .show_inside(ui, |ui| {
                 ui.horizontal(|ui| {
-                    ui.menu_button("File", |ui| {
-                        let _ = ui.button("Open Settings");
-                        let _ = ui.button("Save G-code");
-                    });
-                    ui.menu_button("View", |ui| {
-                        if ui.button("Fit").clicked() {
-                            self.transform.pan = Point::default();
-                            self.transform.zoom = 80.0;
-                        }
-                    });
-                    ui.separator();
-                    if ui.button("Fit").clicked() {
-                        self.transform.pan = Point::default();
-                        self.transform.zoom = 80.0;
+                    if ui.button("Load").clicked() {
+                        self.reload_document();
                     }
-                    ui.add(egui::Slider::new(&mut self.transform.zoom, 10.0..=300.0).text("Zoom"));
+                    if ui.button("Calculate").clicked() {
+                        self.calculate();
+                    }
+                    if ui.button("Fit").clicked() {
+                        self.fit_preview();
+                    }
+                    ui.separator();
+                    ui.add(
+                        egui::Slider::new(&mut self.transform.zoom, 10.0..=300.0)
+                            .text("Zoom")
+                            .clamping(egui::SliderClamping::Always),
+                    );
                     ui.add(
                         egui::Slider::new(
                             &mut self.transform.viewport_rotation_degrees,
                             -180.0..=180.0,
                         )
-                        .text("View"),
+                        .text("View")
+                        .clamping(egui::SliderClamping::Always),
                     );
+                    ui.separator();
+                    ui.label("Status");
+                    ui.monospace(&self.status);
                 });
             });
 
         egui::Panel::left("input_settings")
-            .exact_size(270.0)
+            .exact_size(340.0)
             .resizable(false)
             .show_inside(ui, |ui| {
-                ui.heading("Input");
-                ui.label("Text");
-                ui.add_sized(
-                    [ui.available_width(), 96.0],
-                    egui::TextEdit::multiline(&mut self.text),
-                );
-                ui.separator();
-                ui.heading("Settings");
-                ui.horizontal(|ui| {
-                    ui.label("Mode");
-                    ui.monospace(self.current_cut_type());
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    ui.heading("Input");
+                    path_row(ui, "Settings", &mut self.settings_path);
+                    path_row(ui, "Input", &mut self.input_path);
+                    path_row(ui, "Default dir", &mut self.default_dir_path);
+                    ui.horizontal(|ui| {
+                        if ui.button("Load").clicked() {
+                            self.reload_document();
+                        }
+                        if ui.button("Calculate").clicked() {
+                            self.calculate();
+                        }
+                    });
+                    ui.label("Text");
+                    ui.add_sized(
+                        [ui.available_width(), 120.0],
+                        egui::TextEdit::multiline(&mut self.text),
+                    );
+
+                    ui.separator();
+                    ui.heading("Layout");
+                    combo_row(ui, "Mode", self.controls.cut_type.label(), |ui| {
+                        ui.selectable_value(
+                            &mut self.controls.cut_type,
+                            CutTypeChoice::Engrave,
+                            CutTypeChoice::Engrave.label(),
+                        );
+                        ui.selectable_value(
+                            &mut self.controls.cut_type,
+                            CutTypeChoice::VCarve,
+                            CutTypeChoice::VCarve.label(),
+                        );
+                    });
+                    combo_row(ui, "Units", self.controls.units.label(), |ui| {
+                        ui.selectable_value(
+                            &mut self.controls.units,
+                            UnitsChoice::Inch,
+                            UnitsChoice::Inch.label(),
+                        );
+                        ui.selectable_value(
+                            &mut self.controls.units,
+                            UnitsChoice::Mm,
+                            UnitsChoice::Mm.label(),
+                        );
+                    });
+                    combo_row(ui, "Justify", self.controls.justify.label(), |ui| {
+                        for value in JustifyChoice::ALL {
+                            ui.selectable_value(&mut self.controls.justify, value, value.label());
+                        }
+                    });
+                    combo_row(ui, "Origin", self.controls.origin.label(), |ui| {
+                        for value in OriginChoice::ALL {
+                            ui.selectable_value(&mut self.controls.origin, value, value.label());
+                        }
+                    });
+                    number_row(ui, "Height", &mut self.controls.yscale, 0.05);
+                    number_row(ui, "Width %", &mut self.controls.xscale_percent, 1.0);
+                    number_row(ui, "Line space", &mut self.controls.line_space, 0.05);
+                    number_row(
+                        ui,
+                        "Character space %",
+                        &mut self.controls.char_space_percent,
+                        1.0,
+                    );
+                    number_row(
+                        ui,
+                        "Word space %",
+                        &mut self.controls.word_space_percent,
+                        1.0,
+                    );
+                    number_row(ui, "Text angle", &mut self.controls.angle_degrees, 1.0);
+                    number_row(ui, "Text radius", &mut self.controls.text_radius, 0.05);
+                    number_row(ui, "X origin", &mut self.controls.xorigin, 0.01);
+                    number_row(ui, "Y origin", &mut self.controls.yorigin, 0.01);
+                    ui.horizontal_wrapped(|ui| {
+                        ui.checkbox(&mut self.controls.flip, "Flip");
+                        ui.checkbox(&mut self.controls.mirror, "Mirror");
+                        ui.checkbox(&mut self.controls.outer, "Outer");
+                        ui.checkbox(&mut self.controls.upper, "Upper");
+                        ui.checkbox(&mut self.controls.plotbox, "Box");
+                    });
+                    number_row(ui, "Box gap", &mut self.controls.boxgap, 0.01);
+                    ui.label(format!("Legacy keys: {}", self.settings_count));
                 });
-                ui.add(
-                    egui::Slider::new(&mut self.transform.model_rotation_degrees, -360.0..=360.0)
-                        .text("Angle"),
-                );
-                ui.label(format!("Legacy keys: {}", self.settings_count));
-                file_hint(ui, "Settings", &self.gcode_file);
-                file_hint(ui, "Input", &self.font_or_image);
-                file_hint(ui, "Default dir", &self.default_dir);
             });
 
         egui::Panel::right("output_tools")
-            .exact_size(260.0)
+            .exact_size(310.0)
             .resizable(false)
             .show_inside(ui, |ui| {
-                ui.heading("Output");
-                if ui.button("Calculate").clicked() {
-                    self.calculate();
-                }
-                ui.label("G-code path");
-                ui.add_sized(
-                    [ui.available_width(), 22.0],
-                    egui::TextEdit::singleline(&mut self.gcode_path),
-                );
-                if ui
-                    .add_enabled(!self.gcode.is_empty(), egui::Button::new("Export G-code"))
-                    .clicked()
-                {
-                    self.export_current(ExportKind::Gcode);
-                }
-                ui.label("SVG path");
-                ui.add_sized(
-                    [ui.available_width(), 22.0],
-                    egui::TextEdit::singleline(&mut self.svg_path),
-                );
-                if ui
-                    .add_enabled(self.svg.is_some(), egui::Button::new("Export SVG"))
-                    .clicked()
-                {
-                    self.export_current(ExportKind::Svg);
-                }
-                ui.label("DXF path");
-                ui.add_sized(
-                    [ui.available_width(), 22.0],
-                    egui::TextEdit::singleline(&mut self.dxf_path),
-                );
-                if ui
-                    .add_enabled(self.dxf.is_some(), egui::Button::new("Export DXF"))
-                    .clicked()
-                {
-                    self.export_current(ExportKind::Dxf);
-                }
-                if ui
-                    .add_enabled(!self.gcode.is_empty(), egui::Button::new("Copy G-code"))
-                    .clicked()
-                {
-                    ui.ctx().copy_text(self.gcode.clone());
-                    self.status = "G-code copied".to_owned();
-                }
-                ui.separator();
-                ui.checkbox(&mut self.show_toolpath, "Toolpath");
-                ui.checkbox(&mut self.show_bounds, "Bounds");
-                ui.checkbox(&mut self.show_v_area, "V-carve area");
-                ui.separator();
-                ui.label(format!("G-code lines: {}", self.gcode_lines));
-                ui.label(format!("Preview moves: {}", self.preview_segments.len()));
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    ui.heading("Tool");
+                    combo_row(ui, "Bit", self.controls.bit_shape.label(), |ui| {
+                        ui.selectable_value(
+                            &mut self.controls.bit_shape,
+                            BitShapeChoice::VBit,
+                            BitShapeChoice::VBit.label(),
+                        );
+                        ui.selectable_value(
+                            &mut self.controls.bit_shape,
+                            BitShapeChoice::Ball,
+                            BitShapeChoice::Ball.label(),
+                        );
+                        ui.selectable_value(
+                            &mut self.controls.bit_shape,
+                            BitShapeChoice::Flat,
+                            BitShapeChoice::Flat.label(),
+                        );
+                    });
+                    combo_row(ui, "Arc fit", self.controls.arc_fit.label(), |ui| {
+                        ui.selectable_value(
+                            &mut self.controls.arc_fit,
+                            ArcFitChoice::NoFit,
+                            ArcFitChoice::NoFit.label(),
+                        );
+                        ui.selectable_value(
+                            &mut self.controls.arc_fit,
+                            ArcFitChoice::Center,
+                            ArcFitChoice::Center.label(),
+                        );
+                        ui.selectable_value(
+                            &mut self.controls.arc_fit,
+                            ArcFitChoice::Radius,
+                            ArcFitChoice::Radius.label(),
+                        );
+                    });
+                    number_row(ui, "Safe Z", &mut self.controls.safe_z, 0.01);
+                    number_row(ui, "Cut Z", &mut self.controls.depth_z, 0.001);
+                    number_row(ui, "Stroke", &mut self.controls.stroke_thickness, 0.001);
+                    number_row(ui, "Feed", &mut self.controls.feed, 0.5);
+                    number_row(ui, "Plunge", &mut self.controls.plunge, 0.5);
+                    number_row(ui, "Accuracy", &mut self.controls.accuracy, 0.0005);
+                    number_row(ui, "Arc segments", &mut self.controls.segarc, 0.5);
+                    number_row(ui, "V angle", &mut self.controls.v_bit_angle, 1.0);
+                    number_row(ui, "V diameter", &mut self.controls.v_bit_dia, 0.01);
+                    number_row(ui, "V step", &mut self.controls.v_step_len, 0.001);
+                    number_row(ui, "Allowance", &mut self.controls.allowance, 0.001);
+                    number_row(ui, "Max cut", &mut self.controls.v_max_cut, 0.01);
+                    number_row(ui, "Rough stock", &mut self.controls.v_rough_stk, 0.01);
+                    number_row(ui, "Depth limit", &mut self.controls.v_depth_lim, 0.01);
+                    ui.horizontal_wrapped(|ui| {
+                        ui.checkbox(&mut self.controls.inlay, "Inlay");
+                        ui.checkbox(&mut self.controls.use_image_size, "Image size");
+                        ui.checkbox(&mut self.controls.bmp_long, "Bitmap long");
+                    });
+
+                    ui.separator();
+                    ui.heading("Cleanup");
+                    number_row(ui, "Clean dia", &mut self.controls.clean_dia, 0.01);
+                    number_row(ui, "Clean step %", &mut self.controls.clean_step, 1.0);
+                    number_row(ui, "Clean V", &mut self.controls.clean_v, 0.01);
+
+                    ui.separator();
+                    ui.heading("Output");
+                    path_row(ui, "G-code", &mut self.gcode_path);
+                    if ui
+                        .add_enabled(!self.gcode.is_empty(), egui::Button::new("Export G-code"))
+                        .clicked()
+                    {
+                        self.export_current(ExportKind::Gcode);
+                    }
+                    path_row(ui, "SVG", &mut self.svg_path);
+                    if ui
+                        .add_enabled(self.svg.is_some(), egui::Button::new("Export SVG"))
+                        .clicked()
+                    {
+                        self.export_current(ExportKind::Svg);
+                    }
+                    path_row(ui, "DXF", &mut self.dxf_path);
+                    if ui
+                        .add_enabled(self.dxf.is_some(), egui::Button::new("Export DXF"))
+                        .clicked()
+                    {
+                        self.export_current(ExportKind::Dxf);
+                    }
+                    if ui
+                        .add_enabled(!self.gcode.is_empty(), egui::Button::new("Copy G-code"))
+                        .clicked()
+                    {
+                        ui.ctx().copy_text(self.gcode.clone());
+                        self.status = "G-code copied".to_owned();
+                    }
+
+                    ui.separator();
+                    ui.heading("Preview");
+                    ui.checkbox(&mut self.show_toolpath, "Toolpath");
+                    ui.checkbox(&mut self.show_bounds, "Bounds");
+                    ui.checkbox(&mut self.show_v_area, "V-carve area");
+                    ui.label(format!("G-code lines: {}", self.gcode_lines));
+                    ui.label(format!("Preview moves: {}", self.preview_segments.len()));
+                });
             });
 
         egui::Panel::bottom("status_log")
@@ -290,16 +435,19 @@ impl eframe::App for RengraveApp {
                 ui.horizontal(|ui| {
                     ui.label("Status:");
                     ui.monospace(&self.status);
+                    ui.separator();
+                    ui.monospace(format!(
+                        "{} lines, {} preview moves",
+                        self.gcode_lines,
+                        self.preview_segments.len()
+                    ));
                 });
                 ui.separator();
-                ui.monospace(format!(
-                    "Primary output: {} lines, {} preview moves",
-                    self.gcode_lines,
-                    self.preview_segments.len()
-                ));
-                for warning in &self.warnings {
-                    ui.colored_label(egui::Color32::from_rgb(225, 176, 84), warning);
-                }
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    for warning in &self.warnings {
+                        ui.colored_label(egui::Color32::from_rgb(225, 176, 84), warning);
+                    }
+                });
             });
 
         egui::CentralPanel::default().show_inside(ui, |ui| {
@@ -326,16 +474,503 @@ impl eframe::App for RengraveApp {
 }
 
 impl RengraveApp {
-    fn current_cut_type(&self) -> &'static str {
-        if self
-            .gcode
-            .lines()
-            .any(|line| line.contains("fengrave_set cut_type") && line.contains("v-carve"))
-        {
-            "V-carve"
-        } else {
-            "Engrave"
+    fn fit_preview(&mut self) {
+        self.transform.pan = Point::default();
+        self.transform.zoom = 80.0;
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct UiControls {
+    cut_type: CutTypeChoice,
+    units: UnitsChoice,
+    bit_shape: BitShapeChoice,
+    arc_fit: ArcFitChoice,
+    origin: OriginChoice,
+    justify: JustifyChoice,
+    yscale: f64,
+    xscale_percent: f64,
+    line_space: f64,
+    char_space_percent: f64,
+    word_space_percent: f64,
+    angle_degrees: f64,
+    text_radius: f64,
+    safe_z: f64,
+    depth_z: f64,
+    stroke_thickness: f64,
+    xorigin: f64,
+    yorigin: f64,
+    segarc: f64,
+    accuracy: f64,
+    feed: f64,
+    plunge: f64,
+    boxgap: f64,
+    v_bit_angle: f64,
+    v_bit_dia: f64,
+    v_step_len: f64,
+    allowance: f64,
+    v_max_cut: f64,
+    v_rough_stk: f64,
+    v_depth_lim: f64,
+    clean_dia: f64,
+    clean_step: f64,
+    clean_v: f64,
+    flip: bool,
+    mirror: bool,
+    outer: bool,
+    upper: bool,
+    plotbox: bool,
+    use_image_size: bool,
+    inlay: bool,
+    bmp_long: bool,
+}
+
+impl UiControls {
+    fn from_settings(settings: &LegacySettings) -> Self {
+        Self {
+            cut_type: CutTypeChoice::parse(settings.get_last("cut_type").unwrap_or("engrave")),
+            units: UnitsChoice::parse(settings.get_last("units").unwrap_or("in")),
+            bit_shape: BitShapeChoice::parse(settings.get_last("bit_shape").unwrap_or("VBIT")),
+            arc_fit: ArcFitChoice::parse(settings.get_last("arc_fit").unwrap_or("none")),
+            origin: OriginChoice::parse(settings.get_last("origin").unwrap_or("Default")),
+            justify: JustifyChoice::parse(settings.get_last("justify").unwrap_or("Left")),
+            yscale: setting_f64(settings, "YSCALE", 2.0),
+            xscale_percent: setting_f64(settings, "XSCALE", 100.0),
+            line_space: setting_f64(settings, "LSPACE", 1.1),
+            char_space_percent: setting_f64(settings, "CSPACE", 25.0),
+            word_space_percent: setting_f64(settings, "WSPACE", 100.0),
+            angle_degrees: setting_f64(settings, "TANGLE", 0.0),
+            text_radius: setting_f64(settings, "TRADIUS", 0.0),
+            safe_z: setting_f64(settings, "ZSAFE", 0.25),
+            depth_z: setting_f64(settings, "ZCUT", -0.005),
+            stroke_thickness: setting_f64(settings, "STHICK", 0.01),
+            xorigin: setting_f64(settings, "xorigin", 0.0),
+            yorigin: setting_f64(settings, "yorigin", 0.0),
+            segarc: setting_f64(settings, "segarc", 5.0),
+            accuracy: setting_f64(settings, "accuracy", 0.001),
+            feed: setting_f64(settings, "FEED", 5.0),
+            plunge: setting_f64(settings, "PLUNGE", 0.0),
+            boxgap: setting_f64(settings, "boxgap", 0.25),
+            v_bit_angle: setting_f64(settings, "v_bit_angle", 60.0),
+            v_bit_dia: setting_f64(settings, "v_bit_dia", 0.5),
+            v_step_len: setting_f64(settings, "v_step_len", 0.01),
+            allowance: setting_f64(settings, "allowance", 0.0),
+            v_max_cut: setting_f64(settings, "v_max_cut", -1.0),
+            v_rough_stk: setting_f64(settings, "v_rough_stk", 0.0),
+            v_depth_lim: setting_f64(settings, "v_depth_lim", 0.0),
+            clean_dia: setting_f64(settings, "clean_dia", 0.25),
+            clean_step: setting_f64(settings, "clean_step", 50.0),
+            clean_v: setting_f64(settings, "clean_v", 0.05),
+            flip: get_legacy_bool(settings, "flip", false),
+            mirror: get_legacy_bool(settings, "mirror", false),
+            outer: get_legacy_bool(settings, "outer", true),
+            upper: get_legacy_bool(settings, "upper", true),
+            plotbox: get_legacy_bool(settings, "plotbox", false),
+            use_image_size: get_legacy_bool(settings, "useIMGsize", false),
+            inlay: get_legacy_bool(settings, "inlay", false),
+            bmp_long: get_legacy_bool(settings, "bmp_long", true),
         }
+    }
+
+    fn overrides(&self) -> Vec<LegacySetting> {
+        let mut entries = Vec::new();
+        push_setting(&mut entries, "cut_type", self.cut_type.value(), false);
+        push_setting(&mut entries, "units", self.units.value(), false);
+        push_setting(&mut entries, "bit_shape", self.bit_shape.value(), false);
+        push_setting(&mut entries, "arc_fit", self.arc_fit.value(), false);
+        push_setting(&mut entries, "origin", self.origin.value(), false);
+        push_setting(&mut entries, "justify", self.justify.value(), false);
+        push_setting(
+            &mut entries,
+            "YSCALE",
+            format_setting_number(self.yscale),
+            false,
+        );
+        push_setting(
+            &mut entries,
+            "XSCALE",
+            format_setting_number(self.xscale_percent),
+            false,
+        );
+        push_setting(
+            &mut entries,
+            "LSPACE",
+            format_setting_number(self.line_space),
+            false,
+        );
+        push_setting(
+            &mut entries,
+            "CSPACE",
+            format_setting_number(self.char_space_percent),
+            false,
+        );
+        push_setting(
+            &mut entries,
+            "WSPACE",
+            format_setting_number(self.word_space_percent),
+            false,
+        );
+        push_setting(
+            &mut entries,
+            "TANGLE",
+            format_setting_number(self.angle_degrees),
+            false,
+        );
+        push_setting(
+            &mut entries,
+            "TRADIUS",
+            format_setting_number(self.text_radius),
+            false,
+        );
+        push_setting(
+            &mut entries,
+            "ZSAFE",
+            format_setting_number(self.safe_z),
+            false,
+        );
+        push_setting(
+            &mut entries,
+            "ZCUT",
+            format_setting_number(self.depth_z),
+            false,
+        );
+        push_setting(
+            &mut entries,
+            "STHICK",
+            format_setting_number(self.stroke_thickness),
+            false,
+        );
+        push_setting(
+            &mut entries,
+            "xorigin",
+            format_setting_number(self.xorigin),
+            false,
+        );
+        push_setting(
+            &mut entries,
+            "yorigin",
+            format_setting_number(self.yorigin),
+            false,
+        );
+        push_setting(
+            &mut entries,
+            "segarc",
+            format_setting_number(self.segarc),
+            false,
+        );
+        push_setting(
+            &mut entries,
+            "accuracy",
+            format_setting_number(self.accuracy),
+            false,
+        );
+        push_setting(
+            &mut entries,
+            "FEED",
+            format_setting_number(self.feed),
+            false,
+        );
+        push_setting(
+            &mut entries,
+            "PLUNGE",
+            format_setting_number(self.plunge),
+            false,
+        );
+        push_setting(
+            &mut entries,
+            "boxgap",
+            format_setting_number(self.boxgap),
+            false,
+        );
+        push_setting(
+            &mut entries,
+            "v_bit_angle",
+            format_setting_number(self.v_bit_angle),
+            false,
+        );
+        push_setting(
+            &mut entries,
+            "v_bit_dia",
+            format_setting_number(self.v_bit_dia),
+            false,
+        );
+        push_setting(
+            &mut entries,
+            "v_step_len",
+            format_setting_number(self.v_step_len),
+            false,
+        );
+        push_setting(
+            &mut entries,
+            "allowance",
+            format_setting_number(self.allowance),
+            false,
+        );
+        push_setting(
+            &mut entries,
+            "v_max_cut",
+            format_setting_number(self.v_max_cut),
+            false,
+        );
+        push_setting(
+            &mut entries,
+            "v_rough_stk",
+            format_setting_number(self.v_rough_stk),
+            false,
+        );
+        push_setting(
+            &mut entries,
+            "v_depth_lim",
+            format_setting_number(self.v_depth_lim),
+            false,
+        );
+        push_setting(
+            &mut entries,
+            "clean_dia",
+            format_setting_number(self.clean_dia),
+            false,
+        );
+        push_setting(
+            &mut entries,
+            "clean_step",
+            format_setting_number(self.clean_step),
+            false,
+        );
+        push_setting(
+            &mut entries,
+            "clean_v",
+            format_setting_number(self.clean_v),
+            false,
+        );
+        push_bool(&mut entries, "flip", self.flip);
+        push_bool(&mut entries, "mirror", self.mirror);
+        push_bool(&mut entries, "outer", self.outer);
+        push_bool(&mut entries, "upper", self.upper);
+        push_bool(&mut entries, "plotbox", self.plotbox);
+        push_bool(&mut entries, "useIMGsize", self.use_image_size);
+        push_bool(&mut entries, "inlay", self.inlay);
+        push_bool(&mut entries, "bmp_long", self.bmp_long);
+        entries
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CutTypeChoice {
+    Engrave,
+    VCarve,
+}
+
+impl CutTypeChoice {
+    fn parse(value: &str) -> Self {
+        if value == "v-carve" {
+            Self::VCarve
+        } else {
+            Self::Engrave
+        }
+    }
+
+    fn value(self) -> &'static str {
+        match self {
+            Self::Engrave => "engrave",
+            Self::VCarve => "v-carve",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Engrave => "Engrave",
+            Self::VCarve => "V-carve",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UnitsChoice {
+    Inch,
+    Mm,
+}
+
+impl UnitsChoice {
+    fn parse(value: &str) -> Self {
+        if value == "mm" { Self::Mm } else { Self::Inch }
+    }
+
+    fn value(self) -> &'static str {
+        match self {
+            Self::Inch => "in",
+            Self::Mm => "mm",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Inch => "Inch",
+            Self::Mm => "mm",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BitShapeChoice {
+    VBit,
+    Ball,
+    Flat,
+}
+
+impl BitShapeChoice {
+    fn parse(value: &str) -> Self {
+        match value {
+            "BALL" => Self::Ball,
+            "FLAT" => Self::Flat,
+            _ => Self::VBit,
+        }
+    }
+
+    fn value(self) -> &'static str {
+        match self {
+            Self::VBit => "VBIT",
+            Self::Ball => "BALL",
+            Self::Flat => "FLAT",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::VBit => "V-bit",
+            Self::Ball => "Ball",
+            Self::Flat => "Flat",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ArcFitChoice {
+    NoFit,
+    Center,
+    Radius,
+}
+
+impl ArcFitChoice {
+    fn parse(value: &str) -> Self {
+        match value {
+            "center" => Self::Center,
+            "radius" => Self::Radius,
+            _ => Self::NoFit,
+        }
+    }
+
+    fn value(self) -> &'static str {
+        match self {
+            Self::NoFit => "none",
+            Self::Center => "center",
+            Self::Radius => "radius",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::NoFit => "None",
+            Self::Center => "Center",
+            Self::Radius => "Radius",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum JustifyChoice {
+    Left,
+    Center,
+    Right,
+}
+
+impl JustifyChoice {
+    const ALL: [Self; 3] = [Self::Left, Self::Center, Self::Right];
+
+    fn parse(value: &str) -> Self {
+        match value {
+            "Center" => Self::Center,
+            "Right" => Self::Right,
+            _ => Self::Left,
+        }
+    }
+
+    fn value(self) -> &'static str {
+        match self {
+            Self::Left => "Left",
+            Self::Center => "Center",
+            Self::Right => "Right",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        self.value()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OriginChoice {
+    Default,
+    TopLeft,
+    TopCenter,
+    TopRight,
+    MidLeft,
+    MidCenter,
+    MidRight,
+    BotLeft,
+    BotCenter,
+    BotRight,
+    ArcCenter,
+}
+
+impl OriginChoice {
+    const ALL: [Self; 11] = [
+        Self::Default,
+        Self::TopLeft,
+        Self::TopCenter,
+        Self::TopRight,
+        Self::MidLeft,
+        Self::MidCenter,
+        Self::MidRight,
+        Self::BotLeft,
+        Self::BotCenter,
+        Self::BotRight,
+        Self::ArcCenter,
+    ];
+
+    fn parse(value: &str) -> Self {
+        match value {
+            "Top-Left" => Self::TopLeft,
+            "Top-Center" => Self::TopCenter,
+            "Top-Right" => Self::TopRight,
+            "Mid-Left" => Self::MidLeft,
+            "Mid-Center" => Self::MidCenter,
+            "Mid-Right" => Self::MidRight,
+            "Bot-Left" => Self::BotLeft,
+            "Bot-Center" => Self::BotCenter,
+            "Bot-Right" => Self::BotRight,
+            "Arc-Center" => Self::ArcCenter,
+            _ => Self::Default,
+        }
+    }
+
+    fn value(self) -> &'static str {
+        match self {
+            Self::Default => "Default",
+            Self::TopLeft => "Top-Left",
+            Self::TopCenter => "Top-Center",
+            Self::TopRight => "Top-Right",
+            Self::MidLeft => "Mid-Left",
+            Self::MidCenter => "Mid-Center",
+            Self::MidRight => "Mid-Right",
+            Self::BotLeft => "Bot-Left",
+            Self::BotCenter => "Bot-Center",
+            Self::BotRight => "Bot-Right",
+            Self::ArcCenter => "Arc-Center",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        self.value()
     }
 }
 
@@ -365,13 +1000,82 @@ fn write_text_file(path_text: &str, contents: &str) -> Result<PathBuf, String> {
     Ok(path)
 }
 
-fn file_hint(ui: &mut egui::Ui, label: &str, value: &Option<PathBuf>) {
-    if let Some(path) = value {
-        ui.horizontal(|ui| {
-            ui.label(label);
-            ui.monospace(path.display().to_string());
-        });
+fn path_to_text(path: &Option<PathBuf>) -> String {
+    path.as_ref()
+        .map(|path| path.display().to_string())
+        .unwrap_or_default()
+}
+
+fn path_from_text(text: &str) -> Option<PathBuf> {
+    let trimmed = text.trim();
+    (!trimmed.is_empty()).then(|| PathBuf::from(trimmed))
+}
+
+fn path_row(ui: &mut egui::Ui, label: &str, value: &mut String) {
+    ui.horizontal(|ui| {
+        ui.add_sized([88.0, 20.0], egui::Label::new(label));
+        ui.add_sized(
+            [ui.available_width(), 22.0],
+            egui::TextEdit::singleline(value),
+        );
+    });
+}
+
+fn number_row(ui: &mut egui::Ui, label: &str, value: &mut f64, speed: f64) {
+    ui.horizontal(|ui| {
+        ui.add_sized([124.0, 20.0], egui::Label::new(label));
+        ui.add(egui::DragValue::new(value).speed(speed).max_decimals(4));
+    });
+}
+
+fn combo_row(
+    ui: &mut egui::Ui,
+    label: &str,
+    selected_text: &str,
+    body: impl FnOnce(&mut egui::Ui),
+) {
+    ui.horizontal(|ui| {
+        ui.add_sized([124.0, 20.0], egui::Label::new(label));
+        egui::ComboBox::from_id_salt(label)
+            .selected_text(selected_text)
+            .show_ui(ui, body);
+    });
+}
+
+fn setting_f64(settings: &LegacySettings, key: &str, default: f64) -> f64 {
+    settings
+        .get_last(key)
+        .and_then(|value| value.trim().parse().ok())
+        .unwrap_or(default)
+}
+
+fn format_setting_number(value: f64) -> String {
+    if !value.is_finite() {
+        return "0".to_owned();
     }
+
+    let value = if value.abs() < 0.0000005 { 0.0 } else { value };
+    let mut text = format!("{value:.6}");
+    while text.contains('.') && text.ends_with('0') {
+        text.pop();
+    }
+    if text.ends_with('.') {
+        text.pop();
+    }
+    text
+}
+
+fn push_setting(
+    entries: &mut Vec<LegacySetting>,
+    key: &'static str,
+    value: impl Into<String>,
+    quoted: bool,
+) {
+    entries.push(LegacySetting::new(key, value, quoted));
+}
+
+fn push_bool(entries: &mut Vec<LegacySetting>, key: &'static str, value: bool) {
+    push_setting(entries, key, if value { "1" } else { "0" }, false);
 }
 
 fn apply_theme(ctx: &egui::Context) {
@@ -689,6 +1393,59 @@ mod tests {
             default_output_path(&None, "rengrave_output.ngc"),
             "rengrave_output.ngc"
         );
+    }
+
+    #[test]
+    fn path_from_text_trims_empty_paths() {
+        assert_eq!(path_from_text("  "), None);
+        assert_eq!(
+            path_from_text("  /tmp/rengrave.ngc  "),
+            Some(PathBuf::from("/tmp/rengrave.ngc"))
+        );
+        assert_eq!(
+            path_to_text(&Some(PathBuf::from("/tmp/rengrave.ngc"))),
+            "/tmp/rengrave.ngc"
+        );
+    }
+
+    #[test]
+    fn ui_controls_emit_core_overrides() {
+        let mut settings = LegacySettings::default();
+        settings.set_or_push("cut_type", "engrave", false);
+        settings.set_or_push("units", "in", false);
+        settings.set_or_push("bit_shape", "VBIT", false);
+        settings.set_or_push("arc_fit", "none", false);
+        settings.set_or_push("origin", "Default", false);
+        settings.set_or_push("justify", "Left", false);
+
+        let mut controls = UiControls::from_settings(&settings);
+        controls.cut_type = CutTypeChoice::VCarve;
+        controls.units = UnitsChoice::Mm;
+        controls.bit_shape = BitShapeChoice::Ball;
+        controls.arc_fit = ArcFitChoice::Center;
+        controls.origin = OriginChoice::BotLeft;
+        controls.justify = JustifyChoice::Right;
+        controls.yscale = 4.25;
+        controls.plotbox = true;
+        controls.mirror = true;
+
+        let overrides = controls.overrides();
+        let value_for = |key: &str| {
+            overrides
+                .iter()
+                .find(|entry| entry.key == key)
+                .map(|entry| entry.value.as_str())
+        };
+
+        assert_eq!(value_for("cut_type"), Some("v-carve"));
+        assert_eq!(value_for("units"), Some("mm"));
+        assert_eq!(value_for("bit_shape"), Some("BALL"));
+        assert_eq!(value_for("arc_fit"), Some("center"));
+        assert_eq!(value_for("origin"), Some("Bot-Left"));
+        assert_eq!(value_for("justify"), Some("Right"));
+        assert_eq!(value_for("YSCALE"), Some("4.25"));
+        assert_eq!(value_for("plotbox"), Some("1"));
+        assert_eq!(value_for("mirror"), Some("1"));
     }
 
     #[test]

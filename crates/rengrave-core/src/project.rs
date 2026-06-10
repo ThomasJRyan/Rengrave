@@ -4,7 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::external::{PotraceStatus, detect_potrace, requires_potrace};
-use crate::settings::{LegacySettings, default_legacy_settings, tcode_settings};
+use crate::settings::{LegacySetting, LegacySettings, default_legacy_settings, tcode_settings};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DocumentRequest {
@@ -12,6 +12,7 @@ pub struct DocumentRequest {
     pub font_or_image: Option<PathBuf>,
     pub default_dir: Option<PathBuf>,
     pub text: Option<String>,
+    pub settings_overrides: Vec<LegacySetting>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -155,6 +156,17 @@ fn load_document_with_potrace_probe(
         settings.set_or_push("NGC_DIR", default_dir.display().to_string(), true);
     }
 
+    for override_entry in &request.settings_overrides {
+        if override_entry.key == "TCODE" {
+            continue;
+        }
+        settings.set_or_push(
+            override_entry.key.clone(),
+            override_entry.value.clone(),
+            override_entry.quoted,
+        );
+    }
+
     let text_from_settings = match settings.text_from_tcode() {
         Ok(text) => text,
         Err(err) => {
@@ -245,6 +257,33 @@ mod tests {
             document.settings.get_last("imagefile"),
             Some("/tmp/example.dxf")
         );
+    }
+
+    #[test]
+    fn settings_overrides_are_applied_after_loaded_settings() {
+        let mut settings = default_legacy_settings();
+        settings.set_or_push("YSCALE", "2.0", false);
+        settings.set_or_push("plotbox", "0", false);
+        let input = settings.to_string();
+        let path = std::env::temp_dir().join(format!(
+            "rengrave-override-settings-{}.ngc",
+            std::process::id()
+        ));
+        fs::write(&path, input).unwrap();
+
+        let document = load_document(&DocumentRequest {
+            gcode_file: Some(path.clone()),
+            settings_overrides: vec![
+                LegacySetting::new("YSCALE", "3.5", false),
+                LegacySetting::new("plotbox", "1", false),
+            ],
+            ..DocumentRequest::default()
+        })
+        .unwrap();
+
+        let _ = fs::remove_file(path);
+        assert_eq!(document.settings.get_last("YSCALE"), Some("3.5"));
+        assert_eq!(document.settings.get_last("plotbox"), Some("1"));
     }
 
     #[test]
