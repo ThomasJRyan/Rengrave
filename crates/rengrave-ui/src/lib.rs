@@ -99,16 +99,11 @@ impl RengraveApp {
             .gcode_file
             .clone()
             .or_else(|| path_from_text(&preferences.settings_path));
-        let font_or_image = options
-            .font_or_image
-            .clone()
-            .or_else(|| path_from_text(&preferences.input_path));
+        let font_or_image = launch_font_or_image_path(&options, &preferences);
         let default_dir = options
             .default_dir
             .clone()
             .or_else(|| path_from_text(&preferences.default_dir_path));
-        let input_catalog =
-            InputCatalog::scan(input_catalog_start_dir(&font_or_image, &default_dir));
         let document_request = DocumentRequest {
             gcode_file: gcode_file.clone(),
             font_or_image: font_or_image.clone(),
@@ -124,6 +119,9 @@ impl RengraveApp {
                 document
             }
         };
+        let display_input_path = document_input_path_for_display(&font_or_image, &document);
+        let input_catalog =
+            InputCatalog::scan(input_catalog_start_dir(&display_input_path, &default_dir));
         let status = if document.warnings.is_empty() {
             "Ready".to_owned()
         } else {
@@ -140,7 +138,7 @@ impl RengraveApp {
             status,
             settings_count: document.settings.entries.len(),
             settings_path: path_to_text(&gcode_file),
-            input_path: path_to_text(&font_or_image),
+            input_path: path_to_text(&display_input_path),
             default_dir_path: path_to_text(&default_dir),
             controls: UiControls::from_settings(&document.settings),
             gcode: String::new(),
@@ -220,15 +218,19 @@ impl RengraveApp {
     }
 
     fn reload_document(&mut self, ctx: egui::Context) {
+        let requested_input = path_from_text(&self.input_path);
         match load_document(&DocumentRequest {
             gcode_file: path_from_text(&self.settings_path),
-            font_or_image: path_from_text(&self.input_path),
+            font_or_image: requested_input.clone(),
             default_dir: path_from_text(&self.default_dir_path),
             text: None,
             settings_overrides: Vec::new(),
         }) {
             Ok(document) => {
+                let display_input_path =
+                    document_input_path_for_display(&requested_input, &document);
                 self.text = document.text;
+                self.input_path = path_to_text(&display_input_path);
                 self.controls = UiControls::from_settings(&document.settings);
                 self.show_toolpath = get_legacy_bool(&document.settings, "show_v_path", true);
                 self.show_bounds = get_legacy_bool(&document.settings, "show_box", true);
@@ -236,6 +238,7 @@ impl RengraveApp {
                 self.settings_count = document.settings.entries.len();
                 self.warnings = document.warnings;
                 self.status = "Document loaded".to_owned();
+                self.refresh_input_catalog();
                 self.save_preferences();
                 self.start_calculation(ctx);
             }
@@ -2335,6 +2338,29 @@ fn default_output_paths(default_dir: &Option<PathBuf>) -> (String, String, Strin
     )
 }
 
+fn launch_font_or_image_path(
+    options: &UiLaunchOptions,
+    preferences: &UiPreferences,
+) -> Option<PathBuf> {
+    options.font_or_image.clone().or_else(|| {
+        if options.gcode_file.is_some() {
+            None
+        } else {
+            path_from_text(&preferences.input_path)
+        }
+    })
+}
+
+fn document_input_path_for_display(
+    requested_input: &Option<PathBuf>,
+    document: &RengraveDocument,
+) -> Option<PathBuf> {
+    document
+        .input_path
+        .clone()
+        .or_else(|| requested_input.clone())
+}
+
 fn secondary_output_path(path: &Path, suffix: &str) -> PathBuf {
     let stem = path
         .file_stem()
@@ -3975,6 +4001,58 @@ mod tests {
                 "rengrave_output.svg".to_owned(),
                 "rengrave_output.dxf".to_owned()
             )
+        );
+    }
+
+    #[test]
+    fn launch_font_or_image_ignores_preferences_when_settings_arg_is_explicit() {
+        let preferences = UiPreferences {
+            input_path: "/tmp/remembered.cxf".to_owned(),
+            ..UiPreferences::default()
+        };
+
+        assert_eq!(
+            launch_font_or_image_path(
+                &UiLaunchOptions {
+                    gcode_file: Some(PathBuf::from("/tmp/job.ngc")),
+                    ..UiLaunchOptions::default()
+                },
+                &preferences
+            ),
+            None
+        );
+        assert_eq!(
+            launch_font_or_image_path(&UiLaunchOptions::default(), &preferences),
+            Some(PathBuf::from("/tmp/remembered.cxf"))
+        );
+        assert_eq!(
+            launch_font_or_image_path(
+                &UiLaunchOptions {
+                    gcode_file: Some(PathBuf::from("/tmp/job.ngc")),
+                    font_or_image: Some(PathBuf::from("/tmp/explicit.ttf")),
+                    ..UiLaunchOptions::default()
+                },
+                &preferences
+            ),
+            Some(PathBuf::from("/tmp/explicit.ttf"))
+        );
+    }
+
+    #[test]
+    fn document_input_path_for_display_prefers_resolved_document_path() {
+        let requested = Some(PathBuf::from("/tmp/old-input.cxf"));
+        let mut document = RengraveDocument::default();
+        document.input_path = Some(PathBuf::from("/tmp/settings/romanc.cxf"));
+
+        assert_eq!(
+            document_input_path_for_display(&requested, &document),
+            Some(PathBuf::from("/tmp/settings/romanc.cxf"))
+        );
+
+        document.input_path = None;
+        assert_eq!(
+            document_input_path_for_display(&requested, &document),
+            requested
         );
     }
 

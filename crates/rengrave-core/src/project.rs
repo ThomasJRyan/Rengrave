@@ -19,6 +19,7 @@ pub struct DocumentRequest {
 pub struct RengraveDocument {
     pub settings: LegacySettings,
     pub text: String,
+    pub input_path: Option<PathBuf>,
     pub warnings: Vec<String>,
 }
 
@@ -29,6 +30,7 @@ impl Default for RengraveDocument {
         settings.entries.extend(tcode_settings(&text));
 
         Self {
+            input_path: resolve_input_path(&settings),
             settings,
             text,
             warnings: Vec::new(),
@@ -81,6 +83,13 @@ pub fn resolve_input_kind(settings: &LegacySettings) -> InputKind {
                 _ => InputKind::Missing,
             }
         }
+    }
+}
+
+pub fn resolve_input_path(settings: &LegacySettings) -> Option<PathBuf> {
+    match resolve_input_kind(settings) {
+        InputKind::CxfFont(path) | InputKind::TtfFont(path) | InputKind::Image(path) => Some(path),
+        InputKind::Missing => None,
     }
 }
 
@@ -186,6 +195,7 @@ fn load_document_with_potrace_probe(
     settings.entries.extend(tcode_settings(&text));
 
     Ok(RengraveDocument {
+        input_path: resolve_input_path(&settings),
         settings,
         text,
         warnings,
@@ -257,6 +267,7 @@ mod tests {
             document.settings.get_last("imagefile"),
             Some("/tmp/example.dxf")
         );
+        assert_eq!(document.input_path, Some(PathBuf::from("/tmp/example.dxf")));
     }
 
     #[test]
@@ -300,6 +311,64 @@ mod tests {
         settings.set_or_push("NGC_DIR", dir.display().to_string(), true);
 
         assert_eq!(resolve_input_kind(&settings), InputKind::Image(image_path));
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn load_document_exposes_resolved_font_path_from_settings() {
+        let dir = std::env::temp_dir().join(format!(
+            "rengrave-settings-font-path-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let settings_path = dir.join("settings.ngc");
+        fs::write(
+            &settings_path,
+            format!(
+                "(fengrave_set input_type  text )\n(fengrave_set fontdir     \"{}\" )\n(fengrave_set fontfile    \"romanc.cxf\" )\n",
+                dir.display()
+            ),
+        )
+        .unwrap();
+
+        let document = load_document(&DocumentRequest {
+            gcode_file: Some(settings_path),
+            ..DocumentRequest::default()
+        })
+        .unwrap();
+
+        assert_eq!(document.input_path, Some(dir.join("romanc.cxf")));
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn load_document_exposes_resolved_stale_image_path() {
+        let dir = std::env::temp_dir().join(format!(
+            "rengrave-settings-image-path-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let image_path = dir.join("part.dxf");
+        fs::write(&image_path, "0\nSECTION\n0\nENDSEC\n").unwrap();
+        let settings_path = dir.join("settings.ngc");
+        fs::write(
+            &settings_path,
+            format!(
+                "(fengrave_set input_type  image )\n(fengrave_set imagefile   \"/missing/original/part.dxf\" )\n(fengrave_set NGC_DIR     \"{}\" )\n",
+                dir.display()
+            ),
+        )
+        .unwrap();
+
+        let document = load_document(&DocumentRequest {
+            gcode_file: Some(settings_path),
+            ..DocumentRequest::default()
+        })
+        .unwrap();
+
+        assert_eq!(document.input_path, Some(image_path));
 
         let _ = fs::remove_dir_all(dir);
     }
