@@ -15,7 +15,7 @@ use rengrave_core::external::{PotraceStatus, detect_potrace, requires_potrace};
 use rengrave_core::font::{Font, Stroke, read_cxf, read_ttf};
 use rengrave_core::geometry::{Point, ViewTransform};
 use rengrave_core::project::{DocumentRequest, RengraveDocument, load_document};
-use rengrave_core::settings::{LegacySetting, LegacySettings, get_legacy_bool};
+use rengrave_core::settings::{LegacySetting, LegacySettings, get_legacy_bool, legacy_bool_value};
 use rfd::FileDialog;
 
 const DEFAULT_PREVIEW_ZOOM: f64 = 80.0;
@@ -824,7 +824,20 @@ impl eframe::App for RengraveApp {
                     number_row(ui, "Clean dia", &mut self.controls.clean_dia, 0.01);
                     number_row(ui, "Clean step %", &mut self.controls.clean_step, 1.0);
                     number_row(ui, "Clean V", &mut self.controls.clean_v, 0.01);
-                    text_row(ui, "Clean paths", &mut self.controls.clean_paths);
+                    ui.label("Straight");
+                    ui.horizontal_wrapped(|ui| {
+                        clean_path_checkbox(ui, "Profile", &mut self.controls.clean_paths, 0);
+                        clean_path_checkbox(ui, "X", &mut self.controls.clean_paths, 1);
+                        clean_path_checkbox(ui, "Y", &mut self.controls.clean_paths, 2);
+                        clean_path_checkbox(ui, "Loops", &mut self.controls.clean_paths, 6);
+                    });
+                    ui.label("V-bit");
+                    ui.horizontal_wrapped(|ui| {
+                        clean_path_checkbox(ui, "Profile", &mut self.controls.clean_paths, 3);
+                        clean_path_checkbox(ui, "X", &mut self.controls.clean_paths, 5);
+                        clean_path_checkbox(ui, "Y", &mut self.controls.clean_paths, 4);
+                        clean_path_checkbox(ui, "Loops", &mut self.controls.clean_paths, 7);
+                    });
                     ui.checkbox(&mut self.controls.v_flop, "Flip normals");
 
                     ui.separator();
@@ -2225,6 +2238,34 @@ fn text_row(ui: &mut egui::Ui, label: &str, value: &mut String) {
     });
 }
 
+fn clean_path_checkbox(ui: &mut egui::Ui, label: &str, clean_paths: &mut String, index: usize) {
+    let mut values = parse_clean_path_values(clean_paths);
+    let mut checked = values[index];
+    if ui.checkbox(&mut checked, label).changed() {
+        values[index] = checked;
+        *clean_paths = format_clean_path_values(values);
+    }
+}
+
+fn parse_clean_path_values(value: &str) -> [bool; 8] {
+    let mut values = [true, true, false, true, false, true, false, false];
+    if value.trim().is_empty() {
+        return values;
+    }
+    for (index, token) in value.split(',').take(values.len()).enumerate() {
+        values[index] = legacy_bool_value(token.trim());
+    }
+    values
+}
+
+fn format_clean_path_values(values: [bool; 8]) -> String {
+    values
+        .into_iter()
+        .map(|value| if value { "1" } else { "0" })
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
 fn combo_row(
     ui: &mut egui::Ui,
     label: &str,
@@ -3565,6 +3606,26 @@ mod tests {
         assert_eq!(
             output_file_name("/tmp/out", FileBrowserTarget::DxfOutput),
             "out"
+        );
+    }
+
+    #[test]
+    fn clean_path_values_parse_legacy_order_and_aliases() {
+        assert_eq!(
+            parse_clean_path_values("1,0,True,False,box,no_box,1,0,1"),
+            [true, false, true, false, true, false, true, false]
+        );
+        assert_eq!(
+            parse_clean_path_values(""),
+            [true, true, false, true, false, true, false, false]
+        );
+    }
+
+    #[test]
+    fn clean_path_values_format_f_engrave_order() {
+        assert_eq!(
+            format_clean_path_values([true, false, true, false, true, false, true, false]),
+            "1,0,1,0,1,0,1,0"
         );
     }
 
