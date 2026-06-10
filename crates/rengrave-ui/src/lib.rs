@@ -11,6 +11,7 @@ use std::thread;
 use eframe::egui;
 use rengrave_core::batch::{BatchOutput, BatchRequest, prepare_batch_output};
 use rengrave_core::dxf::read_dxf_font;
+use rengrave_core::external::{PotraceStatus, detect_potrace, requires_potrace};
 use rengrave_core::font::{Font, Stroke, read_cxf, read_ttf};
 use rengrave_core::geometry::{Point, ViewTransform};
 use rengrave_core::project::{DocumentRequest, RengraveDocument, load_document};
@@ -67,6 +68,7 @@ struct RengraveApp {
     calculation: Option<CalculationJob>,
     next_calculation_id: u64,
     warnings: Vec<String>,
+    potrace_status: PotraceStatus,
 }
 
 impl RengraveApp {
@@ -154,6 +156,7 @@ impl RengraveApp {
             calculation: None,
             next_calculation_id: 1,
             warnings: document.warnings,
+            potrace_status: detect_potrace(),
         };
         app.start_calculation(cc.egui_ctx.clone());
         app
@@ -422,6 +425,15 @@ impl RengraveApp {
                 .push(format!("unable to save UI preferences: {err}"));
         }
     }
+
+    fn refresh_potrace_status(&mut self) {
+        self.potrace_status = detect_potrace();
+        self.status = if self.potrace_status.available {
+            "Potrace detected".to_owned()
+        } else {
+            "Potrace missing".to_owned()
+        };
+    }
 }
 
 impl eframe::App for RengraveApp {
@@ -676,8 +688,53 @@ impl eframe::App for RengraveApp {
                     number_row(ui, "Depth limit", &mut self.controls.v_depth_lim, 0.01);
                     ui.horizontal_wrapped(|ui| {
                         ui.checkbox(&mut self.controls.inlay, "Inlay");
+                    });
+
+                    ui.separator();
+                    ui.heading("Bitmap");
+                    ui.horizontal_wrapped(|ui| {
+                        let color = if self.potrace_status.available {
+                            egui::Color32::from_rgb(94, 176, 132)
+                        } else {
+                            egui::Color32::from_rgb(225, 176, 84)
+                        };
+                        ui.colored_label(color, &self.potrace_status.message);
+                        if ui.button("Refresh").clicked() {
+                            self.refresh_potrace_status();
+                        }
+                    });
+                    if input_path_requires_potrace(&self.input_path) {
+                        if self.potrace_status.available {
+                            ui.label("Selected bitmap input will be traced with Potrace");
+                        } else {
+                            ui.colored_label(
+                                egui::Color32::from_rgb(225, 176, 84),
+                                "Bitmap tracing needs Potrace in PATH",
+                            );
+                        }
+                    } else {
+                        ui.label("Select a bitmap input to trace through Potrace");
+                    }
+                    combo_row(
+                        ui,
+                        "Turn policy",
+                        self.controls.bmp_turn_policy.label(),
+                        |ui| {
+                            for value in BitmapTurnPolicy::ALL {
+                                ui.selectable_value(
+                                    &mut self.controls.bmp_turn_policy,
+                                    value,
+                                    value.label(),
+                                );
+                            }
+                        },
+                    );
+                    number_row(ui, "Turd size", &mut self.controls.bmp_turds, 1.0);
+                    number_row(ui, "Alpha max", &mut self.controls.bmp_alpha, 0.05);
+                    number_row(ui, "Opt tolerance", &mut self.controls.bmp_optto, 0.01);
+                    ui.horizontal_wrapped(|ui| {
                         ui.checkbox(&mut self.controls.use_image_size, "Image size");
-                        ui.checkbox(&mut self.controls.bmp_long, "Bitmap long");
+                        ui.checkbox(&mut self.controls.bmp_long, "Long curves");
                     });
 
                     ui.separator();
@@ -857,6 +914,10 @@ struct UiControls {
     clean_dia: f64,
     clean_step: f64,
     clean_v: f64,
+    bmp_turn_policy: BitmapTurnPolicy,
+    bmp_turds: f64,
+    bmp_alpha: f64,
+    bmp_optto: f64,
     flip: bool,
     mirror: bool,
     outer: bool,
@@ -903,6 +964,12 @@ impl UiControls {
             clean_dia: setting_f64(settings, "clean_dia", 0.25),
             clean_step: setting_f64(settings, "clean_step", 50.0),
             clean_v: setting_f64(settings, "clean_v", 0.05),
+            bmp_turn_policy: BitmapTurnPolicy::parse(
+                settings.get_last("bmp_turnp").unwrap_or("minority"),
+            ),
+            bmp_turds: setting_f64(settings, "bmp_turds", 2.0),
+            bmp_alpha: setting_f64(settings, "bmp_alpha", 1.0),
+            bmp_optto: setting_f64(settings, "bmp_optto", 0.2),
             flip: get_legacy_bool(settings, "flip", false),
             mirror: get_legacy_bool(settings, "mirror", false),
             outer: get_legacy_bool(settings, "outer", true),
@@ -1084,6 +1151,30 @@ impl UiControls {
             format_setting_number(self.clean_v),
             false,
         );
+        push_setting(
+            &mut entries,
+            "bmp_turnp",
+            self.bmp_turn_policy.value(),
+            false,
+        );
+        push_setting(
+            &mut entries,
+            "bmp_turds",
+            format_setting_number(self.bmp_turds),
+            false,
+        );
+        push_setting(
+            &mut entries,
+            "bmp_alpha",
+            format_setting_number(self.bmp_alpha),
+            false,
+        );
+        push_setting(
+            &mut entries,
+            "bmp_optto",
+            format_setting_number(self.bmp_optto),
+            false,
+        );
         push_bool(&mut entries, "flip", self.flip);
         push_bool(&mut entries, "mirror", self.mirror);
         push_bool(&mut entries, "outer", self.outer);
@@ -1093,6 +1184,65 @@ impl UiControls {
         push_bool(&mut entries, "inlay", self.inlay);
         push_bool(&mut entries, "bmp_long", self.bmp_long);
         entries
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BitmapTurnPolicy {
+    Minority,
+    Majority,
+    Black,
+    White,
+    Left,
+    Right,
+    Random,
+}
+
+impl BitmapTurnPolicy {
+    const ALL: [Self; 7] = [
+        Self::Minority,
+        Self::Majority,
+        Self::Black,
+        Self::White,
+        Self::Left,
+        Self::Right,
+        Self::Random,
+    ];
+
+    fn parse(value: &str) -> Self {
+        match value {
+            "majority" => Self::Majority,
+            "black" => Self::Black,
+            "white" => Self::White,
+            "left" => Self::Left,
+            "right" => Self::Right,
+            "random" => Self::Random,
+            _ => Self::Minority,
+        }
+    }
+
+    fn value(self) -> &'static str {
+        match self {
+            Self::Minority => "minority",
+            Self::Majority => "majority",
+            Self::Black => "black",
+            Self::White => "white",
+            Self::Left => "left",
+            Self::Right => "right",
+            Self::Random => "random",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Minority => "Minority",
+            Self::Majority => "Majority",
+            Self::Black => "Black",
+            Self::White => "White",
+            Self::Left => "Left",
+            Self::Right => "Right",
+            Self::Random => "Random",
+        }
     }
 }
 
@@ -1692,6 +1842,13 @@ fn path_to_text(path: &Option<PathBuf>) -> String {
 fn path_from_text(text: &str) -> Option<PathBuf> {
     let trimmed = text.trim();
     (!trimmed.is_empty()).then(|| PathBuf::from(trimmed))
+}
+
+fn input_path_requires_potrace(path_text: &str) -> bool {
+    path_from_text(path_text)
+        .as_deref()
+        .map(requires_potrace)
+        .unwrap_or(false)
 }
 
 fn path_row(ui: &mut egui::Ui, label: &str, value: &mut String) -> bool {
@@ -2637,6 +2794,14 @@ mod tests {
     }
 
     #[test]
+    fn input_path_requires_potrace_only_for_bitmap_files() {
+        assert!(input_path_requires_potrace(" /tmp/image.png "));
+        assert!(input_path_requires_potrace("/tmp/image.PBM"));
+        assert!(!input_path_requires_potrace("/tmp/shape.dxf"));
+        assert!(!input_path_requires_potrace("  "));
+    }
+
+    #[test]
     fn browser_start_dir_prefers_current_directory_or_parent() {
         let dir =
             std::env::temp_dir().join(format!("rengrave-ui-browser-start-{}", std::process::id()));
@@ -2877,6 +3042,49 @@ mod tests {
         assert_eq!(value_for("YSCALE"), Some("4.25"));
         assert_eq!(value_for("plotbox"), Some("1"));
         assert_eq!(value_for("mirror"), Some("1"));
+    }
+
+    #[test]
+    fn ui_controls_emit_bitmap_potrace_overrides() {
+        let mut controls = UiControls::from_settings(&LegacySettings::default());
+        controls.bmp_turn_policy = BitmapTurnPolicy::Black;
+        controls.bmp_turds = 7.0;
+        controls.bmp_alpha = 0.75;
+        controls.bmp_optto = 0.125;
+        controls.bmp_long = false;
+        controls.use_image_size = true;
+
+        let overrides = controls.overrides();
+        let value_for = |key: &str| {
+            overrides
+                .iter()
+                .find(|entry| entry.key == key)
+                .map(|entry| entry.value.as_str())
+        };
+
+        assert_eq!(value_for("bmp_turnp"), Some("black"));
+        assert_eq!(value_for("bmp_turds"), Some("7"));
+        assert_eq!(value_for("bmp_alpha"), Some("0.75"));
+        assert_eq!(value_for("bmp_optto"), Some("0.125"));
+        assert_eq!(value_for("bmp_long"), Some("0"));
+        assert_eq!(value_for("useIMGsize"), Some("1"));
+    }
+
+    #[test]
+    fn bitmap_turn_policy_parses_legacy_values() {
+        assert_eq!(
+            BitmapTurnPolicy::parse("majority"),
+            BitmapTurnPolicy::Majority
+        );
+        assert_eq!(BitmapTurnPolicy::parse("black"), BitmapTurnPolicy::Black);
+        assert_eq!(BitmapTurnPolicy::parse("white"), BitmapTurnPolicy::White);
+        assert_eq!(BitmapTurnPolicy::parse("left"), BitmapTurnPolicy::Left);
+        assert_eq!(BitmapTurnPolicy::parse("right"), BitmapTurnPolicy::Right);
+        assert_eq!(BitmapTurnPolicy::parse("random"), BitmapTurnPolicy::Random);
+        assert_eq!(
+            BitmapTurnPolicy::parse("unsupported"),
+            BitmapTurnPolicy::Minority
+        );
     }
 
     #[test]
