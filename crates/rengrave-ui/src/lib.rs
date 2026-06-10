@@ -173,6 +173,16 @@ impl RengraveApp {
         }
     }
 
+    fn settings_request_for_save(&self) -> DocumentRequest {
+        DocumentRequest {
+            gcode_file: settings_base_path_for_save(&self.settings_path),
+            font_or_image: path_from_text(&self.input_path),
+            default_dir: path_from_text(&self.default_dir_path),
+            text: Some(self.text.clone()),
+            settings_overrides: self.controls.overrides(),
+        }
+    }
+
     fn reload_document(&mut self, ctx: egui::Context) {
         match load_document(&DocumentRequest {
             gcode_file: path_from_text(&self.settings_path),
@@ -194,6 +204,31 @@ impl RengraveApp {
                 self.cancel_calculation("Load failed");
                 self.status = "Load failed".to_owned();
                 self.warnings = vec![err.to_string()];
+            }
+        }
+    }
+
+    fn save_current_settings(&mut self) {
+        let Some(path) = path_from_text(&self.settings_path) else {
+            self.status = "Settings path is empty".to_owned();
+            return;
+        };
+
+        match settings_file_contents(&self.settings_request_for_save()) {
+            Ok((contents, warnings)) => match write_text_file(&self.settings_path, &contents) {
+                Ok(_) => {
+                    self.status = format!("Settings saved: {}", path.display());
+                    self.warnings = warnings;
+                    self.save_preferences();
+                }
+                Err(err) => {
+                    self.status = "Settings save failed".to_owned();
+                    self.warnings.push(err);
+                }
+            },
+            Err(err) => {
+                self.status = "Settings save failed".to_owned();
+                self.warnings.push(err);
             }
         }
     }
@@ -456,6 +491,15 @@ impl eframe::App for RengraveApp {
                     ui.horizontal(|ui| {
                         if ui.button("Load").clicked() {
                             self.reload_document(ui.ctx().clone());
+                        }
+                        if ui
+                            .add_enabled(
+                                !self.settings_path.trim().is_empty(),
+                                egui::Button::new("Save Settings"),
+                            )
+                            .clicked()
+                        {
+                            self.save_current_settings();
                         }
                         if ui.button("Calculate").clicked() {
                             self.start_calculation(ui.ctx().clone());
@@ -1620,6 +1664,15 @@ fn calculation_request_is_stale(current: &BatchRequest, expected: &BatchRequest)
         || current.dxf_output.is_some() != expected.dxf_output.is_some()
 }
 
+fn settings_base_path_for_save(path_text: &str) -> Option<PathBuf> {
+    path_from_text(path_text).filter(|path| path.is_file())
+}
+
+fn settings_file_contents(request: &DocumentRequest) -> Result<(String, Vec<String>), String> {
+    let document = load_document(request).map_err(|err| err.to_string())?;
+    Ok((document.settings.to_string(), document.warnings))
+}
+
 fn write_text_file(path_text: &str, contents: &str) -> Result<PathBuf, String> {
     let path = PathBuf::from(path_text.trim());
     if path.as_os_str().is_empty() {
@@ -2505,6 +2558,69 @@ mod tests {
             &export_toggle_changed,
             &expected
         ));
+    }
+
+    #[test]
+    fn settings_base_path_for_save_uses_only_existing_files() {
+        let dir =
+            std::env::temp_dir().join(format!("rengrave-ui-settings-base-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let existing = dir.join("settings.ngc");
+        let missing = dir.join("new-settings.ngc");
+        fs::write(&existing, "(fengrave_set YSCALE      2.0 )\n").unwrap();
+
+        assert_eq!(
+            settings_base_path_for_save(&existing.display().to_string()),
+            Some(existing)
+        );
+        assert_eq!(
+            settings_base_path_for_save(&missing.display().to_string()),
+            None
+        );
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn settings_file_contents_include_current_overrides_and_text() {
+        let (contents, warnings) = settings_file_contents(&DocumentRequest {
+            text: Some("AB".to_owned()),
+            settings_overrides: vec![
+                LegacySetting::new("YSCALE", "3.25", false),
+                LegacySetting::new("plotbox", "1", false),
+            ],
+            ..DocumentRequest::default()
+        })
+        .unwrap();
+
+        assert!(warnings.is_empty());
+        assert!(contents.contains("(fengrave_set YSCALE      3.25 )"));
+        assert!(contents.contains("(fengrave_set plotbox     1 )"));
+        assert!(contents.contains("(fengrave_set TCODE       065 066 )"));
+    }
+
+    #[test]
+    fn settings_file_contents_can_merge_existing_file() {
+        let dir =
+            std::env::temp_dir().join(format!("rengrave-ui-settings-merge-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.ngc");
+        fs::write(
+            &path,
+            "(fengrave_set units       mm )\n(fengrave_set YSCALE      2.0 )\n",
+        )
+        .unwrap();
+
+        let (contents, _) = settings_file_contents(&DocumentRequest {
+            gcode_file: Some(path),
+            settings_overrides: vec![LegacySetting::new("YSCALE", "4.0", false)],
+            ..DocumentRequest::default()
+        })
+        .unwrap();
+
+        let _ = fs::remove_dir_all(dir);
+        assert!(contents.contains("(fengrave_set units       mm )"));
+        assert!(contents.contains("(fengrave_set YSCALE      4.0 )"));
     }
 
     #[test]
