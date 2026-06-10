@@ -2122,6 +2122,7 @@ name = "rengrave-ui"
 version = "0.1.0"
 dependencies = [
  "eframe",
+ "image",
  "rengrave-core",
 ]
 

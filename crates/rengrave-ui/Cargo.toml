@@ -11,5 +11,5 @@ path = "src/main.rs"
 
 [dependencies]
 eframe.workspace = true
+image.workspace = true
 rengrave-core = { path = "../rengrave-core" }
-

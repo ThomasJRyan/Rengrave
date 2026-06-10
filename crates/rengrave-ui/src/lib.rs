@@ -10,6 +10,8 @@ use std::thread;
 
 use eframe::egui;
 use rengrave_core::batch::{BatchOutput, BatchRequest, prepare_batch_output};
+use rengrave_core::dxf::read_dxf_font;
+use rengrave_core::font::{Font, Stroke, read_cxf, read_ttf};
 use rengrave_core::geometry::{Point, ViewTransform};
 use rengrave_core::project::{DocumentRequest, RengraveDocument, load_document};
 use rengrave_core::settings::{LegacySetting, LegacySettings, get_legacy_bool};
@@ -60,6 +62,7 @@ struct RengraveApp {
     show_v_area: bool,
     browser: Option<FileBrowser>,
     input_catalog: InputCatalog,
+    input_preview: InputPreview,
     preferences_path: Option<PathBuf>,
     calculation: Option<CalculationJob>,
     next_calculation_id: u64,
@@ -146,6 +149,7 @@ impl RengraveApp {
             show_v_area: false,
             browser: None,
             input_catalog,
+            input_preview: InputPreview::default(),
             preferences_path,
             calculation: None,
             next_calculation_id: 1,
@@ -495,6 +499,10 @@ impl eframe::App for RengraveApp {
                             });
                     }
                     ui.separator();
+                    ui.heading("Input Preview");
+                    self.ensure_input_preview();
+                    draw_input_preview(ui, &mut self.input_preview);
+                    ui.separator();
                     ui.label("Text");
                     ui.add_sized(
                         [ui.available_width(), 120.0],
@@ -760,6 +768,13 @@ impl RengraveApp {
             .as_ref()
             .map(|job| calculation_request_is_stale(&self.batch_request(true), &job.request))
             .unwrap_or(false)
+    }
+
+    fn ensure_input_preview(&mut self) {
+        let path = path_from_text(&self.input_path);
+        if self.input_preview.path != path {
+            self.input_preview = InputPreview::load(path);
+        }
     }
 }
 
@@ -1516,6 +1531,55 @@ impl InputCatalogKind {
     }
 }
 
+struct InputPreview {
+    path: Option<PathBuf>,
+    data: InputPreviewData,
+    texture: Option<egui::TextureHandle>,
+}
+
+impl Default for InputPreview {
+    fn default() -> Self {
+        Self {
+            path: None,
+            data: InputPreviewData::Empty,
+            texture: None,
+        }
+    }
+}
+
+impl InputPreview {
+    fn load(path: Option<PathBuf>) -> Self {
+        let data = path
+            .as_deref()
+            .map(load_input_preview_data)
+            .unwrap_or(InputPreviewData::Empty);
+        Self {
+            path,
+            data,
+            texture: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum InputPreviewData {
+    Empty,
+    Vector {
+        label: String,
+        segments: Vec<PreviewSegment>,
+        bounds: Option<PreviewBounds>,
+        segment_count: usize,
+    },
+    Bitmap {
+        original_width: u32,
+        original_height: u32,
+        thumbnail_width: usize,
+        thumbnail_height: usize,
+        rgba: Vec<u8>,
+    },
+    Error(String),
+}
+
 struct CalculationJob {
     id: u64,
     request: BatchRequest,
@@ -1776,6 +1840,182 @@ fn format_bytes(bytes: u64) -> String {
         format!("{:.1} KB", bytes as f64 / 1024.0)
     } else {
         format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+    }
+}
+
+fn load_input_preview_data(path: &Path) -> InputPreviewData {
+    match InputCatalogKind::from_path(path) {
+        Some(InputCatalogKind::CxfFont) => match read_cxf(path, 5.0) {
+            Ok(font) => vector_input_preview("CXF font", preview_segments_for_font(&font)),
+            Err(err) => InputPreviewData::Error(err.to_string()),
+        },
+        Some(InputCatalogKind::TtfFont) => match read_ttf(path, 5.0, false) {
+            Ok(font) => vector_input_preview("TTF font", preview_segments_for_font(&font)),
+            Err(err) => InputPreviewData::Error(err.to_string()),
+        },
+        Some(InputCatalogKind::Dxf) => match read_dxf_font(path, 5.0) {
+            Ok(font) => vector_input_preview("DXF artwork", preview_segments_for_font(&font)),
+            Err(err) => InputPreviewData::Error(err.to_string()),
+        },
+        Some(InputCatalogKind::Bitmap) => load_bitmap_preview(path),
+        None => InputPreviewData::Error("unsupported input type".to_owned()),
+    }
+}
+
+fn vector_input_preview(label: &str, segments: Vec<PreviewSegment>) -> InputPreviewData {
+    let segment_count = segments.len();
+    InputPreviewData::Vector {
+        label: label.to_owned(),
+        bounds: PreviewBounds::from_segments(&segments),
+        segments,
+        segment_count,
+    }
+}
+
+fn preview_segments_for_font(font: &Font) -> Vec<PreviewSegment> {
+    let mut segments = Vec::new();
+    let mut cursor_x = 0.0;
+    let fallback_advance = font.max_x().max(8.0) * 0.65;
+
+    for ch in "R-Engrave".chars() {
+        if ch.is_whitespace() {
+            cursor_x += fallback_advance;
+            continue;
+        }
+        let Some(glyph) = font.get_char(ch) else {
+            cursor_x += fallback_advance;
+            continue;
+        };
+        append_stroke_segments(&mut segments, &glyph.strokes, Point::new(cursor_x, 0.0));
+        cursor_x += glyph.xmax().max(fallback_advance) + 2.0;
+    }
+
+    if segments.is_empty() {
+        if let Some(glyph) = font.glyphs.values().next() {
+            append_stroke_segments(&mut segments, &glyph.strokes, Point::default());
+        }
+    }
+
+    segments
+}
+
+fn append_stroke_segments(segments: &mut Vec<PreviewSegment>, strokes: &[Stroke], offset: Point) {
+    segments.extend(strokes.iter().map(|stroke| PreviewSegment {
+        start: Point::new(stroke.start.x + offset.x, stroke.start.y + offset.y),
+        end: Point::new(stroke.end.x + offset.x, stroke.end.y + offset.y),
+    }));
+}
+
+fn load_bitmap_preview(path: &Path) -> InputPreviewData {
+    match image::open(path) {
+        Ok(image) => {
+            let original_width = image.width();
+            let original_height = image.height();
+            let thumbnail = image.thumbnail(240, 140).to_rgba8();
+            InputPreviewData::Bitmap {
+                original_width,
+                original_height,
+                thumbnail_width: thumbnail.width() as usize,
+                thumbnail_height: thumbnail.height() as usize,
+                rgba: thumbnail.into_raw(),
+            }
+        }
+        Err(err) => InputPreviewData::Error(format!("unable to decode bitmap preview: {err}")),
+    }
+}
+
+fn draw_input_preview(ui: &mut egui::Ui, preview: &mut InputPreview) {
+    match &mut preview.data {
+        InputPreviewData::Empty => {
+            ui.label("Select an input file");
+        }
+        InputPreviewData::Error(error) => {
+            ui.colored_label(egui::Color32::from_rgb(225, 176, 84), error);
+        }
+        InputPreviewData::Vector {
+            label,
+            segments,
+            bounds,
+            segment_count,
+        } => {
+            ui.label(format!("{label} · {segment_count} segments"));
+            draw_vector_input_preview(ui, segments, *bounds);
+        }
+        InputPreviewData::Bitmap {
+            original_width,
+            original_height,
+            thumbnail_width,
+            thumbnail_height,
+            rgba,
+        } => {
+            ui.label(format!("Bitmap · {original_width} x {original_height} px"));
+            if preview.texture.is_none() {
+                let image = egui::ColorImage::from_rgba_unmultiplied(
+                    [*thumbnail_width, *thumbnail_height],
+                    rgba,
+                );
+                let texture =
+                    ui.ctx()
+                        .load_texture("input-preview", image, egui::TextureOptions::LINEAR);
+                preview.texture = Some(texture);
+            }
+            if let Some(texture) = &preview.texture {
+                let max_width = ui.available_width().max(80.0);
+                let max_height = 140.0_f32;
+                let image_width = *thumbnail_width as f32;
+                let image_height = *thumbnail_height as f32;
+                let scale = (max_width / image_width)
+                    .min(max_height / image_height)
+                    .min(1.0);
+                let size = egui::vec2(image_width * scale, image_height * scale);
+                let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+                ui.painter().image(
+                    texture.id(),
+                    rect,
+                    egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                    egui::Color32::WHITE,
+                );
+            }
+        }
+    }
+}
+
+fn draw_vector_input_preview(
+    ui: &mut egui::Ui,
+    segments: &[PreviewSegment],
+    bounds: Option<PreviewBounds>,
+) {
+    let desired = egui::vec2(ui.available_width().max(80.0), 130.0);
+    let (rect, _) = ui.allocate_exact_size(desired, egui::Sense::hover());
+    let painter = ui.painter_at(rect);
+    painter.rect_filled(rect, 0.0, egui::Color32::from_rgb(28, 30, 32));
+    let Some(bounds) = bounds else {
+        return;
+    };
+
+    let width = (bounds.max.x - bounds.min.x).abs().max(0.001) as f32;
+    let height = (bounds.max.y - bounds.min.y).abs().max(0.001) as f32;
+    let scale = ((rect.width() - 16.0) / width)
+        .min((rect.height() - 16.0) / height)
+        .max(0.001);
+    let preview_width = width * scale;
+    let preview_height = height * scale;
+    let origin = egui::pos2(
+        rect.center().x - preview_width / 2.0,
+        rect.center().y + preview_height / 2.0,
+    );
+    let to_screen = |point: Point| {
+        egui::pos2(
+            origin.x + ((point.x - bounds.min.x) as f32) * scale,
+            origin.y - ((point.y - bounds.min.y) as f32) * scale,
+        )
+    };
+
+    for segment in segments {
+        painter.line_segment(
+            [to_screen(segment.start), to_screen(segment.end)],
+            egui::Stroke::new(1.2, egui::Color32::from_rgb(94, 176, 132)),
+        );
     }
 }
 
@@ -2364,6 +2604,89 @@ mod tests {
         assert_eq!(format_bytes(512), "512 B");
         assert_eq!(format_bytes(1536), "1.5 KB");
         assert_eq!(format_bytes(2 * 1024 * 1024), "2.0 MB");
+    }
+
+    #[test]
+    fn input_preview_loads_cxf_vector_segments() {
+        let dir =
+            std::env::temp_dir().join(format!("rengrave-ui-cxf-preview-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("font.cxf");
+        fs::write(&path, "[R] 2\nL 0,0,0,10\nL 0,10,5,10\n").unwrap();
+
+        let preview = load_input_preview_data(&path);
+
+        let _ = fs::remove_dir_all(dir);
+        match preview {
+            InputPreviewData::Vector {
+                label,
+                segment_count,
+                ..
+            } => {
+                assert_eq!(label, "CXF font");
+                assert!(segment_count > 0);
+            }
+            other => panic!("unexpected preview: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn input_preview_loads_dxf_vector_segments() {
+        let dir =
+            std::env::temp_dir().join(format!("rengrave-ui-dxf-preview-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("shape.dxf");
+        fs::write(
+            &path,
+            "0\nSECTION\n2\nENTITIES\n0\nLINE\n10\n0\n20\n0\n11\n2\n21\n3\n0\nENDSEC\n0\nEOF\n",
+        )
+        .unwrap();
+
+        let preview = load_input_preview_data(&path);
+
+        let _ = fs::remove_dir_all(dir);
+        match preview {
+            InputPreviewData::Vector {
+                label,
+                segment_count,
+                ..
+            } => {
+                assert_eq!(label, "DXF artwork");
+                assert_eq!(segment_count, 1);
+            }
+            other => panic!("unexpected preview: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn input_preview_loads_bitmap_thumbnail() {
+        let dir =
+            std::env::temp_dir().join(format!("rengrave-ui-bitmap-preview-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("image.png");
+        image::RgbaImage::from_pixel(4, 2, image::Rgba([255, 0, 0, 255]))
+            .save(&path)
+            .unwrap();
+
+        let preview = load_input_preview_data(&path);
+
+        let _ = fs::remove_dir_all(dir);
+        match preview {
+            InputPreviewData::Bitmap {
+                original_width,
+                original_height,
+                thumbnail_width,
+                thumbnail_height,
+                rgba,
+            } => {
+                assert_eq!(original_width, 4);
+                assert_eq!(original_height, 2);
+                assert!(thumbnail_width <= 240);
+                assert!(thumbnail_height <= 140);
+                assert_eq!(rgba.len(), thumbnail_width * thumbnail_height * 4);
+            }
+            other => panic!("unexpected preview: {other:?}"),
+        }
     }
 
     #[test]
