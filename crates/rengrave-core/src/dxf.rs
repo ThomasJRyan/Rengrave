@@ -1,5 +1,6 @@
 use crate::font::{Font, Glyph, Stroke};
 use crate::geometry::Point;
+use std::collections::BTreeMap;
 
 #[derive(Debug, thiserror::Error)]
 pub enum DxfError {
@@ -14,6 +15,44 @@ pub enum DxfError {
 struct Vertex {
     point: Point,
     bulge: f64,
+}
+
+#[derive(Debug, Clone)]
+struct Block {
+    base: Point,
+    pairs: Vec<(i32, String)>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Transform {
+    offset: Point,
+    scale: Point,
+    rotate_degrees: f64,
+}
+
+impl Transform {
+    fn identity() -> Self {
+        Self {
+            offset: Point::new(0.0, 0.0),
+            scale: Point::new(1.0, 1.0),
+            rotate_degrees: 0.0,
+        }
+    }
+
+    fn apply(self, point: Point) -> Point {
+        let scaled = Point::new(point.x * self.scale.x, point.y * self.scale.y);
+        let rotated = if self.rotate_degrees.abs() > 1.0e-12 {
+            let radians = self.rotate_degrees.to_radians();
+            Point::new(
+                scaled.x * radians.cos() - scaled.y * radians.sin(),
+                scaled.x * radians.sin() + scaled.y * radians.cos(),
+            )
+        } else {
+            scaled
+        };
+
+        Point::new(rotated.x + self.offset.x, rotated.y + self.offset.y)
+    }
 }
 
 pub fn read_dxf_font(path: &std::path::Path, segarc_degrees: f64) -> Result<Font, DxfError> {
@@ -39,7 +78,40 @@ pub fn dxf_font_from_str(input: &str, segarc_degrees: f64) -> Font {
 
 pub fn parse_dxf_segments(input: &str, segarc_degrees: f64) -> Vec<Stroke> {
     let pairs = group_pairs(input);
+    let blocks = collect_blocks(&pairs);
+    let entity_ranges = section_ranges(&pairs, "ENTITIES");
     let mut strokes = Vec::new();
+
+    if entity_ranges.is_empty() {
+        parse_entity_pairs(
+            &pairs,
+            segarc_degrees,
+            &blocks,
+            Transform::identity(),
+            &mut strokes,
+        );
+    } else {
+        for (start, end) in entity_ranges {
+            parse_entity_pairs(
+                &pairs[start..end],
+                segarc_degrees,
+                &blocks,
+                Transform::identity(),
+                &mut strokes,
+            );
+        }
+    }
+
+    strokes
+}
+
+fn parse_entity_pairs(
+    pairs: &[(i32, String)],
+    segarc_degrees: f64,
+    blocks: &BTreeMap<String, Block>,
+    transform: Transform,
+    strokes: &mut Vec<Stroke>,
+) {
     let mut idx = 0;
 
     while idx < pairs.len() {
@@ -50,38 +122,53 @@ pub fn parse_dxf_segments(input: &str, segarc_degrees: f64) -> Vec<Stroke> {
 
         match pairs[idx].1.as_str() {
             "LINE" => {
-                let (entity, next) = collect_entity(&pairs, idx + 1);
-                parse_line_entity(entity, &mut strokes);
+                let (entity, next) = collect_entity(pairs, idx + 1);
+                let mut entity_strokes = Vec::new();
+                parse_line_entity(entity, &mut entity_strokes);
+                append_transformed_strokes(&entity_strokes, transform, strokes);
                 idx = next;
             }
             "ARC" => {
-                let (entity, next) = collect_entity(&pairs, idx + 1);
-                parse_arc_entity(entity, segarc_degrees, &mut strokes);
+                let (entity, next) = collect_entity(pairs, idx + 1);
+                let mut entity_strokes = Vec::new();
+                parse_arc_entity(entity, segarc_degrees, &mut entity_strokes);
+                append_transformed_strokes(&entity_strokes, transform, strokes);
                 idx = next;
             }
             "CIRCLE" => {
-                let (entity, next) = collect_entity(&pairs, idx + 1);
-                parse_circle_entity(entity, segarc_degrees, &mut strokes);
+                let (entity, next) = collect_entity(pairs, idx + 1);
+                let mut entity_strokes = Vec::new();
+                parse_circle_entity(entity, segarc_degrees, &mut entity_strokes);
+                append_transformed_strokes(&entity_strokes, transform, strokes);
                 idx = next;
             }
             "LEADER" => {
-                let (entity, next) = collect_entity(&pairs, idx + 1);
-                parse_leader_entity(entity, &mut strokes);
+                let (entity, next) = collect_entity(pairs, idx + 1);
+                let mut entity_strokes = Vec::new();
+                parse_leader_entity(entity, &mut entity_strokes);
+                append_transformed_strokes(&entity_strokes, transform, strokes);
                 idx = next;
             }
             "LWPOLYLINE" => {
-                let (entity, next) = collect_entity(&pairs, idx + 1);
-                parse_lwpolyline_entity(entity, segarc_degrees, &mut strokes);
+                let (entity, next) = collect_entity(pairs, idx + 1);
+                let mut entity_strokes = Vec::new();
+                parse_lwpolyline_entity(entity, segarc_degrees, &mut entity_strokes);
+                append_transformed_strokes(&entity_strokes, transform, strokes);
                 idx = next;
             }
             "POLYLINE" => {
-                idx = parse_polyline_entities(&pairs, idx + 1, segarc_degrees, &mut strokes);
+                let mut entity_strokes = Vec::new();
+                idx = parse_polyline_entities(pairs, idx + 1, segarc_degrees, &mut entity_strokes);
+                append_transformed_strokes(&entity_strokes, transform, strokes);
+            }
+            "INSERT" => {
+                let (entity, next) = collect_entity(pairs, idx + 1);
+                parse_insert_entity(entity, segarc_degrees, blocks, transform, strokes);
+                idx = next;
             }
             _ => idx += 1,
         }
     }
-
-    strokes
 }
 
 fn group_pairs(input: &str) -> Vec<(i32, String)> {
@@ -108,6 +195,94 @@ fn collect_entity(pairs: &[(i32, String)], mut idx: usize) -> (&[(i32, String)],
     (&pairs[start..idx], idx)
 }
 
+fn section_ranges(pairs: &[(i32, String)], name: &str) -> Vec<(usize, usize)> {
+    let mut ranges = Vec::new();
+    let mut idx = 0;
+
+    while idx < pairs.len() {
+        if pairs[idx].0 == 0 && pairs[idx].1 == "SECTION" {
+            idx += 1;
+            let section_name = if idx < pairs.len() && pairs[idx].0 == 2 {
+                let value = pairs[idx].1.clone();
+                idx += 1;
+                value
+            } else {
+                String::new()
+            };
+            let start = idx;
+            while idx < pairs.len() && !(pairs[idx].0 == 0 && pairs[idx].1 == "ENDSEC") {
+                idx += 1;
+            }
+            if section_name == name {
+                ranges.push((start, idx));
+            }
+        }
+        idx += 1;
+    }
+
+    ranges
+}
+
+fn collect_blocks(pairs: &[(i32, String)]) -> BTreeMap<String, Block> {
+    let mut blocks = BTreeMap::new();
+
+    for (start, end) in section_ranges(pairs, "BLOCKS") {
+        let mut idx = start;
+        while idx < end {
+            if !(pairs[idx].0 == 0 && pairs[idx].1 == "BLOCK") {
+                idx += 1;
+                continue;
+            }
+
+            let (header, next) = collect_entity(pairs, idx + 1);
+            let name = header
+                .iter()
+                .find_map(|(code, value)| (*code == 2).then(|| value.clone()));
+            let base_x = header
+                .iter()
+                .find_map(|(code, value)| (*code == 10).then(|| value.parse().ok()).flatten())
+                .unwrap_or(0.0);
+            let base_y = header
+                .iter()
+                .find_map(|(code, value)| (*code == 20).then(|| value.parse().ok()).flatten())
+                .unwrap_or(0.0);
+
+            let content_start = next;
+            let mut content_end = content_start;
+            while content_end < end
+                && !(pairs[content_end].0 == 0 && pairs[content_end].1 == "ENDBLK")
+            {
+                content_end += 1;
+            }
+
+            if let Some(name) = name {
+                blocks.insert(
+                    name,
+                    Block {
+                        base: Point::new(base_x, base_y),
+                        pairs: pairs[content_start..content_end].to_vec(),
+                    },
+                );
+            }
+
+            idx = if content_end < end {
+                content_end + 1
+            } else {
+                content_end
+            };
+        }
+    }
+
+    blocks
+}
+
+fn append_transformed_strokes(source: &[Stroke], transform: Transform, strokes: &mut Vec<Stroke>) {
+    strokes.extend(source.iter().map(|stroke| Stroke {
+        start: transform.apply(stroke.start),
+        end: transform.apply(stroke.end),
+    }));
+}
+
 fn parse_line_entity(entity: &[(i32, String)], strokes: &mut Vec<Stroke>) {
     let mut x1 = None;
     let mut y1 = None;
@@ -127,6 +302,50 @@ fn parse_line_entity(entity: &[(i32, String)], strokes: &mut Vec<Stroke>) {
     if let (Some(x1), Some(y1), Some(x2), Some(y2)) = (x1, y1, x2, y2) {
         strokes.push(Stroke::new(x1, y1, x2, y2));
     }
+}
+
+fn parse_insert_entity(
+    entity: &[(i32, String)],
+    segarc_degrees: f64,
+    blocks: &BTreeMap<String, Block>,
+    parent_transform: Transform,
+    strokes: &mut Vec<Stroke>,
+) {
+    let mut name: Option<&str> = None;
+    let mut x: Option<f64> = None;
+    let mut y: Option<f64> = None;
+    let mut xscale = 1.0_f64;
+    let mut yscale = 1.0_f64;
+    let mut rotate = 0.0_f64;
+
+    for (code, value) in entity {
+        match *code {
+            2 => name = Some(value.as_str()),
+            10 => x = value.parse().ok(),
+            20 => y = value.parse().ok(),
+            41 => xscale = value.parse().unwrap_or(1.0),
+            42 => yscale = value.parse().unwrap_or(1.0),
+            50 => rotate = value.parse().unwrap_or(0.0),
+            _ => {}
+        }
+    }
+
+    let (Some(name), Some(x), Some(y)) = (name, x, y) else {
+        return;
+    };
+    let Some(block) = blocks.get(name) else {
+        return;
+    };
+
+    let transform = Transform {
+        offset: Point::new(
+            x + parent_transform.offset.x - block.base.x,
+            y + parent_transform.offset.y - block.base.y,
+        ),
+        scale: Point::new(xscale, yscale),
+        rotate_degrees: rotate,
+    };
+    parse_entity_pairs(&block.pairs, segarc_degrees, blocks, transform, strokes);
 }
 
 fn parse_leader_entity(entity: &[(i32, String)], strokes: &mut Vec<Stroke>) {
@@ -455,6 +674,122 @@ mod tests {
         assert_eq!(strokes.len(), 1);
         assert_eq!(strokes[0].start, Point::new(1.0, 2.0));
         assert_eq!(strokes[0].end, Point::new(3.0, 4.0));
+    }
+
+    #[test]
+    fn inserts_block_entities_without_emitting_block_definition() {
+        let strokes = parse_dxf_segments(
+            "\
+0
+SECTION
+2
+BLOCKS
+0
+BLOCK
+2
+PART
+10
+0
+20
+0
+0
+LINE
+10
+0
+20
+0
+11
+1
+21
+0
+0
+ENDBLK
+0
+ENDSEC
+0
+SECTION
+2
+ENTITIES
+0
+INSERT
+2
+PART
+10
+2
+20
+3
+0
+ENDSEC
+0
+EOF
+",
+            5.0,
+        );
+
+        assert_eq!(strokes.len(), 1);
+        assert_eq!(strokes[0].start, Point::new(2.0, 3.0));
+        assert_eq!(strokes[0].end, Point::new(3.0, 3.0));
+    }
+
+    #[test]
+    fn insert_applies_block_base_scale_and_rotation() {
+        let strokes = parse_dxf_segments(
+            "\
+0
+SECTION
+2
+BLOCKS
+0
+BLOCK
+2
+PART
+10
+1
+20
+1
+0
+LINE
+10
+1
+20
+1
+11
+2
+21
+1
+0
+ENDBLK
+0
+ENDSEC
+0
+SECTION
+2
+ENTITIES
+0
+INSERT
+2
+PART
+10
+2
+20
+3
+41
+2
+42
+3
+50
+90
+0
+ENDSEC
+0
+EOF
+",
+            5.0,
+        );
+
+        assert_eq!(strokes.len(), 1);
+        assert_point_close(strokes[0].start, Point::new(-2.0, 4.0));
+        assert_point_close(strokes[0].end, Point::new(-2.0, 6.0));
     }
 
     #[test]
