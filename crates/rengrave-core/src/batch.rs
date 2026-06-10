@@ -4,11 +4,12 @@ use crate::bitmap::vectorize_bitmap_to_dxf;
 use crate::dxf::{dxf_font_from_str, read_dxf_font};
 use crate::external::requires_potrace;
 use crate::font::{read_cxf, read_ttf};
-use crate::gcode::{GcodeOptions, write_engrave_gcode};
+use crate::gcode::{GcodeOptions, write_engrave_gcode, write_vcarve_gcode};
 use crate::layout::{LayoutSettings, layout_text};
 use crate::project::{DocumentError, DocumentRequest, load_document};
 use crate::project::{InputKind, resolve_input_kind};
 use crate::settings::LegacySettings;
+use crate::vcarve::{VCarveOptions, generate_vcarve_points};
 use crate::{FENGRAVE_VERSION, RENGRAVE_VERSION};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -61,11 +62,6 @@ fn generate_engrave_gcode(
     text: &str,
     warnings: &mut Vec<String>,
 ) -> Option<Vec<String>> {
-    if settings.get_last("cut_type") == Some("v-carve") {
-        warnings.push("v-carve generation is not ported yet".to_owned());
-        return None;
-    }
-
     if settings.get_last("input_type") == Some("image") {
         return generate_dxf_engrave_gcode(settings, warnings);
     }
@@ -123,10 +119,7 @@ fn generate_text_engrave_gcode(
         return None;
     }
 
-    Some(write_engrave_gcode(
-        &layout.segments,
-        &GcodeOptions::from_legacy(settings),
-    ))
+    write_layout_gcode(settings, &layout.segments, warnings)
 }
 
 fn generate_dxf_engrave_gcode(
@@ -173,10 +166,30 @@ fn generate_dxf_engrave_gcode(
         return None;
     }
 
-    Some(write_engrave_gcode(
-        &layout.segments,
-        &GcodeOptions::from_legacy(settings),
-    ))
+    write_layout_gcode(settings, &layout.segments, warnings)
+}
+
+fn write_layout_gcode(
+    settings: &LegacySettings,
+    segments: &[crate::layout::EngraveSegment],
+    warnings: &mut Vec<String>,
+) -> Option<Vec<String>> {
+    let gcode_options = GcodeOptions::from_legacy(settings);
+    if settings.get_last("cut_type") != Some("v-carve") {
+        return Some(write_engrave_gcode(segments, &gcode_options));
+    }
+
+    let vcarve_options = VCarveOptions::from_legacy(settings);
+    if vcarve_options.bit_shape == crate::vcarve::BitShape::Flat {
+        return Some(write_engrave_gcode(segments, &gcode_options));
+    }
+
+    let points = generate_vcarve_points(segments, &vcarve_options, gcode_options.accuracy);
+    if points.is_empty() {
+        warnings.push("v-carve generated no toolpath points".to_owned());
+        return None;
+    }
+    Some(write_vcarve_gcode(&points, &gcode_options, &vcarve_options))
 }
 
 fn render_settings_only_gcode(settings: &LegacySettings, text: &str) -> String {
@@ -312,6 +325,52 @@ mod tests {
         assert!(output.gcode.contains("(fengrave_set input_type  image )"));
         assert!(!output.gcode.contains("(Engrave Text:"));
         assert!(output.gcode.contains("G1 X0.0000 Y1.9900"));
+    }
+
+    #[test]
+    fn batch_generates_vcarve_gcode_for_closed_cxf_text() {
+        let font_path = std::env::temp_dir().join(format!(
+            "rengrave-vcarve-{}-{}.cxf",
+            std::process::id(),
+            "batch"
+        ));
+        let settings_path = std::env::temp_dir().join(format!(
+            "rengrave-vcarve-{}-{}.ngc",
+            std::process::id(),
+            "batch"
+        ));
+        fs::write(
+            &font_path,
+            "[A] 4\nL 0,0,10,0\nL 10,0,10,10\nL 10,10,0,10\nL 0,10,0,0\n",
+        )
+        .unwrap();
+        fs::write(
+            &settings_path,
+            "(fengrave_set cut_type   v-carve )\n(fengrave_set v_step_len  0.5 )\n",
+        )
+        .unwrap();
+
+        let output = prepare_batch_output(&BatchRequest {
+            batch: true,
+            gcode_file: Some(settings_path.clone()),
+            font_or_image: Some(font_path.clone()),
+            text: Some("A".to_owned()),
+            ..BatchRequest::default()
+        })
+        .unwrap();
+
+        let _ = fs::remove_file(font_path);
+        let _ = fs::remove_file(settings_path);
+        assert!(output.warnings.is_empty());
+        assert!(output.gcode.contains("cut_type"));
+        assert!(output.gcode.contains("v-carve"));
+        assert!(output.gcode.contains("G1 X"));
+        assert!(output.gcode.contains(" Z-"));
+        assert!(
+            !output
+                .gcode
+                .contains("v-carve generation is not ported yet")
+        );
     }
 
     #[test]

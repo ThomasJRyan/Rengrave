@@ -1,5 +1,6 @@
 use crate::layout::EngraveSegment;
 use crate::settings::LegacySettings;
+use crate::vcarve::{VCarveOptions, VCarvePoint};
 
 const ZERO: f64 = 0.00001;
 const MAX_RADIUS: f64 = 1.0e30;
@@ -151,6 +152,67 @@ pub fn write_engrave_gcode(segments: &[EngraveSegment], options: &GcodeOptions) 
 
     lines.push(format!("G0 Z{safe_value}"));
     lines.extend(split_gcode_lines(&options.postamble));
+    lines
+}
+
+pub fn write_vcarve_gcode(
+    points: &[VCarvePoint],
+    gcode_options: &GcodeOptions,
+    vcarve_options: &VCarveOptions,
+) -> Vec<String> {
+    let dp = gcode_options.coord_digits();
+    let dpfeed = gcode_options.feed_digits();
+    let safe_number = format_number(gcode_options.safe_z, dp);
+    let safe_value = if gcode_options.variables_disabled {
+        safe_number.clone()
+    } else {
+        "#1".to_owned()
+    };
+    let feed = format_number(gcode_options.feed, dpfeed);
+    let mut plunge = format_number(gcode_options.plunge, dpfeed);
+    let zero_feed = format_number(0.0, dpfeed);
+    if plunge == zero_feed {
+        plunge = feed.clone();
+    }
+
+    let mut lines = Vec::new();
+    if !gcode_options.variables_disabled {
+        lines.push(format!("#1 = {}  ( Safe Z )", safe_number));
+    }
+    lines.push("G90".to_owned());
+    lines.push(gcode_options.units.gcode().to_owned());
+    lines.extend(split_gcode_lines(&gcode_options.preamble));
+    lines.push(format!("F{feed}"));
+
+    let mut current_loop = None;
+    for point in points {
+        let z = vcarve_options.depth_for_radius(point.radius);
+        if current_loop != Some(point.loop_id) {
+            lines.push(format!("G0 Z{safe_value}"));
+            lines.push(format!(
+                "G0 X{} Y{}",
+                format_number(point.position.x, dp),
+                format_number(point.position.y, dp)
+            ));
+            if plunge == feed {
+                lines.push(format!("G1 Z{}", format_number(z, dp)));
+            } else {
+                lines.push(format!("G1 Z{} F{plunge}", format_number(z, dp)));
+                lines.push(format!("F{feed}"));
+            }
+        } else {
+            lines.push(format!(
+                "G1 X{} Y{} Z{}",
+                format_number(point.position.x, dp),
+                format_number(point.position.y, dp),
+                format_number(z, dp)
+            ));
+        }
+        current_loop = Some(point.loop_id);
+    }
+
+    lines.push(format!("G0 Z{safe_value}"));
+    lines.extend(split_gcode_lines(&gcode_options.postamble));
     lines
 }
 
@@ -716,6 +778,42 @@ mod tests {
         assert!(lines.contains(&"#1 = 0.2500  ( Safe Z )".to_owned()));
         assert!(lines.contains(&"G0 Z#1".to_owned()));
         assert!(lines.contains(&"G1 Z#2".to_owned()));
+    }
+
+    #[test]
+    fn writes_variable_depth_vcarve_moves() {
+        let options = GcodeOptions {
+            safe_z: 0.25,
+            depth_z: -0.005,
+            feed: 5.0,
+            plunge: 0.0,
+            accuracy: 0.001,
+            units: Units::Inch,
+            preamble: "G17 G64 P0.001 M3 S3000".to_owned(),
+            postamble: "M5|M2".to_owned(),
+            variables_disabled: true,
+            arc_fit: ArcFit::None,
+        };
+        let vcarve = VCarveOptions::from_legacy(&crate::settings::default_legacy_settings());
+        let lines = write_vcarve_gcode(
+            &[
+                VCarvePoint {
+                    position: Point::new(0.0, 0.0),
+                    radius: 0.0,
+                    loop_id: 1,
+                },
+                VCarvePoint {
+                    position: Point::new(1.0, 0.0),
+                    radius: 0.5,
+                    loop_id: 1,
+                },
+            ],
+            &options,
+            &vcarve,
+        );
+
+        assert!(lines.contains(&"G1 Z-0.0000".to_owned()));
+        assert!(lines.contains(&"G1 X1.0000 Y0.0000 Z-0.8660".to_owned()));
     }
 
     fn shallow_circle_segments() -> Vec<EngraveSegment> {
