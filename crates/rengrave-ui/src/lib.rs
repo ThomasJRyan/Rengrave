@@ -2236,6 +2236,7 @@ struct InputPreview {
     sample_text: Option<String>,
     data: InputPreviewData,
     texture: Option<egui::TextureHandle>,
+    mask_texture: Option<egui::TextureHandle>,
 }
 
 impl Default for InputPreview {
@@ -2245,6 +2246,7 @@ impl Default for InputPreview {
             sample_text: None,
             data: InputPreviewData::Empty,
             texture: None,
+            mask_texture: None,
         }
     }
 }
@@ -2260,6 +2262,7 @@ impl InputPreview {
             sample_text,
             data,
             texture: None,
+            mask_texture: None,
         }
     }
 }
@@ -2279,6 +2282,9 @@ enum InputPreviewData {
         thumbnail_width: usize,
         thumbnail_height: usize,
         rgba: Vec<u8>,
+        mask_width: usize,
+        mask_height: usize,
+        mask_rgba: Vec<u8>,
     },
     Error(String),
 }
@@ -2820,16 +2826,56 @@ fn load_bitmap_preview(path: &Path) -> InputPreviewData {
                     INPUT_PREVIEW_THUMBNAIL_HEIGHT,
                 )
                 .to_rgba8();
+            let mask_thumbnail = bitmap_trace_mask_thumbnail(&image);
             InputPreviewData::Bitmap {
                 original_width,
                 original_height,
                 thumbnail_width: thumbnail.width() as usize,
                 thumbnail_height: thumbnail.height() as usize,
                 rgba: thumbnail.into_raw(),
+                mask_width: mask_thumbnail.width() as usize,
+                mask_height: mask_thumbnail.height() as usize,
+                mask_rgba: mask_thumbnail.into_raw(),
             }
         }
         Err(err) => InputPreviewData::Error(format!("unable to decode bitmap preview: {err}")),
     }
+}
+
+fn bitmap_trace_mask_thumbnail(image: &image::DynamicImage) -> image::RgbaImage {
+    let rgba = image.to_rgba8();
+    let (width, height) = rgba.dimensions();
+    let mut mask = image::RgbaImage::new(width, height);
+    for (x, y, pixel) in rgba.enumerate_pixels() {
+        let pixel = pixel.0;
+        let alpha = pixel[3] as u32;
+        let red = composite_over_white(pixel[0] as u32, alpha);
+        let green = composite_over_white(pixel[1] as u32, alpha);
+        let blue = composite_over_white(pixel[2] as u32, alpha);
+        let luma = (299 * red + 587 * green + 114 * blue) / 1000;
+        let value = if luma < 128 { 0 } else { 255 };
+        mask.put_pixel(x, y, image::Rgba([value, value, value, 255]));
+    }
+
+    if width <= INPUT_PREVIEW_THUMBNAIL_WIDTH && height <= INPUT_PREVIEW_THUMBNAIL_HEIGHT {
+        return mask;
+    }
+
+    let scale = (INPUT_PREVIEW_THUMBNAIL_WIDTH as f64 / width as f64)
+        .min(INPUT_PREVIEW_THUMBNAIL_HEIGHT as f64 / height as f64)
+        .min(1.0);
+    let scaled_width = ((width as f64 * scale).round() as u32).max(1);
+    let scaled_height = ((height as f64 * scale).round() as u32).max(1);
+    image::imageops::resize(
+        &mask,
+        scaled_width,
+        scaled_height,
+        image::imageops::FilterType::Nearest,
+    )
+}
+
+fn composite_over_white(channel: u32, alpha: u32) -> u32 {
+    (channel * alpha + 255 * (255 - alpha)) / 255
 }
 
 fn draw_input_preview(ui: &mut egui::Ui, preview: &mut InputPreview) {
@@ -2855,6 +2901,9 @@ fn draw_input_preview(ui: &mut egui::Ui, preview: &mut InputPreview) {
             thumbnail_width,
             thumbnail_height,
             rgba,
+            mask_width,
+            mask_height,
+            mask_rgba,
         } => {
             ui.label(format!("Bitmap · {original_width} x {original_height} px"));
             if preview.texture.is_none() {
@@ -2867,25 +2916,65 @@ fn draw_input_preview(ui: &mut egui::Ui, preview: &mut InputPreview) {
                         .load_texture("input-preview", image, egui::TextureOptions::LINEAR);
                 preview.texture = Some(texture);
             }
-            if let Some(texture) = &preview.texture {
-                let max_width = ui.available_width().max(80.0);
-                let max_height = INPUT_PREVIEW_THUMBNAIL_HEIGHT as f32;
-                let image_width = *thumbnail_width as f32;
-                let image_height = *thumbnail_height as f32;
-                let scale = (max_width / image_width)
-                    .min(max_height / image_height)
-                    .min(1.0);
-                let size = egui::vec2(image_width * scale, image_height * scale);
-                let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
-                ui.painter().image(
-                    texture.id(),
-                    rect,
-                    egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-                    egui::Color32::WHITE,
+            if preview.mask_texture.is_none() {
+                let image = egui::ColorImage::from_rgba_unmultiplied(
+                    [*mask_width, *mask_height],
+                    mask_rgba,
                 );
+                let texture =
+                    ui.ctx()
+                        .load_texture("input-trace-mask", image, egui::TextureOptions::NEAREST);
+                preview.mask_texture = Some(texture);
             }
+            ui.horizontal_wrapped(|ui| {
+                if let Some(texture) = &preview.texture {
+                    draw_bitmap_preview_texture(
+                        ui,
+                        "Original",
+                        texture,
+                        *thumbnail_width,
+                        *thumbnail_height,
+                    );
+                }
+                if let Some(texture) = &preview.mask_texture {
+                    draw_bitmap_preview_texture(
+                        ui,
+                        "Trace mask",
+                        texture,
+                        *mask_width,
+                        *mask_height,
+                    );
+                }
+            });
         }
     }
+}
+
+fn draw_bitmap_preview_texture(
+    ui: &mut egui::Ui,
+    label: &str,
+    texture: &egui::TextureHandle,
+    width: usize,
+    height: usize,
+) {
+    ui.vertical(|ui| {
+        ui.label(label);
+        let max_width = ui.available_width().clamp(80.0, 140.0);
+        let max_height = INPUT_PREVIEW_THUMBNAIL_HEIGHT as f32;
+        let image_width = width as f32;
+        let image_height = height as f32;
+        let scale = (max_width / image_width)
+            .min(max_height / image_height)
+            .min(1.0);
+        let size = egui::vec2(image_width * scale, image_height * scale);
+        let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+        ui.painter().image(
+            texture.id(),
+            rect,
+            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+            egui::Color32::WHITE,
+        );
+    });
 }
 
 fn draw_status_log(ui: &mut egui::Ui, warnings: &[String]) {
@@ -4307,15 +4396,36 @@ mod tests {
                 thumbnail_width,
                 thumbnail_height,
                 rgba,
+                mask_width,
+                mask_height,
+                mask_rgba,
             } => {
                 assert_eq!(original_width, 4);
                 assert_eq!(original_height, 2);
                 assert!(thumbnail_width <= INPUT_PREVIEW_THUMBNAIL_WIDTH as usize);
                 assert!(thumbnail_height <= INPUT_PREVIEW_THUMBNAIL_HEIGHT as usize);
                 assert_eq!(rgba.len(), thumbnail_width * thumbnail_height * 4);
+                assert!(mask_width <= INPUT_PREVIEW_THUMBNAIL_WIDTH as usize);
+                assert!(mask_height <= INPUT_PREVIEW_THUMBNAIL_HEIGHT as usize);
+                assert_eq!(mask_rgba.len(), mask_width * mask_height * 4);
             }
             other => panic!("unexpected preview: {other:?}"),
         }
+    }
+
+    #[test]
+    fn bitmap_trace_mask_preview_thresholds_like_potrace_input() {
+        let mut image = image::RgbaImage::new(3, 1);
+        image.put_pixel(0, 0, image::Rgba([0, 0, 0, 255]));
+        image.put_pixel(1, 0, image::Rgba([255, 255, 255, 255]));
+        image.put_pixel(2, 0, image::Rgba([0, 0, 0, 0]));
+
+        let mask = bitmap_trace_mask_thumbnail(&image::DynamicImage::ImageRgba8(image));
+        let rgba = mask.into_raw();
+
+        assert_eq!(&rgba[0..4], &[0, 0, 0, 255]);
+        assert_eq!(&rgba[4..8], &[255, 255, 255, 255]);
+        assert_eq!(&rgba[8..12], &[255, 255, 255, 255]);
     }
 
     #[test]
