@@ -295,9 +295,12 @@ impl RengraveApp {
         let cancel_flag = Arc::new(AtomicBool::new(false));
         let worker_cancel_flag = Arc::clone(&cancel_flag);
         thread::spawn(move || {
+            send_calculation_progress(&sender, &ctx, id, CalculationPhase::Preparing);
+            send_calculation_progress(&sender, &ctx, id, CalculationPhase::Generating);
             let result = prepare_batch_output(&worker_request).map_err(|err| err.to_string());
+            send_calculation_progress(&sender, &ctx, id, CalculationPhase::Finalizing);
             let canceled = worker_cancel_flag.load(Ordering::Relaxed);
-            let _ = sender.send(CalculationMessage {
+            let _ = sender.send(CalculationMessage::Finished {
                 id,
                 result,
                 canceled,
@@ -310,7 +313,7 @@ impl RengraveApp {
             receiver,
             cancel_flag,
         });
-        self.status = "Calculating".to_owned();
+        self.status = CalculationPhase::Queued.status_text().to_owned();
     }
 
     fn cancel_calculation(&mut self, status: &str) {
@@ -325,7 +328,17 @@ impl RengraveApp {
             return;
         };
         match job.receiver.try_recv() {
-            Ok(message) => self.apply_calculation_message(job, message),
+            Ok(CalculationMessage::Progress { id, phase }) => {
+                if id == job.id {
+                    self.status = phase.status_text().to_owned();
+                }
+                self.calculation = Some(job);
+            }
+            Ok(CalculationMessage::Finished {
+                id,
+                result,
+                canceled,
+            }) => self.apply_calculation_result(job, id, result, canceled),
             Err(TryRecvError::Empty) => {
                 self.calculation = Some(job);
             }
@@ -335,8 +348,14 @@ impl RengraveApp {
         }
     }
 
-    fn apply_calculation_message(&mut self, job: CalculationJob, message: CalculationMessage) {
-        if message.id != job.id || message.canceled {
+    fn apply_calculation_result(
+        &mut self,
+        job: CalculationJob,
+        id: u64,
+        result: Result<BatchOutput, String>,
+        canceled: bool,
+    ) {
+        if id != job.id || canceled {
             self.status = "Stale calculation ignored".to_owned();
             return;
         }
@@ -345,7 +364,7 @@ impl RengraveApp {
             self.status = "Stale calculation ignored".to_owned();
             return;
         }
-        match message.result {
+        match result {
             Ok(output) => {
                 self.apply_batch_output(output);
                 self.last_output_request = Some(job.request);
@@ -2337,10 +2356,35 @@ struct CalculationJob {
     cancel_flag: Arc<AtomicBool>,
 }
 
-struct CalculationMessage {
-    id: u64,
-    result: Result<BatchOutput, String>,
-    canceled: bool,
+enum CalculationMessage {
+    Progress {
+        id: u64,
+        phase: CalculationPhase,
+    },
+    Finished {
+        id: u64,
+        result: Result<BatchOutput, String>,
+        canceled: bool,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CalculationPhase {
+    Queued,
+    Preparing,
+    Generating,
+    Finalizing,
+}
+
+impl CalculationPhase {
+    fn status_text(self) -> &'static str {
+        match self {
+            Self::Queued => "Calculation queued",
+            Self::Preparing => "Preparing document",
+            Self::Generating => "Generating toolpaths",
+            Self::Finalizing => "Finalizing output",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2357,6 +2401,16 @@ enum BottomTab {
     Cleanup,
     Svg,
     Dxf,
+}
+
+fn send_calculation_progress(
+    sender: &mpsc::Sender<CalculationMessage>,
+    ctx: &egui::Context,
+    id: u64,
+    phase: CalculationPhase,
+) {
+    let _ = sender.send(CalculationMessage::Progress { id, phase });
+    ctx.request_repaint();
 }
 
 fn default_output_path(default_dir: &Option<PathBuf>, file_name: &str) -> String {
@@ -4072,6 +4126,23 @@ mod tests {
                 "rengrave_output.svg".to_owned(),
                 "rengrave_output.dxf".to_owned()
             )
+        );
+    }
+
+    #[test]
+    fn calculation_phases_have_user_visible_status_text() {
+        assert_eq!(CalculationPhase::Queued.status_text(), "Calculation queued");
+        assert_eq!(
+            CalculationPhase::Preparing.status_text(),
+            "Preparing document"
+        );
+        assert_eq!(
+            CalculationPhase::Generating.status_text(),
+            "Generating toolpaths"
+        );
+        assert_eq!(
+            CalculationPhase::Finalizing.status_text(),
+            "Finalizing output"
         );
     }
 
