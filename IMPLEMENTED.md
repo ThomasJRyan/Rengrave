@@ -15,6 +15,7 @@ This document records what has actually been implemented in the Rust port and wh
 - CXF/TTF input previews now use the current engraving text sample instead of always drawing a hard-coded `R-Engrave` sample; DXF and bitmap previews remain cached by input path.
 - The generated-output preview now approximates radius-format `G2`/`G3 ... R...` arcs instead of drawing them as straight chords when Radius arc fitting is selected.
 - The central preview now supports cursor-centered mouse-wheel/pinch zoom and double-click fit in addition to toolbar/menu controls.
+- The central preview now shows live model-space X/Y coordinates under the pointer using the same pan/zoom/rotation transform as the drawn toolpath.
 
 ## Current Shape
 
@@ -69,7 +70,7 @@ This document records what has actually been implemented in the Rust port and wh
 - File, Run, and View menus expose the same load/save/export/calculate/cancel/copy/Fit/layer actions as the panels and toolbar.
 - The bottom panel has Status, G-code, Cleanup, SVG, and DXF tabs so generated text output can be inspected without exporting first.
 - It previews cut moves, separately parses and draws rapid XY moves as a toggleable dashed layer, and approximates center-format and radius-format arcs for display.
-- It has basic toggles for toolpath, rapid, bounds, and axes layers, cursor-centered wheel/pinch zoom, simple zoom/view rotation controls, double-click/menu Fit actions, and bounds-aware recentering of generated geometry in the preview. Legacy toolpath, bounds, and axes layer flags round-trip through saved settings.
+- It has basic toggles for toolpath, rapid, bounds, and axes layers, cursor-centered wheel/pinch zoom, live model-coordinate readout, simple zoom/view rotation controls, double-click/menu Fit actions, and bounds-aware recentering of generated geometry in the preview. Legacy toolpath, bounds, and axes layer flags round-trip through saved settings.
 
 ## Why The UI Looks Bare
 
@@ -80,7 +81,7 @@ The UI is now an MVP rather than only a shell, but it still lacks several expect
 - Core tests currently cover settings, CXF/TTF parsing, DXF entities, bitmap conversion, layout transforms, Add Box/Circle, G-code, SVG/DXF export, cleanup, v-carve options, and batch generation.
 - A crate-level golden-output harness now exists under `crates/rengrave-core/tests/golden.rs` with a minimal CXF fixture, checked G-code/SVG regression outputs, and numeric-tolerant G-code comparison helpers. These first expected files pin current R-Engrave output; they are not yet F-Engrave-generated parity fixtures.
 - F-Engrave fixture generation was rechecked on 2026-06-10 with `python f-engrave_source/f-engrave.py -b -f crates/rengrave-core/tests/fixtures/inputs/simple.cxf -t AB`; it still fails before batch mode because `pyclipper` is missing.
-- UI tests cover default and secondary output paths, cleanup companion preview formatting, cleanup path checkbox serialization, view-layer settings serialization, native save-dialog filename helpers, settings save serialization, path-field parsing, in-app browser directory behavior, input catalog scanning, input preview loading and font text-sample selection, preference persistence, worker stale-result detection, output stale-state detection, control-to-legacy override emission, bitmap/Potrace control mapping, advanced setting mapping, preview fitting and cursor zooming, output preview truncation, text-file write errors, cut/rapid preview parsing, and center/radius arc preview parsing.
+- UI tests cover default and secondary output paths, cleanup companion preview formatting, cleanup path checkbox serialization, view-layer settings serialization, native save-dialog filename helpers, settings save serialization, path-field parsing, in-app browser directory behavior, input catalog scanning, input preview loading and font text-sample selection, preference persistence, worker stale-result detection, output stale-state detection, control-to-legacy override emission, bitmap/Potrace control mapping, advanced setting mapping, preview fitting, cursor zooming, screen-to-model coordinate conversion, output preview truncation, text-file write errors, cut/rapid preview parsing, and center/radius arc preview parsing.
 - Recent validation has been run with:
   - `cargo test -p rengrave-core`
   - `cargo test -p rengrave-ui`

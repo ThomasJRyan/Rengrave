@@ -982,6 +982,7 @@ impl eframe::App for RengraveApp {
                 self.fit_preview_requested = false;
             }
             let response = ui.allocate_rect(rect, egui::Sense::click_and_drag());
+            let hover_pos = response.hover_pos();
             if response.double_clicked() && self.preview_bounds.is_some() {
                 self.fit_preview_requested = true;
             }
@@ -1002,7 +1003,7 @@ impl eframe::App for RengraveApp {
                     1.0
                 };
                 if (zoom_factor - 1.0).abs() > f64::EPSILON {
-                    if let Some(anchor) = response.hover_pos() {
+                    if let Some(anchor) = hover_pos {
                         zoom_transform_at_screen_point(
                             &mut self.transform,
                             rect,
@@ -1026,6 +1027,10 @@ impl eframe::App for RengraveApp {
                 self.show_bounds,
                 self.show_axes,
             );
+            if let Some(pos) = hover_pos {
+                let cursor = screen_point_to_model(rect, self.transform, pos);
+                draw_preview_cursor_readout(ui.painter(), rect, cursor);
+            }
         });
 
         self.show_browser(ui.ctx());
@@ -3083,6 +3088,31 @@ fn zoom_transform_at_screen_point(
     transform.zoom = new_zoom;
 }
 
+fn screen_point_to_model(rect: egui::Rect, transform: ViewTransform, screen: egui::Pos2) -> Point {
+    let rotated = Point::new(
+        f64::from(screen.x - rect.center().x) - transform.pan.x,
+        f64::from(rect.center().y - screen.y) + transform.pan.y,
+    );
+    let rotated = Point::new(rotated.x / transform.zoom, rotated.y / transform.zoom);
+    let (sin, cos) = transform.total_rotation_radians().sin_cos();
+    Point::new(
+        rotated.x * cos + rotated.y * sin,
+        -rotated.x * sin + rotated.y * cos,
+    )
+}
+
+fn draw_preview_cursor_readout(painter: &egui::Painter, rect: egui::Rect, cursor: Point) {
+    let text = format!("X {:+.4}  Y {:+.4}", cursor.x, cursor.y);
+    let pos = rect.left_bottom() + egui::vec2(8.0, -8.0);
+    painter.text(
+        pos,
+        egui::Align2::LEFT_BOTTOM,
+        text,
+        egui::FontId::monospace(12.0),
+        egui::Color32::from_rgb(214, 220, 224),
+    );
+}
+
 #[derive(Debug, Clone, Default, PartialEq)]
 struct PreviewMotion {
     cuts: Vec<PreviewSegment>,
@@ -3609,6 +3639,24 @@ mod tests {
 
         zoom_transform_at_screen_point(&mut transform, rect, anchor, 0.001);
         assert_eq!(transform.zoom, 1.0);
+    }
+
+    #[test]
+    fn screen_point_to_model_inverts_preview_transform() {
+        let rect = egui::Rect::from_min_size(egui::pos2(10.0, 20.0), egui::vec2(400.0, 300.0));
+        let model_point = Point::new(3.25, -1.75);
+        let transform = ViewTransform {
+            pan: Point::new(17.0, -9.0),
+            zoom: 73.0,
+            model_rotation_degrees: -20.0,
+            viewport_rotation_degrees: 65.0,
+        };
+        let screen = preview_screen_point(rect, transform, model_point);
+
+        let actual = screen_point_to_model(rect, transform, screen);
+
+        assert!((actual.x - model_point.x).abs() < 1e-5);
+        assert!((actual.y - model_point.y).abs() < 1e-5);
     }
 
     #[test]
