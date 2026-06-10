@@ -3085,6 +3085,19 @@ fn parse_preview_motion(gcode: &str) -> PreviewMotion {
                     current = Some(end);
                     continue;
                 }
+                if let Some(radius) = params.r {
+                    if let Some(end) = params.point(current) {
+                        append_preview_radius_arc(
+                            &mut motion.cuts,
+                            start,
+                            end,
+                            radius,
+                            matches!(command, "G2" | "G02"),
+                        );
+                        current = Some(end);
+                        continue;
+                    }
+                }
             }
         }
 
@@ -3110,6 +3123,7 @@ struct MotionParams {
     y: Option<f64>,
     i: Option<f64>,
     j: Option<f64>,
+    r: Option<f64>,
     saw_xy: bool,
 }
 
@@ -3144,6 +3158,8 @@ fn motion_params(line: &str) -> MotionParams {
             params.i = Some(value);
         } else if let Some(value) = axis_value(token, 'J') {
             params.j = Some(value);
+        } else if let Some(value) = axis_value(token, 'R') {
+            params.r = Some(value);
         }
     }
 
@@ -3203,6 +3219,60 @@ fn append_preview_arc(
         });
         previous = next;
     }
+}
+
+fn append_preview_radius_arc(
+    segments: &mut Vec<PreviewSegment>,
+    start: Point,
+    end: Point,
+    radius: f64,
+    clockwise: bool,
+) {
+    let chord = point_distance(start, end);
+    let radius_abs = radius.abs();
+    if chord <= 0.00001 || radius_abs <= 0.00001 || chord > 2.0 * radius_abs + 0.00001 {
+        if chord > 0.00001 {
+            segments.push(PreviewSegment { start, end });
+        }
+        return;
+    }
+
+    let midpoint = Point::new((start.x + end.x) / 2.0, (start.y + end.y) / 2.0);
+    let half_chord = chord / 2.0;
+    let offset = (radius_abs * radius_abs - half_chord * half_chord)
+        .max(0.0)
+        .sqrt();
+    let unit_x = (end.x - start.x) / chord;
+    let unit_y = (end.y - start.y) / chord;
+    let perp = Point::new(-unit_y, unit_x);
+    let centers = [
+        Point::new(midpoint.x + perp.x * offset, midpoint.y + perp.y * offset),
+        Point::new(midpoint.x - perp.x * offset, midpoint.y - perp.y * offset),
+    ];
+    let wants_long_arc = radius < 0.0;
+    let center = centers
+        .into_iter()
+        .find(|center| {
+            let sweep = preview_arc_sweep(start, end, *center, clockwise);
+            (sweep.abs() > std::f64::consts::PI) == wants_long_arc
+        })
+        .unwrap_or(centers[0]);
+
+    append_preview_arc(segments, start, end, center, clockwise);
+}
+
+fn preview_arc_sweep(start: Point, end: Point, center: Point, clockwise: bool) -> f64 {
+    let start_angle = (start.y - center.y).atan2(start.x - center.x);
+    let end_angle = (end.y - center.y).atan2(end.x - center.x);
+    let mut sweep = end_angle - start_angle;
+
+    if clockwise && sweep >= 0.0 {
+        sweep -= std::f64::consts::TAU;
+    } else if !clockwise && sweep <= 0.0 {
+        sweep += std::f64::consts::TAU;
+    }
+
+    sweep
 }
 
 fn point_distance(a: Point, b: Point) -> f64 {
@@ -3358,6 +3428,31 @@ mod tests {
         assert!(motion.cuts.iter().any(|segment| segment.end.x > 1.99));
         assert!(motion.cuts.iter().any(|segment| segment.end.y > 1.99));
         assert!(motion.cuts.iter().any(|segment| segment.end.y < -1.99));
+    }
+
+    #[test]
+    fn parses_radius_format_arc_for_preview() {
+        let motion =
+            parse_preview_motion("G0 X1.0000 Y0.0000\nG1 Z-0.0050\nG3 X-1.0000 Y0.0000 R1.0000\n");
+
+        assert_eq!(motion.cuts.len(), 32);
+        assert!(motion.rapids.is_empty());
+        assert_eq!(motion.cuts[0].start, Point::new(1.0, 0.0));
+        assert!((motion.cuts.last().unwrap().end.x + 1.0).abs() < 1e-9);
+        assert!(motion.cuts.iter().any(|segment| segment.end.y > 0.99));
+    }
+
+    #[test]
+    fn parses_negative_radius_long_arc_for_preview() {
+        let motion =
+            parse_preview_motion("G0 X1.0000 Y0.0000\nG1 Z-0.0050\nG2 X0.0000 Y1.0000 R-1.0000\n");
+
+        assert!(motion.cuts.len() > 32);
+        assert!(motion.rapids.is_empty());
+        assert_eq!(motion.cuts[0].start, Point::new(1.0, 0.0));
+        assert!(motion.cuts.last().unwrap().end.x.abs() < 1e-9);
+        assert!((motion.cuts.last().unwrap().end.y - 1.0).abs() < 1e-9);
+        assert!(motion.cuts.iter().any(|segment| segment.end.y < -0.99));
     }
 
     #[test]
