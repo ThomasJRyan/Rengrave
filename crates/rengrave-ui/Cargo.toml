@@ -13,3 +13,4 @@ path = "src/main.rs"
 eframe.workspace = true
 image.workspace = true
 rengrave-core = { path = "../rengrave-core" }
+rfd.workspace = true

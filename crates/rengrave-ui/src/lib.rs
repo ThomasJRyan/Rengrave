@@ -16,6 +16,7 @@ use rengrave_core::font::{Font, Stroke, read_cxf, read_ttf};
 use rengrave_core::geometry::{Point, ViewTransform};
 use rengrave_core::project::{DocumentRequest, RengraveDocument, load_document};
 use rengrave_core::settings::{LegacySetting, LegacySettings, get_legacy_bool};
+use rfd::FileDialog;
 
 const DEFAULT_PREVIEW_ZOOM: f64 = 80.0;
 const PREVIEW_FIT_PADDING: f32 = 24.0;
@@ -373,6 +374,19 @@ impl RengraveApp {
         self.browser = Some(FileBrowser::new(target, start_dir));
     }
 
+    fn choose_path(&mut self, target: FileBrowserTarget) {
+        if let Some(path) = choose_native_path(
+            target,
+            self.browser_value(target),
+            path_from_text(&self.default_dir_path),
+        ) {
+            self.apply_browser_selection(target, path);
+        } else {
+            self.open_browser(target);
+            self.status = "Using in-app browser".to_owned();
+        }
+    }
+
     fn browser_value(&self, target: FileBrowserTarget) -> &str {
         match target {
             FileBrowserTarget::Settings => &self.settings_path,
@@ -504,13 +518,13 @@ impl eframe::App for RengraveApp {
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     ui.heading("Input");
                     if path_row(ui, "Settings", &mut self.settings_path) {
-                        self.open_browser(FileBrowserTarget::Settings);
+                        self.choose_path(FileBrowserTarget::Settings);
                     }
                     if path_row(ui, "Input", &mut self.input_path) {
-                        self.open_browser(FileBrowserTarget::Input);
+                        self.choose_path(FileBrowserTarget::Input);
                     }
                     if path_row(ui, "Default dir", &mut self.default_dir_path) {
-                        self.open_browser(FileBrowserTarget::DefaultDir);
+                        self.choose_path(FileBrowserTarget::DefaultDir);
                     }
                     ui.horizontal(|ui| {
                         if ui.button("Load").clicked() {
@@ -781,7 +795,7 @@ impl eframe::App for RengraveApp {
                     ui.separator();
                     ui.heading("Output");
                     if path_row(ui, "G-code", &mut self.gcode_path) {
-                        self.open_browser(FileBrowserTarget::GcodeOutput);
+                        self.choose_path(FileBrowserTarget::GcodeOutput);
                     }
                     if ui
                         .add_enabled(!self.gcode.is_empty(), egui::Button::new("Export G-code"))
@@ -790,7 +804,7 @@ impl eframe::App for RengraveApp {
                         self.export_current(ExportKind::Gcode);
                     }
                     if path_row(ui, "SVG", &mut self.svg_path) {
-                        self.open_browser(FileBrowserTarget::SvgOutput);
+                        self.choose_path(FileBrowserTarget::SvgOutput);
                     }
                     if ui
                         .add_enabled(self.svg.is_some(), egui::Button::new("Export SVG"))
@@ -799,7 +813,7 @@ impl eframe::App for RengraveApp {
                         self.export_current(ExportKind::Svg);
                     }
                     if path_row(ui, "DXF", &mut self.dxf_path) {
-                        self.open_browser(FileBrowserTarget::DxfOutput);
+                        self.choose_path(FileBrowserTarget::DxfOutput);
                     }
                     if ui
                         .add_enabled(self.dxf.is_some(), egui::Button::new("Export DXF"))
@@ -890,13 +904,13 @@ impl RengraveApp {
         egui::MenuBar::new().ui(ui, |ui| {
             ui.menu_button("File", |ui| {
                 if menu_action(ui, "Open settings...", true) {
-                    self.open_browser(FileBrowserTarget::Settings);
+                    self.choose_path(FileBrowserTarget::Settings);
                 }
                 if menu_action(ui, "Open input...", true) {
-                    self.open_browser(FileBrowserTarget::Input);
+                    self.choose_path(FileBrowserTarget::Input);
                 }
                 if menu_action(ui, "Set default directory...", true) {
-                    self.open_browser(FileBrowserTarget::DefaultDir);
+                    self.choose_path(FileBrowserTarget::DefaultDir);
                 }
                 ui.separator();
                 if menu_action(ui, "Load", true) {
@@ -907,7 +921,7 @@ impl RengraveApp {
                 }
                 ui.separator();
                 if menu_action(ui, "Choose G-code output...", true) {
-                    self.open_browser(FileBrowserTarget::GcodeOutput);
+                    self.choose_path(FileBrowserTarget::GcodeOutput);
                 }
                 if menu_action(ui, "Export G-code", !self.gcode.is_empty()) {
                     self.export_current(ExportKind::Gcode);
@@ -1675,6 +1689,17 @@ impl FileBrowserTarget {
         }
     }
 
+    fn dialog_title(self) -> &'static str {
+        match self {
+            Self::Settings => "Open Settings",
+            Self::Input => "Open Input",
+            Self::DefaultDir => "Choose Default Directory",
+            Self::GcodeOutput => "Choose G-code Output",
+            Self::SvgOutput => "Choose SVG Output",
+            Self::DxfOutput => "Choose DXF Output",
+        }
+    }
+
     fn default_file_name(self) -> Option<&'static str> {
         match self {
             Self::GcodeOutput => Some("rengrave_output.ngc"),
@@ -2159,6 +2184,58 @@ fn browser_start_dir(
     }
 
     env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+}
+
+fn choose_native_path(
+    target: FileBrowserTarget,
+    current_value: &str,
+    default_dir: Option<PathBuf>,
+) -> Option<PathBuf> {
+    let start_dir = browser_start_dir(target, current_value, default_dir);
+    let dialog = FileDialog::new()
+        .set_title(target.dialog_title())
+        .set_directory(start_dir);
+
+    match target {
+        FileBrowserTarget::DefaultDir => dialog.pick_folder(),
+        FileBrowserTarget::Settings => dialog
+            .add_filter("F-Engrave settings", &["ngc", "nc", "tap"])
+            .add_filter("All files", &["*"])
+            .pick_file(),
+        FileBrowserTarget::Input => dialog
+            .add_filter(
+                "R-Engrave inputs",
+                &[
+                    "cxf", "ttf", "dxf", "bmp", "gif", "jpg", "jpeg", "png", "tif", "tiff", "pbm",
+                    "ppm", "pgm", "pnm",
+                ],
+            )
+            .add_filter("All files", &["*"])
+            .pick_file(),
+        FileBrowserTarget::GcodeOutput => dialog
+            .set_file_name(output_file_name(current_value, target))
+            .add_filter("G-code", &["ngc", "nc", "tap"])
+            .save_file(),
+        FileBrowserTarget::SvgOutput => dialog
+            .set_file_name(output_file_name(current_value, target))
+            .add_filter("SVG", &["svg"])
+            .save_file(),
+        FileBrowserTarget::DxfOutput => dialog
+            .set_file_name(output_file_name(current_value, target))
+            .add_filter("DXF", &["dxf"])
+            .save_file(),
+    }
+}
+
+fn output_file_name(current_value: &str, target: FileBrowserTarget) -> String {
+    path_from_text(current_value)
+        .and_then(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .map(str::to_owned)
+        })
+        .or_else(|| target.default_file_name().map(str::to_owned))
+        .unwrap_or_else(|| "rengrave_output".to_owned())
 }
 
 fn non_empty_parent(path: &Path) -> Option<&Path> {
@@ -3178,6 +3255,22 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(file.parent().unwrap());
+    }
+
+    #[test]
+    fn output_file_name_uses_current_name_or_target_default() {
+        assert_eq!(
+            output_file_name("/tmp/custom.tap", FileBrowserTarget::GcodeOutput),
+            "custom.tap"
+        );
+        assert_eq!(
+            output_file_name("  ", FileBrowserTarget::SvgOutput),
+            "rengrave_output.svg"
+        );
+        assert_eq!(
+            output_file_name("/tmp/out", FileBrowserTarget::DxfOutput),
+            "out"
+        );
     }
 
     #[test]
