@@ -9,7 +9,11 @@ use std::sync::{
 use std::thread;
 
 use eframe::egui;
-use rengrave_core::batch::{BatchOutput, BatchRequest, SecondaryGcode, prepare_batch_output};
+#[cfg(test)]
+use rengrave_core::batch::prepare_batch_output;
+use rengrave_core::batch::{
+    BatchOutput, BatchRequest, SecondaryGcode, prepare_batch_output_with_cancel,
+};
 use rengrave_core::dxf::read_dxf_font;
 use rengrave_core::external::{PotraceStatus, detect_potrace, requires_potrace};
 use rengrave_core::font::{Font, Stroke, read_cxf, read_ttf};
@@ -297,7 +301,10 @@ impl RengraveApp {
         thread::spawn(move || {
             send_calculation_progress(&sender, &ctx, id, CalculationPhase::Preparing);
             send_calculation_progress(&sender, &ctx, id, CalculationPhase::Generating);
-            let result = prepare_batch_output(&worker_request).map_err(|err| err.to_string());
+            let result = prepare_batch_output_with_cancel(&worker_request, || {
+                worker_cancel_flag.load(Ordering::Relaxed)
+            })
+            .map_err(|err| err.to_string());
             send_calculation_progress(&sender, &ctx, id, CalculationPhase::Finalizing);
             let canceled = worker_cancel_flag.load(Ordering::Relaxed);
             let _ = sender.send(CalculationMessage::Finished {

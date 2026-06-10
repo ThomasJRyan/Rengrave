@@ -50,9 +50,19 @@ pub struct SecondaryGcode {
 pub enum BatchError {
     #[error(transparent)]
     Document(#[from] DocumentError),
+    #[error("generation canceled")]
+    Canceled,
 }
 
 pub fn prepare_batch_output(request: &BatchRequest) -> Result<BatchOutput, BatchError> {
+    prepare_batch_output_with_cancel(request, || false)
+}
+
+pub fn prepare_batch_output_with_cancel(
+    request: &BatchRequest,
+    cancel: impl Fn() -> bool,
+) -> Result<BatchOutput, BatchError> {
+    check_canceled(&cancel)?;
     let document = load_document(&DocumentRequest {
         gcode_file: request.gcode_file.clone(),
         font_or_image: request.font_or_image.clone(),
@@ -60,6 +70,7 @@ pub fn prepare_batch_output(request: &BatchRequest) -> Result<BatchOutput, Batch
         text: request.text.clone(),
         settings_overrides: request.settings_overrides.clone(),
     })?;
+    check_canceled(&cancel)?;
 
     let mut warnings = document.warnings;
     let generated_gcode = generate_engrave_gcode(
@@ -69,9 +80,13 @@ pub fn prepare_batch_output(request: &BatchRequest) -> Result<BatchOutput, Batch
         request.svg_output.is_some(),
         request.dxf_output.is_some(),
         &mut warnings,
-    );
+        &cancel,
+    )?;
+    check_canceled(&cancel)?;
     let gcode = if let Some(gcode_lines) = generated_gcode {
+        check_canceled(&cancel)?;
         let primary = render_gcode(&document.settings, &document.text, &gcode_lines.primary);
+        check_canceled(&cancel)?;
         let secondary_gcode = gcode_lines
             .secondary
             .into_iter()
@@ -110,7 +125,9 @@ fn generate_engrave_gcode(
     include_svg: bool,
     include_dxf: bool,
     warnings: &mut Vec<String>,
-) -> Option<GeneratedToolpaths> {
+    cancel: &dyn Fn() -> bool,
+) -> Result<Option<GeneratedToolpaths>, BatchError> {
+    check_canceled(cancel)?;
     if settings.get_last("input_type") == Some("image") {
         return generate_dxf_engrave_gcode(
             settings,
@@ -118,6 +135,7 @@ fn generate_engrave_gcode(
             include_svg,
             include_dxf,
             warnings,
+            cancel,
         );
     }
 
@@ -128,6 +146,7 @@ fn generate_engrave_gcode(
         include_svg,
         include_dxf,
         warnings,
+        cancel,
     )
 }
 
@@ -138,7 +157,9 @@ fn generate_text_engrave_gcode(
     include_svg: bool,
     include_dxf: bool,
     warnings: &mut Vec<String>,
-) -> Option<GeneratedToolpaths> {
+    cancel: &dyn Fn() -> bool,
+) -> Result<Option<GeneratedToolpaths>, BatchError> {
+    check_canceled(cancel)?;
     let input = resolve_input_kind(settings);
     let segarc = settings
         .get_last("segarc")
@@ -149,7 +170,7 @@ fn generate_text_engrave_gcode(
             Ok(font) => font,
             Err(err) => {
                 warnings.push(err.to_string());
-                return None;
+                return Ok(None);
             }
         },
         InputKind::TtfFont(path) => {
@@ -158,7 +179,7 @@ fn generate_text_engrave_gcode(
                 Ok(font) => font,
                 Err(err) => {
                     warnings.push(err.to_string());
-                    return None;
+                    return Ok(None);
                 }
             }
         }
@@ -166,19 +187,21 @@ fn generate_text_engrave_gcode(
             warnings.push(
                 "only CXF and TTF text fonts are currently generated in Rust batch mode".to_owned(),
             );
-            return None;
+            return Ok(None);
         }
     };
 
+    check_canceled(cancel)?;
     let layout_settings = LayoutSettings::from_legacy(settings);
     let layout = layout_text(&font, text, &layout_settings);
+    check_canceled(cancel)?;
     if !layout.missing_chars.is_empty() {
         let missing: String = layout.missing_chars.iter().collect();
         warnings.push(format!("characters not found in font file: {missing}"));
     }
     if layout.segments.is_empty() {
         warnings.push("no engraveable text segments were generated".to_owned());
-        return None;
+        return Ok(None);
     }
 
     write_layout_gcode(
@@ -189,6 +212,7 @@ fn generate_text_engrave_gcode(
         include_svg,
         include_dxf,
         warnings,
+        cancel,
     )
 }
 
@@ -198,10 +222,12 @@ fn generate_dxf_engrave_gcode(
     include_svg: bool,
     include_dxf: bool,
     warnings: &mut Vec<String>,
-) -> Option<GeneratedToolpaths> {
+    cancel: &dyn Fn() -> bool,
+) -> Result<Option<GeneratedToolpaths>, BatchError> {
+    check_canceled(cancel)?;
     let InputKind::Image(path) = resolve_input_kind(settings) else {
         warnings.push("image input path is missing".to_owned());
-        return None;
+        return Ok(None);
     };
 
     let is_dxf = path
@@ -218,7 +244,7 @@ fn generate_dxf_engrave_gcode(
             Ok(font) => font,
             Err(err) => {
                 warnings.push(err.to_string());
-                return None;
+                return Ok(None);
             }
         }
     } else if requires_potrace(&path) {
@@ -226,17 +252,19 @@ fn generate_dxf_engrave_gcode(
             Ok(dxf) => dxf_font_from_str(&dxf, segarc),
             Err(err) => {
                 warnings.push(err.to_string());
-                return None;
+                return Ok(None);
             }
         }
     } else {
         warnings.push("unsupported image input format".to_owned());
-        return None;
+        return Ok(None);
     };
+    check_canceled(cancel)?;
     let layout = layout_text(&font, "F", &LayoutSettings::from_legacy(settings));
+    check_canceled(cancel)?;
     if layout.segments.is_empty() {
         warnings.push("DXF contained no engraveable segments".to_owned());
-        return None;
+        return Ok(None);
     }
 
     write_layout_gcode(
@@ -247,6 +275,7 @@ fn generate_dxf_engrave_gcode(
         include_svg,
         include_dxf,
         warnings,
+        cancel,
     )
 }
 
@@ -272,38 +301,44 @@ fn write_layout_gcode(
     include_svg: bool,
     include_dxf: bool,
     warnings: &mut Vec<String>,
-) -> Option<GeneratedToolpaths> {
+    cancel: &dyn Fn() -> bool,
+) -> Result<Option<GeneratedToolpaths>, BatchError> {
+    check_canceled(cancel)?;
     let gcode_options = GcodeOptions::from_legacy(settings);
     let exports = build_exports(settings, segments, circle, include_svg, include_dxf);
+    check_canceled(cancel)?;
     if settings.get_last("cut_type") != Some("v-carve") {
-        return Some(GeneratedToolpaths {
+        return Ok(Some(GeneratedToolpaths {
             primary: write_engrave_gcode_with_circle(segments, circle, &gcode_options),
             secondary: Vec::new(),
             svg: exports.svg,
             dxf: exports.dxf,
-        });
+        }));
     }
 
     let vcarve_options = VCarveOptions::from_legacy(settings);
     if vcarve_options.bit_shape == crate::vcarve::BitShape::Flat {
-        return Some(GeneratedToolpaths {
+        return Ok(Some(GeneratedToolpaths {
             primary: write_engrave_gcode(segments, &gcode_options),
             secondary: Vec::new(),
             svg: exports.svg,
             dxf: exports.dxf,
-        });
+        }));
     }
 
+    check_canceled(cancel)?;
     let points = generate_vcarve_points(segments, &vcarve_options, gcode_options.accuracy);
+    check_canceled(cancel)?;
     if points.is_empty() {
         warnings.push("v-carve generated no toolpath points".to_owned());
-        return None;
+        return Ok(None);
     }
 
     let mut secondary = Vec::new();
     if include_secondary {
         let cleanup_options = CleanupOptions::from_legacy(settings);
         for bit in [CleanupBit::Straight, CleanupBit::VBit] {
+            check_canceled(cancel)?;
             let cleanup_points = generate_cleanup_points(
                 segments,
                 &cleanup_options,
@@ -311,6 +346,7 @@ fn write_layout_gcode(
                 bit,
                 gcode_options.accuracy,
             );
+            check_canceled(cancel)?;
             if cleanup_points.is_empty() {
                 continue;
             }
@@ -327,12 +363,21 @@ fn write_layout_gcode(
         }
     }
 
-    Some(GeneratedToolpaths {
+    check_canceled(cancel)?;
+    Ok(Some(GeneratedToolpaths {
         primary: write_vcarve_gcode(&points, &gcode_options, &vcarve_options),
         secondary,
         svg: exports.svg,
         dxf: exports.dxf,
-    })
+    }))
+}
+
+fn check_canceled(cancel: &dyn Fn() -> bool) -> Result<(), BatchError> {
+    if cancel() {
+        Err(BatchError::Canceled)
+    } else {
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -415,7 +460,48 @@ fn sanitized_text_comment(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::Cell;
     use std::fs;
+
+    #[test]
+    fn batch_cancel_hook_stops_before_document_load() {
+        let err = prepare_batch_output_with_cancel(&BatchRequest::default(), || true).unwrap_err();
+
+        assert_eq!(err.to_string(), "generation canceled");
+    }
+
+    #[test]
+    fn batch_cancel_hook_stops_at_stage_boundaries() {
+        let calls = Cell::new(0usize);
+        let err = prepare_batch_output_with_cancel(&BatchRequest::default(), || {
+            let next = calls.get() + 1;
+            calls.set(next);
+            next >= 2
+        })
+        .unwrap_err();
+
+        assert_eq!(err.to_string(), "generation canceled");
+        assert_eq!(calls.get(), 2);
+    }
+
+    #[test]
+    fn batch_cancel_hook_allows_normal_generation_when_clear() {
+        let calls = Cell::new(0usize);
+        let output = prepare_batch_output_with_cancel(
+            &BatchRequest {
+                batch: true,
+                ..BatchRequest::default()
+            },
+            || {
+                calls.set(calls.get() + 1);
+                false
+            },
+        )
+        .unwrap();
+
+        assert!(output.gcode.contains("settings-only output"));
+        assert!(calls.get() > 2);
+    }
 
     #[test]
     fn batch_text_uses_legacy_pipe_newline_convention() {
