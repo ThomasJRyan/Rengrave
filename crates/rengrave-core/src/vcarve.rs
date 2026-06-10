@@ -148,19 +148,33 @@ pub struct VCarvePoint {
     pub loop_id: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VCarveCanceled;
+
 pub fn generate_vcarve_points(
     segments: &[EngraveSegment],
     options: &VCarveOptions,
     accuracy: f64,
 ) -> Vec<VCarvePoint> {
+    generate_vcarve_points_with_cancel(segments, options, accuracy, &|| false)
+        .expect("non-canceling V-carve generation should not cancel")
+}
+
+pub fn generate_vcarve_points_with_cancel(
+    segments: &[EngraveSegment],
+    options: &VCarveOptions,
+    accuracy: f64,
+    cancel: &dyn Fn() -> bool,
+) -> Result<Vec<VCarvePoint>, VCarveCanceled> {
     let mut output = Vec::new();
     for (loop_index, path) in collect_paths(segments, accuracy).into_iter().enumerate() {
+        check_canceled(cancel)?;
         if path.len() < 2 {
             continue;
         }
-        append_path_vcarve_points(&path, loop_index + 1, options, &mut output);
+        append_path_vcarve_points(&path, loop_index + 1, options, &mut output, cancel)?;
     }
-    output
+    Ok(output)
 }
 
 fn append_path_vcarve_points(
@@ -168,12 +182,14 @@ fn append_path_vcarve_points(
     loop_id: usize,
     options: &VCarveOptions,
     output: &mut Vec<VCarvePoint>,
-) {
+    cancel: &dyn Fn() -> bool,
+) -> Result<(), VCarveCanceled> {
     let closed = point_distance(path[0], *path.last().unwrap()) <= ZERO;
     let area = signed_area(path);
     let max_radius = options.max_radius();
 
     for (idx, pair) in path.windows(2).enumerate() {
+        check_canceled(cancel)?;
         let start = pair[0];
         let end = pair[1];
         let dx = end.x - start.x;
@@ -188,6 +204,7 @@ fn append_path_vcarve_points(
         let inward = inward_normal(tangent, area, closed);
 
         for step in 0..steps {
+            check_canceled(cancel)?;
             let t = step as f64 / steps as f64;
             let outline = Point::new(start.x + dx * t, start.y + dy * t);
             let radius = if step == 0 {
@@ -204,11 +221,21 @@ fn append_path_vcarve_points(
     }
 
     if closed {
+        check_canceled(cancel)?;
         output.push(VCarvePoint {
             position: path[0],
             radius: 0.0,
             loop_id,
         });
+    }
+    Ok(())
+}
+
+fn check_canceled(cancel: &dyn Fn() -> bool) -> Result<(), VCarveCanceled> {
+    if cancel() {
+        Err(VCarveCanceled)
+    } else {
+        Ok(())
     }
 }
 
@@ -305,6 +332,7 @@ fn get_f64(settings: &LegacySettings, key: &str, default: f64) -> f64 {
 mod tests {
     use super::*;
     use crate::settings::default_legacy_settings;
+    use std::cell::Cell;
 
     #[test]
     fn vbit_depth_uses_included_angle() {
@@ -361,6 +389,25 @@ mod tests {
         assert!(points.iter().any(|point| point.radius == 0.0));
         assert!(points.iter().any(|point| point.radius > 0.24));
         assert!(points.iter().any(|point| point.position.y > 0.2));
+    }
+
+    #[test]
+    fn vcarve_generation_can_cancel_inside_sampling_loop() {
+        let segments = square_segments();
+        let mut settings = default_legacy_settings();
+        settings.set_or_push("v_step_len", "0.01", false);
+        let options = VCarveOptions::from_legacy(&settings);
+        let calls = Cell::new(0usize);
+
+        let err = generate_vcarve_points_with_cancel(&segments, &options, 0.001, &|| {
+            let next = calls.get() + 1;
+            calls.set(next);
+            next > 8
+        })
+        .unwrap_err();
+
+        assert_eq!(err, VCarveCanceled);
+        assert!(calls.get() > 8);
     }
 
     fn square_segments() -> Vec<EngraveSegment> {

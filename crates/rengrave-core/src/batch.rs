@@ -14,7 +14,7 @@ use crate::layout::{EngraveCircle, LayoutSettings, layout_text};
 use crate::project::{DocumentError, DocumentRequest, load_document};
 use crate::project::{InputKind, resolve_input_kind};
 use crate::settings::{LegacySetting, LegacySettings, get_legacy_bool};
-use crate::vcarve::{VCarveOptions, generate_vcarve_points};
+use crate::vcarve::{VCarveOptions, generate_vcarve_points_with_cancel};
 use crate::{FENGRAVE_VERSION, RENGRAVE_VERSION};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -401,7 +401,13 @@ fn write_layout_gcode(
 
     check_canceled(cancel)?;
     progress(BatchProgress::CalculatingVCarve);
-    let points = generate_vcarve_points(segments, &vcarve_options, gcode_options.accuracy);
+    let points = generate_vcarve_points_with_cancel(
+        segments,
+        &vcarve_options,
+        gcode_options.accuracy,
+        cancel,
+    )
+    .map_err(|_| BatchError::Canceled)?;
     check_canceled(cancel)?;
     if points.is_empty() {
         warnings.push("v-carve generated no toolpath points".to_owned());
@@ -622,6 +628,50 @@ mod tests {
             BatchProgress::CalculatingVCarve.status_text(),
             "Calculating V-carve"
         );
+    }
+
+    #[test]
+    fn batch_cancel_hook_stops_during_vcarve_sampling() {
+        let path = std::env::temp_dir().join(format!(
+            "rengrave-vcarve-cancel-{}-{}.cxf",
+            std::process::id(),
+            "batch"
+        ));
+        fs::write(&path, "[A] 4\nL 0,0,2,0\nL 2,0,2,2\nL 2,2,0,2\nL 0,2,0,0\n").unwrap();
+        let in_vcarve = Cell::new(false);
+        let vcarve_checks = Cell::new(0usize);
+
+        let err = prepare_batch_output_with_cancel_and_progress(
+            &BatchRequest {
+                batch: true,
+                font_or_image: Some(path.clone()),
+                text: Some("A".to_owned()),
+                settings_overrides: vec![
+                    LegacySetting::new("cut_type", "v-carve", false),
+                    LegacySetting::new("v_step_len", "0.01", false),
+                ],
+                ..BatchRequest::default()
+            },
+            || {
+                if in_vcarve.get() {
+                    let next = vcarve_checks.get() + 1;
+                    vcarve_checks.set(next);
+                    next > 4
+                } else {
+                    false
+                }
+            },
+            |event| {
+                if event == BatchProgress::CalculatingVCarve {
+                    in_vcarve.set(true);
+                }
+            },
+        )
+        .unwrap_err();
+
+        let _ = fs::remove_file(path);
+        assert_eq!(err.to_string(), "generation canceled");
+        assert!(vcarve_checks.get() > 4);
     }
 
     #[test]
