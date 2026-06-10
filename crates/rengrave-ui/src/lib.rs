@@ -79,6 +79,7 @@ struct RengraveApp {
     show_rapids: bool,
     show_bounds: bool,
     show_axes: bool,
+    show_grid: bool,
     browser: Option<FileBrowser>,
     input_catalog: InputCatalog,
     input_catalog_filter: InputCatalogFilter,
@@ -174,6 +175,7 @@ impl RengraveApp {
             show_rapids: true,
             show_bounds: get_legacy_bool(&document.settings, "show_box", true),
             show_axes: get_legacy_bool(&document.settings, "show_axis", true),
+            show_grid: preferences.show_grid,
             browser: None,
             input_catalog,
             input_catalog_filter: InputCatalogFilter::default(),
@@ -289,6 +291,7 @@ impl RengraveApp {
         self.show_rapids = true;
         self.show_bounds = get_legacy_bool(&defaults, "show_box", true);
         self.show_axes = get_legacy_bool(&defaults, "show_axis", true);
+        self.show_grid = true;
         self.status = "Controls reset to defaults".to_owned();
     }
 
@@ -632,6 +635,7 @@ impl RengraveApp {
             gcode_path: self.gcode_path.clone(),
             svg_path: self.svg_path.clone(),
             dxf_path: self.dxf_path.clone(),
+            show_grid: self.show_grid,
         };
         if let Err(err) = preferences.save(path) {
             self.warnings
@@ -1152,6 +1156,9 @@ impl eframe::App for RengraveApp {
                     ui.checkbox(&mut self.show_rapids, "Rapids");
                     ui.checkbox(&mut self.show_bounds, "Bounds");
                     ui.checkbox(&mut self.show_axes, "Axes");
+                    if ui.checkbox(&mut self.show_grid, "Grid").changed() {
+                        self.save_preferences();
+                    }
                     ui.label(format!("G-code lines: {}", self.gcode_lines));
                     ui.label(format!("Cut moves: {}", self.preview_segments.len()));
                     ui.label(format!("Rapid moves: {}", self.preview_rapids.len()));
@@ -1273,6 +1280,7 @@ impl eframe::App for RengraveApp {
                 self.show_rapids,
                 self.show_bounds,
                 self.show_axes,
+                self.show_grid,
             );
             if let Some(pos) = hover_pos {
                 let cursor = screen_point_to_model(rect, self.transform, pos);
@@ -1382,6 +1390,9 @@ impl RengraveApp {
                 ui.checkbox(&mut self.show_rapids, "Rapid layer");
                 ui.checkbox(&mut self.show_bounds, "Bounds layer");
                 ui.checkbox(&mut self.show_axes, "Axes layer");
+                if ui.checkbox(&mut self.show_grid, "Grid layer").changed() {
+                    self.save_preferences();
+                }
             });
         });
     }
@@ -3776,7 +3787,7 @@ fn draw_vector_input_preview(
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct UiPreferences {
     settings_path: String,
     input_path: String,
@@ -3784,6 +3795,21 @@ struct UiPreferences {
     gcode_path: String,
     svg_path: String,
     dxf_path: String,
+    show_grid: bool,
+}
+
+impl Default for UiPreferences {
+    fn default() -> Self {
+        Self {
+            settings_path: String::new(),
+            input_path: String::new(),
+            default_dir_path: String::new(),
+            gcode_path: String::new(),
+            svg_path: String::new(),
+            dxf_path: String::new(),
+            show_grid: true,
+        }
+    }
 }
 
 impl UiPreferences {
@@ -3820,6 +3846,7 @@ impl UiPreferences {
                 "gcode_path" => preferences.gcode_path = value,
                 "svg_path" => preferences.svg_path = value,
                 "dxf_path" => preferences.dxf_path = value,
+                "show_grid" => preferences.show_grid = value != "0" && value != "false",
                 _ => {}
             }
         }
@@ -3834,6 +3861,7 @@ impl UiPreferences {
             ("gcode_path", self.gcode_path.as_str()),
             ("svg_path", self.svg_path.as_str()),
             ("dxf_path", self.dxf_path.as_str()),
+            ("show_grid", if self.show_grid { "1" } else { "0" }),
         ]
         .into_iter()
         .map(|(key, value)| format!("{key}={}", escape_pref_value(value)))
@@ -4360,6 +4388,7 @@ fn draw_preview(
     show_rapids: bool,
     show_bounds: bool,
     show_axes: bool,
+    show_grid: bool,
 ) {
     painter.rect_filled(rect, 0.0, egui::Color32::from_rgb(28, 30, 32));
 
@@ -4373,6 +4402,10 @@ fn draw_preview(
             center.y - rotated.y * transform.zoom as f32 + transform.pan.y as f32,
         )
     };
+
+    if show_grid {
+        draw_preview_grid(painter, rect, transform, &to_screen);
+    }
 
     if show_bounds {
         if let Some(bounds) = bounds {
@@ -4437,6 +4470,112 @@ fn draw_preview(
             egui::Stroke::new(1.0, egui::Color32::from_rgb(80, 130, 160)),
         );
     }
+}
+
+fn draw_preview_grid(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    transform: ViewTransform,
+    to_screen: &impl Fn(Point) -> egui::Pos2,
+) {
+    let step = nice_grid_step(transform.zoom);
+    let corners = [
+        screen_point_to_model(rect, transform, rect.left_top()),
+        screen_point_to_model(rect, transform, rect.right_top()),
+        screen_point_to_model(rect, transform, rect.right_bottom()),
+        screen_point_to_model(rect, transform, rect.left_bottom()),
+    ];
+    let mut min = Point::new(f64::INFINITY, f64::INFINITY);
+    let mut max = Point::new(f64::NEG_INFINITY, f64::NEG_INFINITY);
+    for corner in corners {
+        min.x = min.x.min(corner.x);
+        min.y = min.y.min(corner.y);
+        max.x = max.x.max(corner.x);
+        max.y = max.y.max(corner.y);
+    }
+
+    min.x -= step * 2.0;
+    min.y -= step * 2.0;
+    max.x += step * 2.0;
+    max.y += step * 2.0;
+
+    let minor = egui::Stroke::new(0.6, egui::Color32::from_rgb(43, 48, 51));
+    let major = egui::Stroke::new(0.9, egui::Color32::from_rgb(56, 63, 67));
+    draw_grid_axis_lines(
+        painter,
+        min.x,
+        max.x,
+        step,
+        |x| {
+            [
+                to_screen(Point::new(x, min.y)),
+                to_screen(Point::new(x, max.y)),
+            ]
+        },
+        minor,
+        major,
+    );
+    draw_grid_axis_lines(
+        painter,
+        min.y,
+        max.y,
+        step,
+        |y| {
+            [
+                to_screen(Point::new(min.x, y)),
+                to_screen(Point::new(max.x, y)),
+            ]
+        },
+        minor,
+        major,
+    );
+}
+
+fn draw_grid_axis_lines(
+    painter: &egui::Painter,
+    min: f64,
+    max: f64,
+    step: f64,
+    points_for_value: impl Fn(f64) -> [egui::Pos2; 2],
+    minor: egui::Stroke,
+    major: egui::Stroke,
+) {
+    if step <= 0.0 || !step.is_finite() || !min.is_finite() || !max.is_finite() {
+        return;
+    }
+    let start = (min / step).floor() as i64;
+    let end = (max / step).ceil() as i64;
+    if end < start || end.saturating_sub(start) > 500 {
+        return;
+    }
+    for index in start..=end {
+        let stroke = if index % 5 == 0 { major } else { minor };
+        painter.line_segment(points_for_value(index as f64 * step), stroke);
+    }
+}
+
+fn nice_grid_step(zoom: f64) -> f64 {
+    if !zoom.is_finite() || zoom <= 0.0 {
+        return 1.0;
+    }
+    let target_model_units = 64.0 / zoom;
+    if target_model_units <= 0.0 || !target_model_units.is_finite() {
+        return 1.0;
+    }
+
+    let exponent = target_model_units.log10().floor();
+    let magnitude = 10.0_f64.powf(exponent);
+    let normalized = target_model_units / magnitude;
+    let nice = if normalized <= 1.0 {
+        1.0
+    } else if normalized <= 2.0 {
+        2.0
+    } else if normalized <= 5.0 {
+        5.0
+    } else {
+        10.0
+    };
+    nice * magnitude
 }
 
 fn draw_dashed_line(
@@ -4576,6 +4715,14 @@ mod tests {
             preview_length_readout("Rapid length", &[]),
             "Rapid length: 0.0000"
         );
+    }
+
+    #[test]
+    fn preview_grid_step_uses_readable_zoom_scaled_spacing() {
+        assert_eq!(nice_grid_step(80.0), 1.0);
+        assert_eq!(nice_grid_step(8.0), 10.0);
+        assert_eq!(nice_grid_step(320.0), 0.2);
+        assert_eq!(nice_grid_step(0.0), 1.0);
     }
 
     #[test]
@@ -5666,12 +5813,20 @@ mod tests {
             gcode_path: "/tmp/out.ngc".to_owned(),
             svg_path: "/tmp/out.svg".to_owned(),
             dxf_path: "/tmp/out.dxf".to_owned(),
+            show_grid: false,
         };
 
         let encoded = preferences.to_text();
         let parsed = UiPreferences::parse(&encoded);
 
         assert_eq!(parsed, preferences);
+    }
+
+    #[test]
+    fn ui_preferences_default_grid_visible_for_old_files() {
+        let preferences = UiPreferences::parse("input_path=/tmp/example.cxf\n");
+
+        assert!(preferences.show_grid);
     }
 
     #[test]
