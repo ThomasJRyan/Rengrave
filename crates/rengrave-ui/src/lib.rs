@@ -2567,6 +2567,7 @@ enum InputPreviewData {
         segments: Vec<PreviewSegment>,
         bounds: Option<PreviewBounds>,
         segment_count: usize,
+        missing_chars: Vec<char>,
     },
     Bitmap {
         original_width: u32,
@@ -3329,18 +3330,23 @@ fn load_input_preview_data(path: &Path, sample_text: Option<&str>) -> InputPrevi
     match InputCatalogKind::from_path(path) {
         Some(InputCatalogKind::CxfFont) => match read_cxf(path, 5.0) {
             Ok(font) => {
-                vector_input_preview("CXF font", preview_segments_for_font(&font, sample_text))
+                let preview = preview_segments_for_font(&font, sample_text);
+                vector_input_preview("CXF font", preview.segments, preview.missing_chars)
             }
             Err(err) => InputPreviewData::Error(err.to_string()),
         },
         Some(InputCatalogKind::TtfFont) => match read_ttf(path, 5.0, false) {
             Ok(font) => {
-                vector_input_preview("TTF font", preview_segments_for_font(&font, sample_text))
+                let preview = preview_segments_for_font(&font, sample_text);
+                vector_input_preview("TTF font", preview.segments, preview.missing_chars)
             }
             Err(err) => InputPreviewData::Error(err.to_string()),
         },
         Some(InputCatalogKind::Dxf) => match read_dxf_font(path, 5.0) {
-            Ok(font) => vector_input_preview("DXF artwork", preview_segments_for_font(&font, None)),
+            Ok(font) => {
+                let preview = preview_segments_for_font(&font, None);
+                vector_input_preview("DXF artwork", preview.segments, Vec::new())
+            }
             Err(err) => InputPreviewData::Error(err.to_string()),
         },
         Some(InputCatalogKind::Bitmap) => load_bitmap_preview(path),
@@ -3348,13 +3354,18 @@ fn load_input_preview_data(path: &Path, sample_text: Option<&str>) -> InputPrevi
     }
 }
 
-fn vector_input_preview(label: &str, segments: Vec<PreviewSegment>) -> InputPreviewData {
+fn vector_input_preview(
+    label: &str,
+    segments: Vec<PreviewSegment>,
+    missing_chars: Vec<char>,
+) -> InputPreviewData {
     let segment_count = segments.len();
     InputPreviewData::Vector {
         label: label.to_owned(),
         bounds: PreviewBounds::from_segments(&segments),
         segments,
         segment_count,
+        missing_chars,
     }
 }
 
@@ -3373,8 +3384,15 @@ fn vector_input_preview_readouts(
     readouts
 }
 
-fn preview_segments_for_font(font: &Font, sample_text: Option<&str>) -> Vec<PreviewSegment> {
+#[derive(Debug, Clone, PartialEq)]
+struct FontInputPreview {
+    segments: Vec<PreviewSegment>,
+    missing_chars: Vec<char>,
+}
+
+fn preview_segments_for_font(font: &Font, sample_text: Option<&str>) -> FontInputPreview {
     let mut segments = Vec::new();
+    let mut missing_chars = Vec::new();
     let mut cursor_x = 0.0;
     let fallback_advance = font.max_x().max(8.0) * 0.65;
     let sample_text = sample_text.unwrap_or("R-Engrave");
@@ -3385,6 +3403,9 @@ fn preview_segments_for_font(font: &Font, sample_text: Option<&str>) -> Vec<Prev
             continue;
         }
         let Some(glyph) = font.get_char(ch) else {
+            if !missing_chars.contains(&ch) {
+                missing_chars.push(ch);
+            }
             cursor_x += fallback_advance;
             continue;
         };
@@ -3398,7 +3419,10 @@ fn preview_segments_for_font(font: &Font, sample_text: Option<&str>) -> Vec<Prev
         }
     }
 
-    segments
+    FontInputPreview {
+        segments,
+        missing_chars,
+    }
 }
 
 fn append_stroke_segments(segments: &mut Vec<PreviewSegment>, strokes: &[Stroke], offset: Point) {
@@ -3495,6 +3519,23 @@ fn bitmap_trace_stats_readout(stats: BitmapTraceStats) -> String {
     )
 }
 
+fn missing_chars_readout(chars: &[char]) -> String {
+    let max_visible = 10;
+    let mut text = format!(
+        "Missing chars: {}",
+        chars
+            .iter()
+            .take(max_visible)
+            .map(|ch| ch.escape_default().to_string())
+            .collect::<Vec<_>>()
+            .join(" ")
+    );
+    if chars.len() > max_visible {
+        text.push_str(&format!(", +{} more", chars.len() - max_visible));
+    }
+    text
+}
+
 fn draw_input_preview(ui: &mut egui::Ui, preview: &mut InputPreview) {
     match &mut preview.data {
         InputPreviewData::Empty => {
@@ -3508,8 +3549,15 @@ fn draw_input_preview(ui: &mut egui::Ui, preview: &mut InputPreview) {
             segments,
             bounds,
             segment_count,
+            missing_chars,
         } => {
             ui.label(format!("{label} · {segment_count} segments"));
+            if !missing_chars.is_empty() {
+                ui.colored_label(
+                    egui::Color32::from_rgb(225, 176, 84),
+                    missing_chars_readout(missing_chars),
+                );
+            }
             for readout in vector_input_preview_readouts(segments, *bounds) {
                 ui.monospace(readout);
             }
@@ -5375,6 +5423,38 @@ mod tests {
             }
             other => panic!("unexpected preview: {other:?}"),
         }
+    }
+
+    #[test]
+    fn input_preview_reports_missing_font_sample_chars() {
+        let dir = std::env::temp_dir().join(format!(
+            "rengrave-ui-cxf-preview-missing-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("font.cxf");
+        fs::write(&path, "[A] 1\nL 0,0,1,0\n").unwrap();
+
+        let preview = load_input_preview_data(&path, Some("ABBA"));
+
+        let _ = fs::remove_dir_all(dir);
+        match preview {
+            InputPreviewData::Vector { missing_chars, .. } => {
+                assert_eq!(missing_chars, vec!['B']);
+                assert_eq!(missing_chars_readout(&missing_chars), "Missing chars: B");
+            }
+            other => panic!("unexpected preview: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn missing_chars_readout_limits_long_lists() {
+        let chars = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k'];
+
+        assert_eq!(
+            missing_chars_readout(&chars),
+            "Missing chars: a b c d e f g h i j, +1 more"
+        );
     }
 
     #[test]
