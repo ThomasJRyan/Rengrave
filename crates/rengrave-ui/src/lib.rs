@@ -59,13 +59,14 @@ struct RengraveApp {
     dxf: Option<String>,
     gcode_lines: usize,
     preview_segments: Vec<PreviewSegment>,
+    preview_rapids: Vec<PreviewSegment>,
     preview_bounds: Option<PreviewBounds>,
     gcode_path: String,
     svg_path: String,
     dxf_path: String,
     show_toolpath: bool,
+    show_rapids: bool,
     show_bounds: bool,
-    show_v_area: bool,
     browser: Option<FileBrowser>,
     input_catalog: InputCatalog,
     input_preview: InputPreview,
@@ -137,6 +138,7 @@ impl RengraveApp {
             dxf: None,
             gcode_lines: 0,
             preview_segments: Vec::new(),
+            preview_rapids: Vec::new(),
             preview_bounds: None,
             gcode_path: if preferences.gcode_path.trim().is_empty() {
                 default_output_path(&default_dir, "rengrave_output.ngc")
@@ -154,8 +156,8 @@ impl RengraveApp {
                 preferences.dxf_path
             },
             show_toolpath: true,
+            show_rapids: true,
             show_bounds: true,
-            show_v_area: false,
             browser: None,
             input_catalog,
             input_preview: InputPreview::default(),
@@ -318,6 +320,7 @@ impl RengraveApp {
                 self.dxf = None;
                 self.gcode_lines = 0;
                 self.preview_segments.clear();
+                self.preview_rapids.clear();
                 self.preview_bounds = None;
             }
         }
@@ -325,8 +328,11 @@ impl RengraveApp {
 
     fn apply_batch_output(&mut self, output: BatchOutput) {
         self.gcode_lines = output.gcode.lines().count();
-        self.preview_segments = parse_preview_segments(&output.gcode);
-        self.preview_bounds = PreviewBounds::from_segments(&self.preview_segments);
+        let preview_motion = parse_preview_motion(&output.gcode);
+        self.preview_segments = preview_motion.cuts;
+        self.preview_rapids = preview_motion.rapids;
+        self.preview_bounds =
+            PreviewBounds::from_segment_layers(&self.preview_segments, &self.preview_rapids);
         if self.preview_bounds.is_some() {
             self.fit_preview_requested = true;
         }
@@ -831,10 +837,11 @@ impl eframe::App for RengraveApp {
                     ui.separator();
                     ui.heading("Preview");
                     ui.checkbox(&mut self.show_toolpath, "Toolpath");
+                    ui.checkbox(&mut self.show_rapids, "Rapids");
                     ui.checkbox(&mut self.show_bounds, "Bounds");
-                    ui.checkbox(&mut self.show_v_area, "V-carve area");
                     ui.label(format!("G-code lines: {}", self.gcode_lines));
-                    ui.label(format!("Preview moves: {}", self.preview_segments.len()));
+                    ui.label(format!("Cut moves: {}", self.preview_segments.len()));
+                    ui.label(format!("Rapid moves: {}", self.preview_rapids.len()));
                 });
             });
 
@@ -850,9 +857,10 @@ impl eframe::App for RengraveApp {
                     ui.monospace(&self.status);
                     ui.separator();
                     ui.monospace(format!(
-                        "{} lines, {} preview moves",
+                        "{} lines, {} cut moves, {} rapid moves",
                         self.gcode_lines,
-                        self.preview_segments.len()
+                        self.preview_segments.len(),
+                        self.preview_rapids.len()
                     ));
                 });
                 ui.separator();
@@ -889,8 +897,10 @@ impl eframe::App for RengraveApp {
                 rect,
                 self.transform,
                 &self.preview_segments,
+                &self.preview_rapids,
                 self.preview_bounds,
                 self.show_toolpath,
+                self.show_rapids,
                 self.show_bounds,
             );
         });
@@ -966,8 +976,8 @@ impl RengraveApp {
                 }
                 ui.separator();
                 ui.checkbox(&mut self.show_toolpath, "Toolpath layer");
+                ui.checkbox(&mut self.show_rapids, "Rapid layer");
                 ui.checkbox(&mut self.show_bounds, "Bounds layer");
-                ui.checkbox(&mut self.show_v_area, "V-carve area layer");
             });
         });
     }
@@ -2728,6 +2738,23 @@ impl PreviewBounds {
             Point::new(self.min.x, self.max.y),
         ]
     }
+
+    fn from_segment_layers(cuts: &[PreviewSegment], rapids: &[PreviewSegment]) -> Option<Self> {
+        let mut points = cuts
+            .iter()
+            .chain(rapids.iter())
+            .flat_map(|segment| [segment.start, segment.end].into_iter());
+        let first = points.next()?;
+        let mut min = first;
+        let mut max = first;
+        for point in points {
+            min.x = min.x.min(point.x);
+            min.y = min.y.min(point.y);
+            max.x = max.x.max(point.x);
+            max.y = max.y.max(point.y);
+        }
+        Some(Self { min, max })
+    }
 }
 
 fn fit_transform_to_bounds(
@@ -2768,9 +2795,15 @@ fn fit_transform_to_bounds(
     transform.pan = Point::new(-center.x * zoom, center.y * zoom);
 }
 
-fn parse_preview_segments(gcode: &str) -> Vec<PreviewSegment> {
+#[derive(Debug, Clone, Default, PartialEq)]
+struct PreviewMotion {
+    cuts: Vec<PreviewSegment>,
+    rapids: Vec<PreviewSegment>,
+}
+
+fn parse_preview_motion(gcode: &str) -> PreviewMotion {
     let mut current = None;
-    let mut segments = Vec::new();
+    let mut motion = PreviewMotion::default();
 
     for line in gcode.lines() {
         let trimmed = line.trim();
@@ -2788,13 +2821,26 @@ fn parse_preview_segments(gcode: &str) -> Vec<PreviewSegment> {
         }
 
         let params = motion_params(trimmed);
+        if matches!(command, "G0" | "G00") {
+            let Some(next) = params.point(current) else {
+                continue;
+            };
+            if let Some(start) = current {
+                if point_distance(start, next) > 0.00001 {
+                    motion.rapids.push(PreviewSegment { start, end: next });
+                }
+            }
+            current = Some(next);
+            continue;
+        }
+
         if matches!(command, "G2" | "G02" | "G3" | "G03") {
             if let Some(start) = current {
                 if let (Some(i), Some(j)) = (params.i, params.j) {
                     let end = params.point(current).unwrap_or(start);
                     let center = Point::new(start.x + i, start.y + j);
                     append_preview_arc(
-                        &mut segments,
+                        &mut motion.cuts,
                         start,
                         end,
                         center,
@@ -2812,14 +2858,14 @@ fn parse_preview_segments(gcode: &str) -> Vec<PreviewSegment> {
         if matches!(command, "G1" | "G01" | "G2" | "G02" | "G3" | "G03") {
             if let Some(start) = current {
                 if point_distance(start, next) > 0.00001 {
-                    segments.push(PreviewSegment { start, end: next });
+                    motion.cuts.push(PreviewSegment { start, end: next });
                 }
             }
         }
         current = Some(next);
     }
 
-    segments
+    motion
 }
 
 #[derive(Debug, Default)]
@@ -2934,8 +2980,10 @@ fn draw_preview(
     rect: egui::Rect,
     transform: ViewTransform,
     segments: &[PreviewSegment],
+    rapids: &[PreviewSegment],
     bounds: Option<PreviewBounds>,
     show_toolpath: bool,
+    show_rapids: bool,
     show_bounds: bool,
 ) {
     painter.rect_filled(rect, 0.0, egui::Color32::from_rgb(28, 30, 32));
@@ -2966,6 +3014,19 @@ fn draw_preview(
                     egui::Stroke::new(1.0, egui::Color32::from_rgb(90, 104, 112)),
                 );
             }
+        }
+    }
+
+    if show_rapids {
+        for segment in rapids {
+            draw_dashed_line(
+                painter,
+                to_screen(segment.start),
+                to_screen(segment.end),
+                egui::Stroke::new(1.0, egui::Color32::from_rgb(190, 142, 72)),
+                8.0,
+                5.0,
+            );
         }
     }
 
@@ -3001,34 +3062,80 @@ fn draw_preview(
     );
 }
 
+fn draw_dashed_line(
+    painter: &egui::Painter,
+    start: egui::Pos2,
+    end: egui::Pos2,
+    stroke: egui::Stroke,
+    dash_length: f32,
+    gap_length: f32,
+) {
+    let vector = end - start;
+    let length = vector.length();
+    if length <= 0.001 {
+        return;
+    }
+
+    let direction = vector / length;
+    let mut offset = 0.0;
+    while offset < length {
+        let next_offset = (offset + dash_length).min(length);
+        painter.line_segment(
+            [start + direction * offset, start + direction * next_offset],
+            stroke,
+        );
+        offset += dash_length + gap_length;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn parses_linear_gcode_moves_for_preview() {
-        let segments = parse_preview_segments(
+        let motion = parse_preview_motion(
             "G0 X0.0000 Y0.0000\nG1 Z-0.0050\nG1 X1.0000 Y0.0000\nG0 X2.0000 Y2.0000\nG1 X2.0000 Y3.0000\n",
         );
 
-        assert_eq!(segments.len(), 2);
-        assert_eq!(segments[0].start, Point::new(0.0, 0.0));
-        assert_eq!(segments[0].end, Point::new(1.0, 0.0));
-        assert_eq!(segments[1].start, Point::new(2.0, 2.0));
-        assert_eq!(segments[1].end, Point::new(2.0, 3.0));
+        assert_eq!(motion.cuts.len(), 2);
+        assert_eq!(motion.cuts[0].start, Point::new(0.0, 0.0));
+        assert_eq!(motion.cuts[0].end, Point::new(1.0, 0.0));
+        assert_eq!(motion.cuts[1].start, Point::new(2.0, 2.0));
+        assert_eq!(motion.cuts[1].end, Point::new(2.0, 3.0));
+        assert_eq!(motion.rapids.len(), 1);
+        assert_eq!(motion.rapids[0].start, Point::new(1.0, 0.0));
+        assert_eq!(motion.rapids[0].end, Point::new(2.0, 2.0));
     }
 
     #[test]
     fn parses_full_circle_arc_for_preview() {
-        let segments =
-            parse_preview_segments("G0 X-2.0000 Y0.0000\nG1 Z-0.0050\nG2 I2.0000 J0.0000\n");
+        let motion = parse_preview_motion("G0 X-2.0000 Y0.0000\nG1 Z-0.0050\nG2 I2.0000 J0.0000\n");
 
-        assert_eq!(segments.len(), 64);
-        assert_eq!(segments[0].start, Point::new(-2.0, 0.0));
-        assert!((segments.last().unwrap().end.x + 2.0).abs() < 1e-9);
-        assert!(segments.iter().any(|segment| segment.end.x > 1.99));
-        assert!(segments.iter().any(|segment| segment.end.y > 1.99));
-        assert!(segments.iter().any(|segment| segment.end.y < -1.99));
+        assert_eq!(motion.cuts.len(), 64);
+        assert!(motion.rapids.is_empty());
+        assert_eq!(motion.cuts[0].start, Point::new(-2.0, 0.0));
+        assert!((motion.cuts.last().unwrap().end.x + 2.0).abs() < 1e-9);
+        assert!(motion.cuts.iter().any(|segment| segment.end.x > 1.99));
+        assert!(motion.cuts.iter().any(|segment| segment.end.y > 1.99));
+        assert!(motion.cuts.iter().any(|segment| segment.end.y < -1.99));
+    }
+
+    #[test]
+    fn preview_bounds_include_cut_and_rapid_layers() {
+        let cuts = vec![PreviewSegment {
+            start: Point::new(0.0, 0.0),
+            end: Point::new(1.0, 1.0),
+        }];
+        let rapids = vec![PreviewSegment {
+            start: Point::new(-2.0, 3.0),
+            end: Point::new(4.0, -1.0),
+        }];
+
+        let bounds = PreviewBounds::from_segment_layers(&cuts, &rapids).unwrap();
+
+        assert_eq!(bounds.min, Point::new(-2.0, -1.0));
+        assert_eq!(bounds.max, Point::new(4.0, 3.0));
     }
 
     #[test]
