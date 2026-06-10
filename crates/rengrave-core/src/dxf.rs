@@ -64,6 +64,11 @@ pub fn parse_dxf_segments(input: &str, segarc_degrees: f64) -> Vec<Stroke> {
                 parse_circle_entity(entity, segarc_degrees, &mut strokes);
                 idx = next;
             }
+            "LEADER" => {
+                let (entity, next) = collect_entity(&pairs, idx + 1);
+                parse_leader_entity(entity, &mut strokes);
+                idx = next;
+            }
             "LWPOLYLINE" => {
                 let (entity, next) = collect_entity(&pairs, idx + 1);
                 parse_lwpolyline_entity(entity, segarc_degrees, &mut strokes);
@@ -122,6 +127,41 @@ fn parse_line_entity(entity: &[(i32, String)], strokes: &mut Vec<Stroke>) {
     if let (Some(x1), Some(y1), Some(x2), Some(y2)) = (x1, y1, x2, y2) {
         strokes.push(Stroke::new(x1, y1, x2, y2));
     }
+}
+
+fn parse_leader_entity(entity: &[(i32, String)], strokes: &mut Vec<Stroke>) {
+    let vertices = collect_xy_vertices(entity);
+    for pair in vertices.windows(2) {
+        strokes.push(Stroke {
+            start: pair[0],
+            end: pair[1],
+        });
+    }
+}
+
+fn collect_xy_vertices(entity: &[(i32, String)]) -> Vec<Point> {
+    let mut vertices = Vec::new();
+    let mut current_x = None;
+    let mut current_y = None;
+
+    for (code, value) in entity {
+        match *code {
+            10 => {
+                if let (Some(x), Some(y)) = (current_x.take(), current_y.take()) {
+                    vertices.push(Point::new(x, y));
+                }
+                current_x = value.parse().ok();
+            }
+            20 => current_y = value.parse().ok(),
+            _ => {}
+        }
+    }
+
+    if let (Some(x), Some(y)) = (current_x, current_y) {
+        vertices.push(Point::new(x, y));
+    }
+
+    vertices
 }
 
 fn parse_arc_entity(entity: &[(i32, String)], segarc_degrees: f64, strokes: &mut Vec<Stroke>) {
@@ -415,6 +455,19 @@ mod tests {
         assert_eq!(strokes.len(), 1);
         assert_eq!(strokes[0].start, Point::new(1.0, 2.0));
         assert_eq!(strokes[0].end, Point::new(3.0, 4.0));
+    }
+
+    #[test]
+    fn parses_leader_entities() {
+        let strokes = parse_dxf_segments(
+            "0\nLEADER\n10\n0\n20\n0\n10\n1\n20\n0\n10\n1\n20\n1\n0\nENDSEC\n",
+            5.0,
+        );
+
+        assert_eq!(strokes.len(), 2);
+        assert_eq!(strokes[0].start, Point::new(0.0, 0.0));
+        assert_eq!(strokes[0].end, Point::new(1.0, 0.0));
+        assert_eq!(strokes[1].end, Point::new(1.0, 1.0));
     }
 
     #[test]
