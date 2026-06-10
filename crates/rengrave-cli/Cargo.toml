@@ -1,0 +1,16 @@
+[package]
+name = "rengrave-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "rengrave"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+rengrave-core = { path = "../rengrave-core" }
+rengrave-ui = { path = "../rengrave-ui" }

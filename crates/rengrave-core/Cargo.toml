@@ -1,0 +1,15 @@
+[package]
+name = "rengrave-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+clipper2.workspace = true
+image.workspace = true
+rayon.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+ttf-parser.workspace = true
+

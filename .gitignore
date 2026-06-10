@@ -1,0 +1,7 @@
+/target/
+*.ngc
+*.tap
+*.dxf
+*.svg
+
+f-engrave_source/

@@ -1,0 +1,15 @@
+[package]
+name = "rengrave-ui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "rengrave-ui"
+path = "src/main.rs"
+
+[dependencies]
+eframe.workspace = true
+rengrave-core = { path = "../rengrave-core" }
+
