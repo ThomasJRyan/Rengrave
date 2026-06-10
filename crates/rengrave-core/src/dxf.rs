@@ -54,6 +54,16 @@ pub fn parse_dxf_segments(input: &str, segarc_degrees: f64) -> Vec<Stroke> {
                 parse_line_entity(entity, &mut strokes);
                 idx = next;
             }
+            "ARC" => {
+                let (entity, next) = collect_entity(&pairs, idx + 1);
+                parse_arc_entity(entity, segarc_degrees, &mut strokes);
+                idx = next;
+            }
+            "CIRCLE" => {
+                let (entity, next) = collect_entity(&pairs, idx + 1);
+                parse_circle_entity(entity, segarc_degrees, &mut strokes);
+                idx = next;
+            }
             "LWPOLYLINE" => {
                 let (entity, next) = collect_entity(&pairs, idx + 1);
                 parse_lwpolyline_entity(entity, segarc_degrees, &mut strokes);
@@ -111,6 +121,103 @@ fn parse_line_entity(entity: &[(i32, String)], strokes: &mut Vec<Stroke>) {
 
     if let (Some(x1), Some(y1), Some(x2), Some(y2)) = (x1, y1, x2, y2) {
         strokes.push(Stroke::new(x1, y1, x2, y2));
+    }
+}
+
+fn parse_arc_entity(entity: &[(i32, String)], segarc_degrees: f64, strokes: &mut Vec<Stroke>) {
+    let mut center_x = None;
+    let mut center_y = None;
+    let mut radius = None;
+    let mut start = None;
+    let mut end = None;
+
+    for (code, value) in entity {
+        match *code {
+            10 => center_x = value.parse().ok(),
+            20 => center_y = value.parse().ok(),
+            40 => radius = value.parse().ok(),
+            50 => start = value.parse().ok(),
+            51 => end = value.parse().ok(),
+            _ => {}
+        }
+    }
+
+    if let (Some(x), Some(y), Some(radius), Some(start), Some(end)) =
+        (center_x, center_y, radius, start, end)
+    {
+        append_arc_segments(
+            Point::new(x, y),
+            radius,
+            start,
+            end,
+            segarc_degrees,
+            strokes,
+        );
+    }
+}
+
+fn parse_circle_entity(entity: &[(i32, String)], segarc_degrees: f64, strokes: &mut Vec<Stroke>) {
+    let mut center_x = None;
+    let mut center_y = None;
+    let mut radius = None;
+
+    for (code, value) in entity {
+        match *code {
+            10 => center_x = value.parse().ok(),
+            20 => center_y = value.parse().ok(),
+            40 => radius = value.parse().ok(),
+            _ => {}
+        }
+    }
+
+    if let (Some(x), Some(y), Some(radius)) = (center_x, center_y, radius) {
+        append_arc_segments(
+            Point::new(x, y),
+            radius,
+            0.0,
+            360.0,
+            segarc_degrees,
+            strokes,
+        );
+    }
+}
+
+fn append_arc_segments(
+    center: Point,
+    radius: f64,
+    start_degrees: f64,
+    mut end_degrees: f64,
+    segarc_degrees: f64,
+    strokes: &mut Vec<Stroke>,
+) {
+    if radius.abs() <= 1.0e-12 {
+        return;
+    }
+
+    while end_degrees < start_degrees {
+        end_degrees += 360.0;
+    }
+    let delta = end_degrees - start_degrees;
+    let steps = ((delta / segarc_degrees.max(1.0)).floor() as usize).max(2);
+    let step = delta.to_radians() / steps as f64;
+    let mut previous_angle = start_degrees.to_radians();
+    let mut previous = Point::new(
+        center.x + radius * previous_angle.cos(),
+        center.y + radius * previous_angle.sin(),
+    );
+
+    for _ in 0..steps {
+        let next_angle = previous_angle + step;
+        let next = Point::new(
+            center.x + radius * next_angle.cos(),
+            center.y + radius * next_angle.sin(),
+        );
+        strokes.push(Stroke {
+            start: previous,
+            end: next,
+        });
+        previous_angle = next_angle;
+        previous = next;
     }
 }
 
@@ -311,6 +418,32 @@ mod tests {
     }
 
     #[test]
+    fn approximates_arc_entities() {
+        let strokes = parse_dxf_segments(
+            "0\nARC\n10\n0\n20\n0\n40\n1\n50\n0\n51\n90\n0\nENDSEC\n",
+            45.0,
+        );
+
+        assert_eq!(strokes.len(), 2);
+        assert_point_close(strokes[0].start, Point::new(1.0, 0.0));
+        assert_point_close(
+            strokes[0].end,
+            Point::new(2.0f64.sqrt() / 2.0, 2.0f64.sqrt() / 2.0),
+        );
+        assert_point_close(strokes[1].end, Point::new(0.0, 1.0));
+    }
+
+    #[test]
+    fn approximates_circle_entities() {
+        let strokes = parse_dxf_segments("0\nCIRCLE\n10\n1\n20\n2\n40\n2\n0\nENDSEC\n", 90.0);
+
+        assert_eq!(strokes.len(), 4);
+        assert_point_close(strokes[0].start, Point::new(3.0, 2.0));
+        assert_point_close(strokes[0].end, Point::new(1.0, 4.0));
+        assert_point_close(strokes.last().unwrap().end, Point::new(3.0, 2.0));
+    }
+
+    #[test]
     fn parses_closed_lwpolyline_entities() {
         let strokes = parse_dxf_segments(
             "0\nLWPOLYLINE\n70\n1\n10\n0\n20\n0\n10\n1\n20\n0\n10\n1\n20\n1\n0\nENDSEC\n",
@@ -331,5 +464,10 @@ mod tests {
         assert!(strokes.len() > 1);
         assert!((strokes.last().unwrap().end.x - 2.0).abs() < 1e-9);
         assert!(strokes.iter().any(|stroke| stroke.end.y.abs() > 0.1));
+    }
+
+    fn assert_point_close(actual: Point, expected: Point) {
+        assert!((actual.x - expected.x).abs() < 1e-9);
+        assert!((actual.y - expected.y).abs() < 1e-9);
     }
 }
