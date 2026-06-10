@@ -1,3 +1,5 @@
+use std::env;
+use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -54,18 +56,18 @@ pub fn resolve_input_kind(settings: &LegacySettings) -> InputKind {
     match settings.get_last("input_type") {
         Some("image") => settings
             .get_last("imagefile")
-            .map(|path| InputKind::Image(PathBuf::from(path)))
+            .map(|path| InputKind::Image(resolve_image_path(settings, path)))
             .unwrap_or(InputKind::Missing),
         _ => {
             let fontfile = settings.get_last("fontfile").unwrap_or_default().trim();
             if fontfile.is_empty() {
                 return InputKind::Missing;
             }
-            let font_path = PathBuf::from(fontfile);
+            let font_path = expand_user_path(fontfile);
             let path = if font_path.is_absolute() {
                 font_path
             } else {
-                PathBuf::from(settings.get_last("fontdir").unwrap_or_default()).join(font_path)
+                expand_user_path(settings.get_last("fontdir").unwrap_or_default()).join(font_path)
             };
             match path
                 .extension()
@@ -79,6 +81,45 @@ pub fn resolve_input_kind(settings: &LegacySettings) -> InputKind {
             }
         }
     }
+}
+
+fn resolve_image_path(settings: &LegacySettings, imagefile: &str) -> PathBuf {
+    let raw = expand_user_path(imagefile.trim());
+    let Some(file_name) = raw.file_name().map(OsStr::to_owned) else {
+        return raw;
+    };
+
+    let mut candidates = vec![raw.clone(), PathBuf::from(&file_name)];
+    if let Some(ngc_dir) = settings.get_last("NGC_DIR").map(str::trim).filter(|value| {
+        !value.is_empty() && !value.ends_with("/None") && !value.ends_with("\\None")
+    }) {
+        candidates.push(expand_user_path(ngc_dir).join(&file_name));
+    }
+
+    candidates
+        .into_iter()
+        .find(|candidate| candidate.is_file())
+        .unwrap_or(raw)
+}
+
+fn expand_user_path(path: &str) -> PathBuf {
+    if path == "~" {
+        if let Some(home) = home_dir() {
+            return home;
+        }
+    }
+    if let Some(rest) = path.strip_prefix("~/").or_else(|| path.strip_prefix("~\\")) {
+        if let Some(home) = home_dir() {
+            return home.join(rest);
+        }
+    }
+    PathBuf::from(path)
+}
+
+fn home_dir() -> Option<PathBuf> {
+    env::var_os("HOME")
+        .or_else(|| env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
 }
 
 pub fn load_document(request: &DocumentRequest) -> Result<RengraveDocument, DocumentError> {
@@ -204,6 +245,24 @@ mod tests {
             document.settings.get_last("imagefile"),
             Some("/tmp/example.dxf")
         );
+    }
+
+    #[test]
+    fn resolves_stale_imagefile_from_ngc_dir_basename() {
+        let dir =
+            std::env::temp_dir().join(format!("rengrave-ngc-dir-image-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let image_path = dir.join("part.dxf");
+        fs::write(&image_path, "0\nSECTION\n0\nENDSEC\n").unwrap();
+
+        let mut settings = default_legacy_settings();
+        settings.set_or_push("input_type", "image", false);
+        settings.set_or_push("imagefile", "/missing/original/part.dxf", true);
+        settings.set_or_push("NGC_DIR", dir.display().to_string(), true);
+
+        assert_eq!(resolve_input_kind(&settings), InputKind::Image(image_path));
+
+        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]

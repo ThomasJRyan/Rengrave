@@ -497,6 +497,43 @@ mod tests {
     }
 
     #[test]
+    fn batch_recovers_stale_image_path_from_ngc_dir() {
+        let dir = std::env::temp_dir().join(format!(
+            "rengrave-recover-image-{}-{}",
+            std::process::id(),
+            "batch"
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let dxf_path = dir.join("part.dxf");
+        let settings_path = dir.join("settings.ngc");
+        fs::write(
+            &dxf_path,
+            "0\nSECTION\n0\nLINE\n10\n0\n20\n0\n11\n0\n21\n10\n0\nENDSEC\n",
+        )
+        .unwrap();
+        fs::write(
+            &settings_path,
+            format!(
+                "(fengrave_set input_type  image )\n(fengrave_set imagefile   \"/missing/original/part.dxf\" )\n(fengrave_set NGC_DIR     \"{}\" )\n",
+                dir.display()
+            ),
+        )
+        .unwrap();
+
+        let output = prepare_batch_output(&BatchRequest {
+            batch: true,
+            gcode_file: Some(settings_path),
+            ..BatchRequest::default()
+        })
+        .unwrap();
+
+        let _ = fs::remove_dir_all(dir);
+        assert!(output.warnings.is_empty());
+        assert!(output.gcode.contains("(fengrave_set input_type  image )"));
+        assert!(output.gcode.contains("G1 X0.0000 Y1.9900"));
+    }
+
+    #[test]
     fn batch_reads_legacy_plotbox_box_alias() {
         let font_path = std::env::temp_dir().join(format!(
             "rengrave-plotbox-alias-{}-{}.cxf",
