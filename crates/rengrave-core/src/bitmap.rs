@@ -124,7 +124,7 @@ fn needs_image_conversion(path: &Path) -> bool {
             .and_then(|ext| ext.to_str())
             .map(str::to_ascii_lowercase)
             .as_deref(),
-        Some("jpg" | "jpeg" | "png" | "tif" | "tiff")
+        Some("gif" | "jpg" | "jpeg" | "png" | "tif" | "tiff")
     )
 }
 
@@ -205,6 +205,18 @@ mod tests {
         let bytes = image_to_pbm_bytes(DynamicImage::ImageRgba8(image));
 
         assert_eq!(bytes.last(), Some(&0));
+    }
+
+    #[test]
+    fn gif_inputs_decode_for_pbm_conversion() {
+        let gif = b"GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02D\x01\x00;";
+        let image = image::load_from_memory(gif).unwrap();
+
+        let bytes = image_to_pbm_bytes(image);
+
+        assert_eq!(&bytes[..7], b"P4\n1 1\n");
+        assert_eq!(bytes[7], 0b1000_0000);
+        assert!(needs_image_conversion(Path::new("input.gif")));
     }
 
     #[test]

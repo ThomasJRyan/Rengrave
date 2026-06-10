@@ -66,7 +66,9 @@ pub fn requires_potrace(path: &Path) -> bool {
             .and_then(|ext| ext.to_str())
             .map(str::to_ascii_lowercase)
             .as_deref(),
-        Some("bmp" | "jpg" | "jpeg" | "png" | "tif" | "tiff" | "pbm" | "ppm" | "pgm" | "pnm")
+        Some(
+            "bmp" | "gif" | "jpg" | "jpeg" | "png" | "tif" | "tiff" | "pbm" | "ppm" | "pgm" | "pnm",
+        )
     )
 }
 
@@ -86,6 +88,7 @@ mod tests {
     #[test]
     fn recognizes_bitmap_inputs_that_need_potrace() {
         assert!(requires_potrace(Path::new("input.png")));
+        assert!(requires_potrace(Path::new("input.gif")));
         assert!(requires_potrace(Path::new("input.jpeg")));
         assert!(requires_potrace(Path::new("input.PBM")));
         assert!(!requires_potrace(Path::new("input.dxf")));
