@@ -15,7 +15,9 @@ use rengrave_core::external::{PotraceStatus, detect_potrace, requires_potrace};
 use rengrave_core::font::{Font, Stroke, read_cxf, read_ttf};
 use rengrave_core::geometry::{Point, ViewTransform};
 use rengrave_core::project::{DocumentRequest, RengraveDocument, load_document};
-use rengrave_core::settings::{LegacySetting, LegacySettings, get_legacy_bool, legacy_bool_value};
+use rengrave_core::settings::{
+    LegacySetting, LegacySettings, default_legacy_settings, get_legacy_bool, legacy_bool_value,
+};
 use rfd::FileDialog;
 
 const DEFAULT_PREVIEW_ZOOM: f64 = 80.0;
@@ -268,6 +270,16 @@ impl RengraveApp {
                 self.warnings.push(err);
             }
         }
+    }
+
+    fn reset_controls_to_defaults(&mut self) {
+        let defaults = default_legacy_settings();
+        self.controls = UiControls::from_settings(&defaults);
+        self.show_toolpath = get_legacy_bool(&defaults, "show_v_path", true);
+        self.show_rapids = true;
+        self.show_bounds = get_legacy_bool(&defaults, "show_box", true);
+        self.show_axes = get_legacy_bool(&defaults, "show_axis", true);
+        self.status = "Controls reset to defaults".to_owned();
     }
 
     fn start_calculation(&mut self, ctx: egui::Context) {
@@ -738,7 +750,12 @@ impl eframe::App for RengraveApp {
                     );
 
                     ui.separator();
-                    ui.heading("Layout");
+                    ui.horizontal(|ui| {
+                        ui.heading("Layout");
+                        if ui.button("Defaults").clicked() {
+                            self.reset_controls_to_defaults();
+                        }
+                    });
                     combo_row(ui, "Mode", self.controls.cut_type.label(), |ui| {
                         ui.selectable_value(
                             &mut self.controls.cut_type,
@@ -1157,6 +1174,9 @@ impl RengraveApp {
                 }
                 if menu_action(ui, "Save settings", !self.settings_path.trim().is_empty()) {
                     self.save_current_settings();
+                }
+                if menu_action(ui, "Reset controls to defaults", true) {
+                    self.reset_controls_to_defaults();
                 }
                 ui.separator();
                 if menu_action(ui, "Choose G-code output...", true) {
@@ -4372,6 +4392,26 @@ mod tests {
         assert_eq!(value_for("YSCALE"), Some("4.25"));
         assert_eq!(value_for("plotbox"), Some("1"));
         assert_eq!(value_for("mirror"), Some("1"));
+    }
+
+    #[test]
+    fn ui_controls_map_core_defaults() {
+        let settings = default_legacy_settings();
+        let controls = UiControls::from_settings(&settings);
+
+        assert_eq!(controls.cut_type, CutTypeChoice::Engrave);
+        assert_eq!(controls.units, UnitsChoice::Inch);
+        assert_eq!(controls.bit_shape, BitShapeChoice::VBit);
+        assert_eq!(controls.arc_fit, ArcFitChoice::NoFit);
+        assert_eq!(controls.origin, OriginChoice::Default);
+        assert_eq!(controls.justify, JustifyChoice::Left);
+        assert_eq!(controls.clean_paths, "1,1,0,1,0,1,0,0");
+        assert!(controls.recovery_comments);
+        assert!(controls.var_dis);
+        assert!(!controls.ext_char);
+        assert!(get_legacy_bool(&settings, "show_v_path", false));
+        assert!(get_legacy_bool(&settings, "show_box", false));
+        assert!(get_legacy_bool(&settings, "show_axis", false));
     }
 
     #[test]
