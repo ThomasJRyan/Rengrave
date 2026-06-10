@@ -903,6 +903,7 @@ impl eframe::App for RengraveApp {
                 ui.horizontal(|ui| {
                     ui.selectable_value(&mut self.bottom_tab, BottomTab::Status, "Status");
                     ui.selectable_value(&mut self.bottom_tab, BottomTab::Gcode, "G-code");
+                    ui.selectable_value(&mut self.bottom_tab, BottomTab::Cleanup, "Cleanup");
                     ui.selectable_value(&mut self.bottom_tab, BottomTab::Svg, "SVG");
                     ui.selectable_value(&mut self.bottom_tab, BottomTab::Dxf, "DXF");
                     ui.separator();
@@ -924,6 +925,10 @@ impl eframe::App for RengraveApp {
                     BottomTab::Status => draw_status_log(ui, &self.warnings),
                     BottomTab::Gcode => {
                         draw_output_preview(ui, Some(&self.gcode), "No G-code generated")
+                    }
+                    BottomTab::Cleanup => {
+                        let preview = secondary_output_preview_text(&self.secondary_gcode);
+                        draw_output_preview(ui, preview.as_deref(), "No cleanup G-code generated")
                     }
                     BottomTab::Svg => {
                         draw_output_preview(ui, self.svg.as_deref(), "No SVG generated")
@@ -2087,6 +2092,7 @@ enum ExportKind {
 enum BottomTab {
     Status,
     Gcode,
+    Cleanup,
     Svg,
     Dxf,
 }
@@ -2619,6 +2625,23 @@ fn output_preview_text(text: &str, max_chars: usize) -> String {
     let mut output = text.chars().take(max_chars).collect::<String>();
     output.push_str("\n... output truncated in preview ...");
     output
+}
+
+fn secondary_output_preview_text(outputs: &[SecondaryGcode]) -> Option<String> {
+    if outputs.is_empty() {
+        return None;
+    }
+
+    let mut preview = String::new();
+    for output in outputs {
+        if !preview.is_empty() {
+            preview.push('\n');
+        }
+        preview.push_str(&format!("( cleanup output: _{} )\n", output.suffix));
+        preview.push_str(output.gcode.trim_end());
+        preview.push('\n');
+    }
+    Some(preview)
 }
 
 fn draw_vector_input_preview(
@@ -3671,6 +3694,27 @@ mod tests {
         let preview = output_preview_text("abcdefghij", 4);
 
         assert_eq!(preview, "abcd\n... output truncated in preview ...");
+    }
+
+    #[test]
+    fn secondary_output_preview_groups_cleanup_files_by_suffix() {
+        let preview = secondary_output_preview_text(&[
+            SecondaryGcode {
+                suffix: "clean".to_owned(),
+                gcode: "G90\nG1 X0\n".to_owned(),
+            },
+            SecondaryGcode {
+                suffix: "v_clean".to_owned(),
+                gcode: "G91\nG1 X1\n".to_owned(),
+            },
+        ])
+        .unwrap();
+
+        assert_eq!(
+            preview,
+            "( cleanup output: _clean )\nG90\nG1 X0\n\n( cleanup output: _v_clean )\nG91\nG1 X1\n"
+        );
+        assert_eq!(secondary_output_preview_text(&[]), None);
     }
 
     #[test]
