@@ -12,7 +12,8 @@ use eframe::egui;
 #[cfg(test)]
 use rengrave_core::batch::prepare_batch_output;
 use rengrave_core::batch::{
-    BatchOutput, BatchRequest, SecondaryGcode, prepare_batch_output_with_cancel,
+    BatchOutput, BatchProgress, BatchRequest, SecondaryGcode,
+    prepare_batch_output_with_cancel_and_progress,
 };
 use rengrave_core::dxf::read_dxf_font;
 use rengrave_core::external::{PotraceStatus, detect_potrace, requires_potrace};
@@ -301,11 +302,13 @@ impl RengraveApp {
         let cancel_flag = Arc::new(AtomicBool::new(false));
         let worker_cancel_flag = Arc::clone(&cancel_flag);
         thread::spawn(move || {
-            send_calculation_progress(&sender, &ctx, id, CalculationPhase::Preparing);
-            send_calculation_progress(&sender, &ctx, id, CalculationPhase::Generating);
-            let result = prepare_batch_output_with_cancel(&worker_request, || {
-                worker_cancel_flag.load(Ordering::Relaxed)
-            })
+            let result = prepare_batch_output_with_cancel_and_progress(
+                &worker_request,
+                || worker_cancel_flag.load(Ordering::Relaxed),
+                |progress| {
+                    send_calculation_progress(&sender, &ctx, id, CalculationPhase::Batch(progress));
+                },
+            )
             .map_err(|err| err.to_string());
             send_calculation_progress(&sender, &ctx, id, CalculationPhase::Finalizing);
             let canceled = worker_cancel_flag.load(Ordering::Relaxed);
@@ -2601,8 +2604,7 @@ enum CalculationMessage {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CalculationPhase {
     Queued,
-    Preparing,
-    Generating,
+    Batch(BatchProgress),
     Finalizing,
 }
 
@@ -2610,8 +2612,7 @@ impl CalculationPhase {
     fn status_text(self) -> &'static str {
         match self {
             Self::Queued => "Calculation queued",
-            Self::Preparing => "Preparing document",
-            Self::Generating => "Generating toolpaths",
+            Self::Batch(progress) => progress.status_text(),
             Self::Finalizing => "Finalizing output",
         }
     }
@@ -4693,12 +4694,12 @@ mod tests {
     fn calculation_phases_have_user_visible_status_text() {
         assert_eq!(CalculationPhase::Queued.status_text(), "Calculation queued");
         assert_eq!(
-            CalculationPhase::Preparing.status_text(),
-            "Preparing document"
+            CalculationPhase::Batch(BatchProgress::LoadingDocument).status_text(),
+            "Loading document"
         );
         assert_eq!(
-            CalculationPhase::Generating.status_text(),
-            "Generating toolpaths"
+            CalculationPhase::Batch(BatchProgress::CalculatingVCarve).status_text(),
+            "Calculating V-carve"
         );
         assert_eq!(
             CalculationPhase::Finalizing.status_text(),

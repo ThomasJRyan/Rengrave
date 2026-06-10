@@ -46,6 +46,49 @@ pub struct SecondaryGcode {
     pub gcode: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BatchProgress {
+    LoadingDocument,
+    LoadingTextFont,
+    LoadingDxf,
+    VectorizingBitmap,
+    LayingOutText,
+    LayingOutImage,
+    PreparingExports,
+    WritingEngrave,
+    CalculatingVCarve,
+    CalculatingStraightCleanup,
+    CalculatingVBitCleanup,
+    WritingVCarve,
+    RenderingPrimary,
+    RenderingSecondary,
+    RenderingSettingsOnly,
+    Finished,
+}
+
+impl BatchProgress {
+    pub fn status_text(self) -> &'static str {
+        match self {
+            Self::LoadingDocument => "Loading document",
+            Self::LoadingTextFont => "Loading text font",
+            Self::LoadingDxf => "Loading DXF input",
+            Self::VectorizingBitmap => "Vectorizing bitmap",
+            Self::LayingOutText => "Laying out text",
+            Self::LayingOutImage => "Laying out image",
+            Self::PreparingExports => "Preparing exports",
+            Self::WritingEngrave => "Writing engrave toolpath",
+            Self::CalculatingVCarve => "Calculating V-carve",
+            Self::CalculatingStraightCleanup => "Calculating straight cleanup",
+            Self::CalculatingVBitCleanup => "Calculating V-bit cleanup",
+            Self::WritingVCarve => "Writing V-carve toolpath",
+            Self::RenderingPrimary => "Rendering primary G-code",
+            Self::RenderingSecondary => "Rendering cleanup G-code",
+            Self::RenderingSettingsOnly => "Rendering settings-only output",
+            Self::Finished => "Calculation complete",
+        }
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum BatchError {
     #[error(transparent)]
@@ -62,7 +105,16 @@ pub fn prepare_batch_output_with_cancel(
     request: &BatchRequest,
     cancel: impl Fn() -> bool,
 ) -> Result<BatchOutput, BatchError> {
+    prepare_batch_output_with_cancel_and_progress(request, cancel, |_| {})
+}
+
+pub fn prepare_batch_output_with_cancel_and_progress(
+    request: &BatchRequest,
+    cancel: impl Fn() -> bool,
+    progress: impl Fn(BatchProgress),
+) -> Result<BatchOutput, BatchError> {
     check_canceled(&cancel)?;
+    progress(BatchProgress::LoadingDocument);
     let document = load_document(&DocumentRequest {
         gcode_file: request.gcode_file.clone(),
         font_or_image: request.font_or_image.clone(),
@@ -81,20 +133,23 @@ pub fn prepare_batch_output_with_cancel(
         request.dxf_output.is_some(),
         &mut warnings,
         &cancel,
+        &progress,
     )?;
     check_canceled(&cancel)?;
     let gcode = if let Some(gcode_lines) = generated_gcode {
         check_canceled(&cancel)?;
+        progress(BatchProgress::RenderingPrimary);
         let primary = render_gcode(&document.settings, &document.text, &gcode_lines.primary);
         check_canceled(&cancel)?;
-        let secondary_gcode = gcode_lines
-            .secondary
-            .into_iter()
-            .map(|secondary| SecondaryGcode {
+        let mut secondary_gcode = Vec::new();
+        for secondary in gcode_lines.secondary {
+            progress(BatchProgress::RenderingSecondary);
+            secondary_gcode.push(SecondaryGcode {
                 suffix: secondary.suffix,
                 gcode: render_secondary_gcode(&document.settings, &document.text, &secondary.lines),
-            })
-            .collect();
+            });
+        }
+        progress(BatchProgress::Finished);
         return Ok(BatchOutput {
             gcode: primary,
             warnings,
@@ -106,9 +161,11 @@ pub fn prepare_batch_output_with_cancel(
         warnings.push(
             "settings-only output generated because no toolpath could be produced".to_owned(),
         );
+        progress(BatchProgress::RenderingSettingsOnly);
         render_settings_only_gcode(&document.settings, &document.text)
     };
 
+    progress(BatchProgress::Finished);
     Ok(BatchOutput {
         gcode,
         warnings,
@@ -126,6 +183,7 @@ fn generate_engrave_gcode(
     include_dxf: bool,
     warnings: &mut Vec<String>,
     cancel: &dyn Fn() -> bool,
+    progress: &dyn Fn(BatchProgress),
 ) -> Result<Option<GeneratedToolpaths>, BatchError> {
     check_canceled(cancel)?;
     if settings.get_last("input_type") == Some("image") {
@@ -136,6 +194,7 @@ fn generate_engrave_gcode(
             include_dxf,
             warnings,
             cancel,
+            progress,
         );
     }
 
@@ -147,6 +206,7 @@ fn generate_engrave_gcode(
         include_dxf,
         warnings,
         cancel,
+        progress,
     )
 }
 
@@ -158,6 +218,7 @@ fn generate_text_engrave_gcode(
     include_dxf: bool,
     warnings: &mut Vec<String>,
     cancel: &dyn Fn() -> bool,
+    progress: &dyn Fn(BatchProgress),
 ) -> Result<Option<GeneratedToolpaths>, BatchError> {
     check_canceled(cancel)?;
     let input = resolve_input_kind(settings);
@@ -165,6 +226,7 @@ fn generate_text_engrave_gcode(
         .get_last("segarc")
         .and_then(|value| value.parse().ok())
         .unwrap_or(5.0);
+    progress(BatchProgress::LoadingTextFont);
     let font = match input {
         InputKind::CxfFont(path) => match read_cxf(&path, segarc) {
             Ok(font) => font,
@@ -192,6 +254,7 @@ fn generate_text_engrave_gcode(
     };
 
     check_canceled(cancel)?;
+    progress(BatchProgress::LayingOutText);
     let layout_settings = LayoutSettings::from_legacy(settings);
     let layout = layout_text(&font, text, &layout_settings);
     check_canceled(cancel)?;
@@ -213,6 +276,7 @@ fn generate_text_engrave_gcode(
         include_dxf,
         warnings,
         cancel,
+        progress,
     )
 }
 
@@ -223,6 +287,7 @@ fn generate_dxf_engrave_gcode(
     include_dxf: bool,
     warnings: &mut Vec<String>,
     cancel: &dyn Fn() -> bool,
+    progress: &dyn Fn(BatchProgress),
 ) -> Result<Option<GeneratedToolpaths>, BatchError> {
     check_canceled(cancel)?;
     let InputKind::Image(path) = resolve_input_kind(settings) else {
@@ -240,6 +305,7 @@ fn generate_dxf_engrave_gcode(
         .and_then(|value| value.parse().ok())
         .unwrap_or(5.0);
     let font = if is_dxf {
+        progress(BatchProgress::LoadingDxf);
         match read_dxf_font(&path, segarc) {
             Ok(font) => font,
             Err(err) => {
@@ -248,6 +314,7 @@ fn generate_dxf_engrave_gcode(
             }
         }
     } else if requires_potrace(&path) {
+        progress(BatchProgress::VectorizingBitmap);
         match vectorize_bitmap_to_dxf(&path, settings) {
             Ok(dxf) => dxf_font_from_str(&dxf, segarc),
             Err(err) => {
@@ -260,6 +327,7 @@ fn generate_dxf_engrave_gcode(
         return Ok(None);
     };
     check_canceled(cancel)?;
+    progress(BatchProgress::LayingOutImage);
     let layout = layout_text(&font, "F", &LayoutSettings::from_legacy(settings));
     check_canceled(cancel)?;
     if layout.segments.is_empty() {
@@ -276,6 +344,7 @@ fn generate_dxf_engrave_gcode(
         include_dxf,
         warnings,
         cancel,
+        progress,
     )
 }
 
@@ -302,12 +371,15 @@ fn write_layout_gcode(
     include_dxf: bool,
     warnings: &mut Vec<String>,
     cancel: &dyn Fn() -> bool,
+    progress: &dyn Fn(BatchProgress),
 ) -> Result<Option<GeneratedToolpaths>, BatchError> {
     check_canceled(cancel)?;
     let gcode_options = GcodeOptions::from_legacy(settings);
+    progress(BatchProgress::PreparingExports);
     let exports = build_exports(settings, segments, circle, include_svg, include_dxf);
     check_canceled(cancel)?;
     if settings.get_last("cut_type") != Some("v-carve") {
+        progress(BatchProgress::WritingEngrave);
         return Ok(Some(GeneratedToolpaths {
             primary: write_engrave_gcode_with_circle(segments, circle, &gcode_options),
             secondary: Vec::new(),
@@ -318,6 +390,7 @@ fn write_layout_gcode(
 
     let vcarve_options = VCarveOptions::from_legacy(settings);
     if vcarve_options.bit_shape == crate::vcarve::BitShape::Flat {
+        progress(BatchProgress::WritingEngrave);
         return Ok(Some(GeneratedToolpaths {
             primary: write_engrave_gcode(segments, &gcode_options),
             secondary: Vec::new(),
@@ -327,6 +400,7 @@ fn write_layout_gcode(
     }
 
     check_canceled(cancel)?;
+    progress(BatchProgress::CalculatingVCarve);
     let points = generate_vcarve_points(segments, &vcarve_options, gcode_options.accuracy);
     check_canceled(cancel)?;
     if points.is_empty() {
@@ -339,6 +413,10 @@ fn write_layout_gcode(
         let cleanup_options = CleanupOptions::from_legacy(settings);
         for bit in [CleanupBit::Straight, CleanupBit::VBit] {
             check_canceled(cancel)?;
+            progress(match bit {
+                CleanupBit::Straight => BatchProgress::CalculatingStraightCleanup,
+                CleanupBit::VBit => BatchProgress::CalculatingVBitCleanup,
+            });
             let cleanup_points = generate_cleanup_points(
                 segments,
                 &cleanup_options,
@@ -364,6 +442,7 @@ fn write_layout_gcode(
     }
 
     check_canceled(cancel)?;
+    progress(BatchProgress::WritingVCarve);
     Ok(Some(GeneratedToolpaths {
         primary: write_vcarve_gcode(&points, &gcode_options, &vcarve_options),
         secondary,
@@ -460,7 +539,7 @@ fn sanitized_text_comment(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::cell::Cell;
+    use std::cell::{Cell, RefCell};
     use std::fs;
 
     #[test]
@@ -501,6 +580,48 @@ mod tests {
 
         assert!(output.gcode.contains("settings-only output"));
         assert!(calls.get() > 2);
+    }
+
+    #[test]
+    fn batch_progress_reports_text_generation_stages() {
+        let path = std::env::temp_dir().join(format!(
+            "rengrave-progress-{}-{}.cxf",
+            std::process::id(),
+            "batch"
+        ));
+        fs::write(&path, "[A] 1\nL 0,0,0,10\n").unwrap();
+        let events = RefCell::new(Vec::new());
+
+        let output = prepare_batch_output_with_cancel_and_progress(
+            &BatchRequest {
+                batch: true,
+                font_or_image: Some(path.clone()),
+                text: Some("A".to_owned()),
+                ..BatchRequest::default()
+            },
+            || false,
+            |event| events.borrow_mut().push(event),
+        )
+        .unwrap();
+
+        let _ = fs::remove_file(path);
+        assert!(output.warnings.is_empty());
+        assert_eq!(
+            events.into_inner(),
+            vec![
+                BatchProgress::LoadingDocument,
+                BatchProgress::LoadingTextFont,
+                BatchProgress::LayingOutText,
+                BatchProgress::PreparingExports,
+                BatchProgress::WritingEngrave,
+                BatchProgress::RenderingPrimary,
+                BatchProgress::Finished,
+            ]
+        );
+        assert_eq!(
+            BatchProgress::CalculatingVCarve.status_text(),
+            "Calculating V-carve"
+        );
     }
 
     #[test]
