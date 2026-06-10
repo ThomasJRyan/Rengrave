@@ -666,17 +666,14 @@ impl eframe::App for RengraveApp {
                     if self.calculation.is_some() {
                         ui.spinner();
                         ui.label("Calculating");
-                        if self.active_calculation_is_stale() {
-                            ui.colored_label(
-                                egui::Color32::from_rgb(225, 176, 84),
-                                "Input changed",
-                            );
+                        if let Some(stale_summary) = self.active_calculation_stale_summary() {
+                            ui.colored_label(egui::Color32::from_rgb(225, 176, 84), stale_summary);
                         }
                         if ui.button("Cancel").clicked() {
                             self.cancel_calculation("Calculation canceled");
                         }
-                    } else if self.stale_recalculate_available() {
-                        ui.colored_label(egui::Color32::from_rgb(225, 176, 84), "Output stale");
+                    } else if let Some(stale_summary) = self.output_stale_summary() {
+                        ui.colored_label(egui::Color32::from_rgb(225, 176, 84), stale_summary);
                         if ui.button("Recalculate").clicked() {
                             self.start_calculation(ui.ctx().clone());
                         }
@@ -1177,9 +1174,9 @@ impl eframe::App for RengraveApp {
                     ui.selectable_value(&mut self.bottom_tab, BottomTab::Dxf, "DXF");
                     ui.separator();
                     ui.monospace(&self.status);
-                    if self.output_is_stale() {
+                    if let Some(stale_summary) = self.output_stale_summary() {
                         ui.separator();
-                        ui.colored_label(egui::Color32::from_rgb(225, 176, 84), "Output stale");
+                        ui.colored_label(egui::Color32::from_rgb(225, 176, 84), stale_summary);
                         if self.stale_recalculate_available() && ui.button("Recalculate").clicked()
                         {
                             self.start_calculation(ui.ctx().clone());
@@ -1358,8 +1355,8 @@ impl RengraveApp {
                 if menu_action(ui, "Cancel calculation", self.calculation.is_some()) {
                     self.cancel_calculation("Calculation canceled");
                 }
-                if self.active_calculation_is_stale() {
-                    ui.colored_label(egui::Color32::from_rgb(225, 176, 84), "Input changed");
+                if let Some(stale_summary) = self.active_calculation_stale_summary() {
+                    ui.colored_label(egui::Color32::from_rgb(225, 176, 84), stale_summary);
                 }
                 ui.separator();
                 if menu_action(ui, "Refresh Potrace", true) {
@@ -1467,11 +1464,10 @@ impl RengraveApp {
         }
     }
 
-    fn active_calculation_is_stale(&self) -> bool {
-        self.calculation
-            .as_ref()
-            .map(|job| calculation_request_is_stale(&self.batch_request(true), &job.request))
-            .unwrap_or(false)
+    fn active_calculation_stale_summary(&self) -> Option<String> {
+        let job = self.calculation.as_ref()?;
+        let reasons = calculation_stale_reasons(&self.batch_request(true), &job.request);
+        (!reasons.is_empty()).then(|| stale_reason_summary("Changed", &reasons))
     }
 
     fn output_is_stale(&self) -> bool {
@@ -1480,6 +1476,15 @@ impl RengraveApp {
             self.last_output_request.as_ref(),
             !self.gcode.is_empty(),
         )
+    }
+
+    fn output_stale_summary(&self) -> Option<String> {
+        let reasons = output_request_stale_reasons(
+            &self.batch_request(true),
+            self.last_output_request.as_ref(),
+            !self.gcode.is_empty(),
+        );
+        (!reasons.is_empty()).then(|| stale_reason_summary("Output stale", &reasons))
     }
 
     fn stale_recalculate_available(&self) -> bool {
@@ -2696,15 +2701,38 @@ fn secondary_output_path(path: &Path, suffix: &str) -> PathBuf {
 }
 
 fn calculation_request_is_stale(current: &BatchRequest, expected: &BatchRequest) -> bool {
-    current.batch != expected.batch
-        || current.gcode_file != expected.gcode_file
-        || current.font_or_image != expected.font_or_image
-        || current.default_dir != expected.default_dir
-        || current.text != expected.text
-        || current.settings_overrides != expected.settings_overrides
-        || current.include_secondary != expected.include_secondary
-        || current.svg_output.is_some() != expected.svg_output.is_some()
+    !calculation_stale_reasons(current, expected).is_empty()
+}
+
+fn calculation_stale_reasons(current: &BatchRequest, expected: &BatchRequest) -> Vec<&'static str> {
+    let mut reasons = Vec::new();
+    if current.batch != expected.batch {
+        reasons.push("mode");
+    }
+    if current.gcode_file != expected.gcode_file {
+        reasons.push("settings file");
+    }
+    if current.font_or_image != expected.font_or_image {
+        reasons.push("input file");
+    }
+    if current.default_dir != expected.default_dir {
+        reasons.push("default dir");
+    }
+    if current.text != expected.text {
+        reasons.push("text");
+    }
+    if current.settings_overrides != expected.settings_overrides {
+        reasons.push("controls");
+    }
+    if current.include_secondary != expected.include_secondary {
+        reasons.push("cleanup");
+    }
+    if current.svg_output.is_some() != expected.svg_output.is_some()
         || current.dxf_output.is_some() != expected.dxf_output.is_some()
+    {
+        reasons.push("export set");
+    }
+    reasons
 }
 
 fn output_request_is_stale(
@@ -2712,14 +2740,44 @@ fn output_request_is_stale(
     last_output: Option<&BatchRequest>,
     has_output: bool,
 ) -> bool {
-    has_output
-        && last_output
-            .map(|last_output| calculation_request_is_stale(current, last_output))
-            .unwrap_or(false)
+    !output_request_stale_reasons(current, last_output, has_output).is_empty()
+}
+
+fn output_request_stale_reasons(
+    current: &BatchRequest,
+    last_output: Option<&BatchRequest>,
+    has_output: bool,
+) -> Vec<&'static str> {
+    if !has_output {
+        return Vec::new();
+    }
+    last_output
+        .map(|last_output| calculation_stale_reasons(current, last_output))
+        .unwrap_or_default()
 }
 
 fn stale_recalculate_available(output_is_stale: bool, calculation_active: bool) -> bool {
     output_is_stale && !calculation_active
+}
+
+fn stale_reason_summary(prefix: &str, reasons: &[&str]) -> String {
+    if reasons.is_empty() {
+        return prefix.to_owned();
+    }
+    let max_visible = 3;
+    let mut summary = format!(
+        "{prefix}: {}",
+        reasons
+            .iter()
+            .take(max_visible)
+            .copied()
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    if reasons.len() > max_visible {
+        summary.push_str(&format!(", +{} more", reasons.len() - max_visible));
+    }
+    summary
 }
 
 fn settings_base_path_for_save(path_text: &str) -> Option<PathBuf> {
@@ -4736,6 +4794,7 @@ mod tests {
         };
 
         assert!(!calculation_request_is_stale(&current, &expected));
+        assert!(calculation_stale_reasons(&current, &expected).is_empty());
     }
 
     #[test]
@@ -4773,6 +4832,22 @@ mod tests {
             &secondary_toggle_changed,
             &expected
         ));
+        assert_eq!(
+            calculation_stale_reasons(&text_changed, &expected),
+            vec!["text"]
+        );
+        assert_eq!(
+            calculation_stale_reasons(&settings_changed, &expected),
+            vec!["controls"]
+        );
+        assert_eq!(
+            calculation_stale_reasons(&export_toggle_changed, &expected),
+            vec!["export set"]
+        );
+        assert_eq!(
+            calculation_stale_reasons(&secondary_toggle_changed, &expected),
+            vec!["cleanup"]
+        );
     }
 
     #[test]
@@ -4796,13 +4871,41 @@ mod tests {
         };
 
         assert!(output_request_is_stale(&current, Some(&expected), true));
+        assert_eq!(
+            output_request_stale_reasons(&current, Some(&expected), true),
+            vec!["text"]
+        );
         assert!(!output_request_is_stale(
             &output_path_changed,
             Some(&expected),
             true
         ));
+        assert!(
+            output_request_stale_reasons(&output_path_changed, Some(&expected), true).is_empty()
+        );
         assert!(!output_request_is_stale(&current, Some(&expected), false));
         assert!(!output_request_is_stale(&current, None, true));
+    }
+
+    #[test]
+    fn stale_reason_summary_limits_long_reason_lists() {
+        assert_eq!(
+            stale_reason_summary("Output stale", &["text", "controls"]),
+            "Output stale: text, controls"
+        );
+        assert_eq!(
+            stale_reason_summary(
+                "Changed",
+                &[
+                    "settings file",
+                    "input file",
+                    "default dir",
+                    "text",
+                    "controls"
+                ],
+            ),
+            "Changed: settings file, input file, default dir, +2 more"
+        );
     }
 
     #[test]
