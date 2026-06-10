@@ -1132,13 +1132,16 @@ impl RengraveApp {
 
     fn ensure_input_preview(&mut self) {
         let path = path_from_text(&self.input_path);
-        if self.input_preview.path != path {
-            self.input_preview = InputPreview::load(path);
+        let sample_text = input_preview_sample_for_path(path.as_deref(), &self.text);
+        if self.input_preview.path != path || self.input_preview.sample_text != sample_text {
+            self.input_preview = InputPreview::load(path, sample_text);
         }
     }
 
     fn reload_input_preview(&mut self) {
-        self.input_preview = InputPreview::load(path_from_text(&self.input_path));
+        let path = path_from_text(&self.input_path);
+        let sample_text = input_preview_sample_for_path(path.as_deref(), &self.text);
+        self.input_preview = InputPreview::load(path, sample_text);
         self.status = "Input preview refreshed".to_owned();
     }
 
@@ -2067,6 +2070,7 @@ impl InputCatalogKind {
 
 struct InputPreview {
     path: Option<PathBuf>,
+    sample_text: Option<String>,
     data: InputPreviewData,
     texture: Option<egui::TextureHandle>,
 }
@@ -2075,6 +2079,7 @@ impl Default for InputPreview {
     fn default() -> Self {
         Self {
             path: None,
+            sample_text: None,
             data: InputPreviewData::Empty,
             texture: None,
         }
@@ -2082,13 +2087,14 @@ impl Default for InputPreview {
 }
 
 impl InputPreview {
-    fn load(path: Option<PathBuf>) -> Self {
+    fn load(path: Option<PathBuf>, sample_text: Option<String>) -> Self {
         let data = path
             .as_deref()
-            .map(load_input_preview_data)
+            .map(|path| load_input_preview_data(path, sample_text.as_deref()))
             .unwrap_or(InputPreviewData::Empty);
         Self {
             path,
+            sample_text,
             data,
             texture: None,
         }
@@ -2537,18 +2543,41 @@ fn format_bytes(bytes: u64) -> String {
     }
 }
 
-fn load_input_preview_data(path: &Path) -> InputPreviewData {
+fn input_preview_sample_for_path(path: Option<&Path>, text: &str) -> Option<String> {
+    let path = path?;
+    matches!(
+        InputCatalogKind::from_path(path),
+        Some(InputCatalogKind::CxfFont | InputCatalogKind::TtfFont)
+    )
+    .then(|| preview_text_sample(text))
+}
+
+fn preview_text_sample(text: &str) -> String {
+    text.lines()
+        .find_map(|line| {
+            let trimmed = line.trim();
+            (!trimmed.is_empty()).then(|| trimmed.chars().take(24).collect::<String>())
+        })
+        .filter(|sample| !sample.is_empty())
+        .unwrap_or_else(|| "R-Engrave".to_owned())
+}
+
+fn load_input_preview_data(path: &Path, sample_text: Option<&str>) -> InputPreviewData {
     match InputCatalogKind::from_path(path) {
         Some(InputCatalogKind::CxfFont) => match read_cxf(path, 5.0) {
-            Ok(font) => vector_input_preview("CXF font", preview_segments_for_font(&font)),
+            Ok(font) => {
+                vector_input_preview("CXF font", preview_segments_for_font(&font, sample_text))
+            }
             Err(err) => InputPreviewData::Error(err.to_string()),
         },
         Some(InputCatalogKind::TtfFont) => match read_ttf(path, 5.0, false) {
-            Ok(font) => vector_input_preview("TTF font", preview_segments_for_font(&font)),
+            Ok(font) => {
+                vector_input_preview("TTF font", preview_segments_for_font(&font, sample_text))
+            }
             Err(err) => InputPreviewData::Error(err.to_string()),
         },
         Some(InputCatalogKind::Dxf) => match read_dxf_font(path, 5.0) {
-            Ok(font) => vector_input_preview("DXF artwork", preview_segments_for_font(&font)),
+            Ok(font) => vector_input_preview("DXF artwork", preview_segments_for_font(&font, None)),
             Err(err) => InputPreviewData::Error(err.to_string()),
         },
         Some(InputCatalogKind::Bitmap) => load_bitmap_preview(path),
@@ -2566,12 +2595,13 @@ fn vector_input_preview(label: &str, segments: Vec<PreviewSegment>) -> InputPrev
     }
 }
 
-fn preview_segments_for_font(font: &Font) -> Vec<PreviewSegment> {
+fn preview_segments_for_font(font: &Font, sample_text: Option<&str>) -> Vec<PreviewSegment> {
     let mut segments = Vec::new();
     let mut cursor_x = 0.0;
     let fallback_advance = font.max_x().max(8.0) * 0.65;
+    let sample_text = sample_text.unwrap_or("R-Engrave");
 
-    for ch in "R-Engrave".chars() {
+    for ch in sample_text.chars() {
         if ch.is_whitespace() {
             cursor_x += fallback_advance;
             continue;
@@ -3742,7 +3772,7 @@ mod tests {
         let path = dir.join("font.cxf");
         fs::write(&path, "[R] 2\nL 0,0,0,10\nL 0,10,5,10\n").unwrap();
 
-        let preview = load_input_preview_data(&path);
+        let preview = load_input_preview_data(&path, Some("R"));
 
         let _ = fs::remove_dir_all(dir);
         match preview {
@@ -3753,6 +3783,32 @@ mod tests {
             } => {
                 assert_eq!(label, "CXF font");
                 assert!(segment_count > 0);
+            }
+            other => panic!("unexpected preview: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn input_preview_uses_current_text_sample_for_fonts() {
+        let dir = std::env::temp_dir().join(format!(
+            "rengrave-ui-cxf-preview-sample-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("font.cxf");
+        fs::write(&path, "[A] 1\nL 0,0,1,0\n[B] 2\nL 0,0,0,2\nL 0,2,2,2\n").unwrap();
+
+        let preview = load_input_preview_data(&path, Some("B"));
+
+        let _ = fs::remove_dir_all(dir);
+        match preview {
+            InputPreviewData::Vector {
+                segments,
+                segment_count,
+                ..
+            } => {
+                assert_eq!(segment_count, 2);
+                assert!(segments.iter().any(|segment| segment.end.y == 2.0));
             }
             other => panic!("unexpected preview: {other:?}"),
         }
@@ -3770,7 +3826,7 @@ mod tests {
         )
         .unwrap();
 
-        let preview = load_input_preview_data(&path);
+        let preview = load_input_preview_data(&path, None);
 
         let _ = fs::remove_dir_all(dir);
         match preview {
@@ -3796,7 +3852,7 @@ mod tests {
             .save(&path)
             .unwrap();
 
-        let preview = load_input_preview_data(&path);
+        let preview = load_input_preview_data(&path, None);
 
         let _ = fs::remove_dir_all(dir);
         match preview {

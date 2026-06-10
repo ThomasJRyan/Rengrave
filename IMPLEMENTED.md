@@ -12,6 +12,7 @@ This document records what has actually been implemented in the Rust port and wh
 - R-Engrave now defaults to emitting recovery settings comments, honors legacy `no_comments 1` when loaded, and exposes that behavior in the UI as a Recovery comments toggle.
 - Cleanup path selection is now exposed as explicit Straight/V-bit profile, X, Y, and loop checkboxes while still serializing to F-Engrave-compatible `clean_paths`.
 - Preview axes are now a selectable view layer, and toolpath/bounds/axes layer flags initialize from and save back to legacy view settings.
+- CXF/TTF input previews now use the current engraving text sample instead of always drawing a hard-coded `R-Engrave` sample; DXF and bitmap previews remain cached by input path.
 
 ## Current Shape
 
@@ -51,7 +52,7 @@ This document records what has actually been implemented in the Rust port and wh
 - The UI now has editable Settings/Input/Default-dir path fields and Load/Calculate actions, so settings files and font/image paths are reachable without CLI launch arguments.
 - Each path field has a Browse action that first tries a native file/folder/save dialog through `rfd`, then falls back to the in-app filesystem browser. The in-app browser can navigate parent/home directories, select settings/input files, select the default directory, and choose output files in the current directory.
 - The left panel includes an input catalog that scans the current input/default directory for CXF, TTF, DXF, and bitmap files; selecting an entry updates the input path and starts background generation.
-- The left panel also shows a cached input preview: CXF/TTF sample strokes, DXF line artwork, or a bitmap thumbnail, with decode/parser errors shown inline and a Refresh action for changed files.
+- The left panel also shows a cached input preview: CXF/TTF strokes from the current engraving text sample, DXF line artwork, or a bitmap thumbnail, with decode/parser errors shown inline and a Refresh action for changed files.
 - Current UI settings can be saved back out as reusable `fengrave_set` comments, including selected input/default directory, UI overrides, and TCODE text. Existing settings files are used as a base when present; new settings paths save from defaults.
 - UI path preferences are persisted under the platform config directory and restored on the next launch when CLI arguments do not override them.
 - Common F-Engrave settings are exposed as working controls: mode, units, justification, origin, height/width/spacing, angle, text radius, flip/mirror, Add Box, safe/cut Z, stroke, feed/plunge, arc fitting, bit shape, V-bit/inlay/depth settings, cleanup diameter/step/V size/path checkboxes/normal flip, and bitmap image-size/long-curve toggles.
@@ -77,7 +78,7 @@ The UI is now an MVP rather than only a shell, but it still lacks several expect
 - Core tests currently cover settings, CXF/TTF parsing, DXF entities, bitmap conversion, layout transforms, Add Box/Circle, G-code, SVG/DXF export, cleanup, v-carve options, and batch generation.
 - A crate-level golden-output harness now exists under `crates/rengrave-core/tests/golden.rs` with a minimal CXF fixture, checked G-code/SVG regression outputs, and numeric-tolerant G-code comparison helpers. These first expected files pin current R-Engrave output; they are not yet F-Engrave-generated parity fixtures.
 - F-Engrave fixture generation was rechecked on 2026-06-10 with `python f-engrave_source/f-engrave.py -b -f crates/rengrave-core/tests/fixtures/inputs/simple.cxf -t AB`; it still fails before batch mode because `pyclipper` is missing.
-- UI tests cover default and secondary output paths, cleanup companion preview formatting, cleanup path checkbox serialization, view-layer settings serialization, native save-dialog filename helpers, settings save serialization, path-field parsing, in-app browser directory behavior, input catalog scanning, input preview loading, preference persistence, worker stale-result detection, output stale-state detection, control-to-legacy override emission, bitmap/Potrace control mapping, advanced setting mapping, preview fitting, output preview truncation, text-file write errors, cut/rapid preview parsing, and full-circle arc preview parsing.
+- UI tests cover default and secondary output paths, cleanup companion preview formatting, cleanup path checkbox serialization, view-layer settings serialization, native save-dialog filename helpers, settings save serialization, path-field parsing, in-app browser directory behavior, input catalog scanning, input preview loading and font text-sample selection, preference persistence, worker stale-result detection, output stale-state detection, control-to-legacy override emission, bitmap/Potrace control mapping, advanced setting mapping, preview fitting, output preview truncation, text-file write errors, cut/rapid preview parsing, and full-circle arc preview parsing.
 - Recent validation has been run with:
   - `cargo test -p rengrave-core`
   - `cargo test -p rengrave-ui`
@@ -102,7 +103,7 @@ The UI is now an MVP rather than only a shell, but it still lacks several expect
 ## Recommended Next Checkpoints
 
 1. Generate actual F-Engrave reference fixtures once `pyclipper` is available, then wire them into the existing tolerance-ready golden harness.
-2. Enrich font/image preview controls and add more complete F-Engrave-style setting panels.
+2. Continue enriching font/image preview controls and add more complete F-Engrave-style setting panels.
 3. Expand parity tests for default text, multiline text, text-on-circle, flip/mirror/origin/justify, DXF imports, bitmap imports, Add Box/Circle, arc-fit modes, and settings round trips.
 4. Audit V-carve and cleanup output against F-Engrave fixtures before adding more UI around those features.
 5. Add detailed progress reporting and cooperative cancellation checks inside expensive core import, cleanup, and v-carve routines.
