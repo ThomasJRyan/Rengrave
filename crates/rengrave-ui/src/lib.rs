@@ -31,6 +31,11 @@ const OUTPUT_PREVIEW_CHARS: usize = 8000;
 const INPUT_PREVIEW_VECTOR_HEIGHT: f32 = 180.0;
 const INPUT_PREVIEW_THUMBNAIL_WIDTH: u32 = 300;
 const INPUT_PREVIEW_THUMBNAIL_HEIGHT: u32 = 180;
+const DEFAULT_WINDOW_SIZE: [f32; 2] = [1280.0, 800.0];
+const TOOLBAR_HEIGHT: f32 = 92.0;
+const INPUT_PANEL_WIDTH: f32 = 340.0;
+const OUTPUT_PANEL_WIDTH: f32 = 310.0;
+const STATUS_PANEL_HEIGHT: f32 = 150.0;
 
 #[derive(Debug, Clone, Default)]
 pub struct UiLaunchOptions {
@@ -43,7 +48,7 @@ pub struct UiLaunchOptions {
 pub fn run(options: UiLaunchOptions) -> eframe::Result<()> {
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1280.0, 800.0])
+            .with_inner_size(DEFAULT_WINDOW_SIZE)
             .with_title("R-Engrave"),
         ..Default::default()
     };
@@ -657,7 +662,7 @@ impl eframe::App for RengraveApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.poll_calculation();
         egui::Panel::top("toolbar")
-            .exact_size(92.0)
+            .exact_size(TOOLBAR_HEIGHT)
             .show_inside(ui, |ui| {
                 self.show_menu_bar(ui);
                 ui.horizontal(|ui| {
@@ -708,7 +713,7 @@ impl eframe::App for RengraveApp {
             });
 
         egui::Panel::left("input_settings")
-            .exact_size(340.0)
+            .exact_size(INPUT_PANEL_WIDTH)
             .resizable(false)
             .show_inside(ui, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| {
@@ -912,7 +917,7 @@ impl eframe::App for RengraveApp {
             });
 
         egui::Panel::right("output_tools")
-            .exact_size(310.0)
+            .exact_size(OUTPUT_PANEL_WIDTH)
             .resizable(false)
             .show_inside(ui, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| {
@@ -1174,7 +1179,7 @@ impl eframe::App for RengraveApp {
             });
 
         egui::Panel::bottom("status_log")
-            .exact_size(150.0)
+            .exact_size(STATUS_PANEL_HEIGHT)
             .show_inside(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.selectable_value(&mut self.bottom_tab, BottomTab::Status, "Status");
@@ -4787,6 +4792,30 @@ mod tests {
     }
 
     #[test]
+    fn smoke_layout_keeps_preview_available_at_target_sizes_and_rotations() {
+        let bounds = PreviewBounds {
+            min: Point::new(-2.0, -1.0),
+            max: Point::new(8.0, 4.0),
+        };
+
+        for size in [egui::vec2(1280.0, 800.0), egui::vec2(1920.0, 1080.0)] {
+            let layout = smoke_layout_for_viewport(size);
+            assert_smoke_layout_valid(layout);
+            assert!(layout.preview.width() >= 600.0);
+            assert!(layout.preview.height() >= 500.0);
+
+            for rotation in [0.0, 45.0, 90.0] {
+                let mut transform = ViewTransform {
+                    viewport_rotation_degrees: rotation,
+                    ..ViewTransform::default()
+                };
+                fit_transform_to_bounds(&mut transform, Some(bounds), layout.preview);
+                assert_fitted_corners_inside(layout.preview, transform, bounds);
+            }
+        }
+    }
+
+    #[test]
     fn fit_transform_resets_when_no_bounds_are_available() {
         let rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(200.0, 200.0));
         let mut transform = ViewTransform {
@@ -6002,6 +6031,83 @@ mod tests {
         let err = write_text_file("  ", "G90").unwrap_err();
 
         assert_eq!(err, "output path is empty");
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    struct SmokeLayout {
+        top: egui::Rect,
+        left: egui::Rect,
+        right: egui::Rect,
+        bottom: egui::Rect,
+        preview: egui::Rect,
+    }
+
+    fn smoke_layout_for_viewport(size: egui::Vec2) -> SmokeLayout {
+        let full = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), size);
+        let top = egui::Rect::from_min_max(
+            full.left_top(),
+            egui::pos2(full.right(), full.top() + TOOLBAR_HEIGHT),
+        );
+        let content =
+            egui::Rect::from_min_max(egui::pos2(full.left(), top.bottom()), full.right_bottom());
+        let left = egui::Rect::from_min_max(
+            content.left_top(),
+            egui::pos2(content.left() + INPUT_PANEL_WIDTH, content.bottom()),
+        );
+        let right = egui::Rect::from_min_max(
+            egui::pos2(content.right() - OUTPUT_PANEL_WIDTH, content.top()),
+            content.right_bottom(),
+        );
+        let center_min_x = left.right();
+        let center_max_x = right.left();
+        let bottom = egui::Rect::from_min_max(
+            egui::pos2(center_min_x, content.bottom() - STATUS_PANEL_HEIGHT),
+            egui::pos2(center_max_x, content.bottom()),
+        );
+        let preview = egui::Rect::from_min_max(
+            egui::pos2(center_min_x, content.top()),
+            egui::pos2(center_max_x, bottom.top()),
+        );
+
+        SmokeLayout {
+            top,
+            left,
+            right,
+            bottom,
+            preview,
+        }
+    }
+
+    fn assert_smoke_layout_valid(layout: SmokeLayout) {
+        for rect in [
+            layout.top,
+            layout.left,
+            layout.right,
+            layout.bottom,
+            layout.preview,
+        ] {
+            assert!(rect.width() > 0.0, "non-positive width: {rect:?}");
+            assert!(rect.height() > 0.0, "non-positive height: {rect:?}");
+        }
+        let rects = [
+            layout.top,
+            layout.left,
+            layout.right,
+            layout.bottom,
+            layout.preview,
+        ];
+        for (index, left) in rects.iter().enumerate() {
+            for right in rects.iter().skip(index + 1) {
+                assert!(
+                    !rects_overlap(*left, *right),
+                    "layout rects overlap: {left:?} and {right:?}"
+                );
+            }
+        }
+    }
+
+    fn rects_overlap(a: egui::Rect, b: egui::Rect) -> bool {
+        a.left() < b.right() && a.right() > b.left() && a.top() < b.bottom() && a.bottom() > b.top()
     }
 
     fn assert_fitted_corners_inside(
