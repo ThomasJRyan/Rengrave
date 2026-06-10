@@ -2,6 +2,7 @@ pub mod batch;
 pub mod bitmap;
 pub mod cleanup;
 pub mod dxf;
+pub mod export;
 pub mod external;
 pub mod font;
 pub mod gcode;
