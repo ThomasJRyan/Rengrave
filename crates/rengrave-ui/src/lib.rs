@@ -17,6 +17,9 @@ use rengrave_core::geometry::{Point, ViewTransform};
 use rengrave_core::project::{DocumentRequest, RengraveDocument, load_document};
 use rengrave_core::settings::{LegacySetting, LegacySettings, get_legacy_bool};
 
+const DEFAULT_PREVIEW_ZOOM: f64 = 80.0;
+const PREVIEW_FIT_PADDING: f32 = 24.0;
+
 #[derive(Debug, Clone, Default)]
 pub struct UiLaunchOptions {
     pub gcode_file: Option<PathBuf>,
@@ -69,6 +72,7 @@ struct RengraveApp {
     next_calculation_id: u64,
     warnings: Vec<String>,
     potrace_status: PotraceStatus,
+    fit_preview_requested: bool,
 }
 
 impl RengraveApp {
@@ -116,7 +120,7 @@ impl RengraveApp {
         let mut app = Self {
             text: document.text,
             transform: ViewTransform {
-                zoom: 80.0,
+                zoom: DEFAULT_PREVIEW_ZOOM,
                 ..ViewTransform::default()
             },
             status,
@@ -157,6 +161,7 @@ impl RengraveApp {
             next_calculation_id: 1,
             warnings: document.warnings,
             potrace_status: detect_potrace(),
+            fit_preview_requested: false,
         };
         app.start_calculation(cc.egui_ctx.clone());
         app
@@ -318,6 +323,9 @@ impl RengraveApp {
         self.gcode_lines = output.gcode.lines().count();
         self.preview_segments = parse_preview_segments(&output.gcode);
         self.preview_bounds = PreviewBounds::from_segments(&self.preview_segments);
+        if self.preview_bounds.is_some() {
+            self.fit_preview_requested = true;
+        }
         self.status = if self.preview_segments.is_empty() {
             "Settings loaded".to_owned()
         } else {
@@ -450,7 +458,7 @@ impl eframe::App for RengraveApp {
                         self.start_calculation(ui.ctx().clone());
                     }
                     if ui.button("Fit").clicked() {
-                        self.fit_preview();
+                        self.fit_preview_requested = true;
                     }
                     if self.calculation.is_some() {
                         ui.spinner();
@@ -467,7 +475,7 @@ impl eframe::App for RengraveApp {
                     }
                     ui.separator();
                     ui.add(
-                        egui::Slider::new(&mut self.transform.zoom, 10.0..=300.0)
+                        egui::Slider::new(&mut self.transform.zoom, 1.0..=500.0)
                             .text("Zoom")
                             .clamping(egui::SliderClamping::Always),
                     );
@@ -813,6 +821,10 @@ impl eframe::App for RengraveApp {
 
         egui::CentralPanel::default().show_inside(ui, |ui| {
             let rect = ui.available_rect_before_wrap();
+            if self.fit_preview_requested {
+                self.fit_preview_to_rect(rect);
+                self.fit_preview_requested = false;
+            }
             let response = ui.allocate_rect(rect, egui::Sense::drag());
             if response.dragged() {
                 let delta = response.drag_delta();
@@ -837,9 +849,8 @@ impl eframe::App for RengraveApp {
 }
 
 impl RengraveApp {
-    fn fit_preview(&mut self) {
-        self.transform.pan = Point::default();
-        self.transform.zoom = 80.0;
+    fn fit_preview_to_rect(&mut self, rect: egui::Rect) {
+        fit_transform_to_bounds(&mut self.transform, self.preview_bounds, rect);
     }
 
     fn show_browser(&mut self, ctx: &egui::Context) {
@@ -2391,6 +2402,53 @@ impl PreviewBounds {
         }
         Some(Self { min, max })
     }
+
+    fn corners(self) -> [Point; 4] {
+        [
+            Point::new(self.min.x, self.min.y),
+            Point::new(self.max.x, self.min.y),
+            Point::new(self.max.x, self.max.y),
+            Point::new(self.min.x, self.max.y),
+        ]
+    }
+}
+
+fn fit_transform_to_bounds(
+    transform: &mut ViewTransform,
+    bounds: Option<PreviewBounds>,
+    rect: egui::Rect,
+) {
+    let Some(bounds) = bounds else {
+        transform.pan = Point::default();
+        transform.zoom = DEFAULT_PREVIEW_ZOOM;
+        return;
+    };
+
+    let (sin, cos) = transform.total_rotation_radians().sin_cos();
+    let mut rotated_min = Point::new(f64::INFINITY, f64::INFINITY);
+    let mut rotated_max = Point::new(f64::NEG_INFINITY, f64::NEG_INFINITY);
+    for point in bounds.corners() {
+        let rotated = Point::new(point.x * cos - point.y * sin, point.x * sin + point.y * cos);
+        rotated_min.x = rotated_min.x.min(rotated.x);
+        rotated_min.y = rotated_min.y.min(rotated.y);
+        rotated_max.x = rotated_max.x.max(rotated.x);
+        rotated_max.y = rotated_max.y.max(rotated.y);
+    }
+
+    let model_width = (rotated_max.x - rotated_min.x).abs().max(0.001);
+    let model_height = (rotated_max.y - rotated_min.y).abs().max(0.001);
+    let available_width = (rect.width() - PREVIEW_FIT_PADDING * 2.0).max(1.0) as f64;
+    let available_height = (rect.height() - PREVIEW_FIT_PADDING * 2.0).max(1.0) as f64;
+    let zoom = (available_width / model_width)
+        .min(available_height / model_height)
+        .clamp(1.0, 500.0);
+    let center = Point::new(
+        (rotated_min.x + rotated_max.x) / 2.0,
+        (rotated_min.y + rotated_max.y) / 2.0,
+    );
+
+    transform.zoom = zoom;
+    transform.pan = Point::new(-center.x * zoom, center.y * zoom);
 }
 
 fn parse_preview_segments(gcode: &str) -> Vec<PreviewSegment> {
@@ -2654,6 +2712,59 @@ mod tests {
         assert!(segments.iter().any(|segment| segment.end.x > 1.99));
         assert!(segments.iter().any(|segment| segment.end.y > 1.99));
         assert!(segments.iter().any(|segment| segment.end.y < -1.99));
+    }
+
+    #[test]
+    fn fit_transform_centers_bounds_inside_preview_rect() {
+        let rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(500.0, 300.0));
+        let bounds = PreviewBounds {
+            min: Point::new(0.0, 0.0),
+            max: Point::new(10.0, 5.0),
+        };
+        let mut transform = ViewTransform::default();
+
+        fit_transform_to_bounds(&mut transform, Some(bounds), rect);
+
+        assert!((transform.zoom - 45.2).abs() < 1e-9);
+        assert_fitted_corners_inside(rect, transform, bounds);
+        assert_pos_close(
+            preview_screen_point(rect, transform, Point::new(5.0, 2.5)),
+            rect.center(),
+        );
+    }
+
+    #[test]
+    fn fit_transform_accounts_for_view_rotation() {
+        let rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(200.0, 400.0));
+        let bounds = PreviewBounds {
+            min: Point::new(0.0, 0.0),
+            max: Point::new(10.0, 2.0),
+        };
+        let mut transform = ViewTransform {
+            viewport_rotation_degrees: 90.0,
+            ..ViewTransform::default()
+        };
+
+        fit_transform_to_bounds(&mut transform, Some(bounds), rect);
+
+        assert_fitted_corners_inside(rect, transform, bounds);
+    }
+
+    #[test]
+    fn fit_transform_resets_when_no_bounds_are_available() {
+        let rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(200.0, 200.0));
+        let mut transform = ViewTransform {
+            pan: Point::new(12.0, -8.0),
+            zoom: 42.0,
+            viewport_rotation_degrees: 45.0,
+            ..ViewTransform::default()
+        };
+
+        fit_transform_to_bounds(&mut transform, None, rect);
+
+        assert_eq!(transform.pan, Point::default());
+        assert_eq!(transform.zoom, DEFAULT_PREVIEW_ZOOM);
+        assert_eq!(transform.viewport_rotation_degrees, 45.0);
     }
 
     #[test]
@@ -3092,5 +3203,38 @@ mod tests {
         let err = write_text_file("  ", "G90").unwrap_err();
 
         assert_eq!(err, "output path is empty");
+    }
+
+    fn assert_fitted_corners_inside(
+        rect: egui::Rect,
+        transform: ViewTransform,
+        bounds: PreviewBounds,
+    ) {
+        let padded = rect.shrink(PREVIEW_FIT_PADDING - 0.01);
+        for point in bounds.corners() {
+            let screen = preview_screen_point(rect, transform, point);
+            assert!(
+                padded.contains(screen),
+                "point {point:?} projected outside {padded:?}: {screen:?}"
+            );
+        }
+    }
+
+    fn assert_pos_close(actual: egui::Pos2, expected: egui::Pos2) {
+        assert!((actual.x - expected.x).abs() < 0.0001);
+        assert!((actual.y - expected.y).abs() < 0.0001);
+    }
+
+    fn preview_screen_point(
+        rect: egui::Rect,
+        transform: ViewTransform,
+        point: Point,
+    ) -> egui::Pos2 {
+        let (sin, cos) = transform.total_rotation_radians().sin_cos();
+        let rotated = Point::new(point.x * cos - point.y * sin, point.x * sin + point.y * cos);
+        egui::pos2(
+            rect.center().x + (rotated.x * transform.zoom + transform.pan.x) as f32,
+            rect.center().y - (rotated.y * transform.zoom) as f32 + transform.pan.y as f32,
+        )
     }
 }
