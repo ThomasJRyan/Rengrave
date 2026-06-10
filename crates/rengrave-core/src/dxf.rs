@@ -163,6 +163,13 @@ fn parse_entity_pairs(
                 append_transformed_strokes(&entity_strokes, transform, strokes);
                 idx = next;
             }
+            "SPLINE" => {
+                let (entity, next) = collect_entity(pairs, idx + 1);
+                let mut entity_strokes = Vec::new();
+                parse_spline_entity(entity, segarc_degrees, &mut entity_strokes);
+                append_transformed_strokes(&entity_strokes, transform, strokes);
+                idx = next;
+            }
             "LWPOLYLINE" => {
                 let (entity, next) = collect_entity(pairs, idx + 1);
                 let mut entity_strokes = Vec::new();
@@ -472,6 +479,264 @@ fn parse_ellipse_entity(entity: &[(i32, String)], segarc_degrees: f64, strokes: 
             previous = next;
         }
     }
+}
+
+fn parse_spline_entity(entity: &[(i32, String)], segarc_degrees: f64, strokes: &mut Vec<Stroke>) {
+    let mut degree = None;
+    let mut knots = Vec::new();
+    let mut weights = Vec::new();
+    let mut control_points = Vec::new();
+    let mut current = PartialPoint::default();
+
+    for (code, value) in entity {
+        match *code {
+            10 => {
+                if let Some(point) = current.into_point() {
+                    control_points.push(point);
+                }
+                current = PartialPoint {
+                    x: value.parse().ok(),
+                    y: None,
+                };
+            }
+            20 => current.y = value.parse().ok(),
+            40 => {
+                if let Ok(knot) = value.parse() {
+                    knots.push(knot);
+                }
+            }
+            41 => {
+                if let Ok(weight) = value.parse() {
+                    weights.push(weight);
+                }
+            }
+            71 => degree = value.parse().ok(),
+            _ => {}
+        }
+    }
+    if let Some(point) = current.into_point() {
+        control_points.push(point);
+    }
+
+    let Some(degree) = degree else {
+        return;
+    };
+    append_spline_segments(
+        degree,
+        knots,
+        weights,
+        control_points,
+        segarc_degrees,
+        strokes,
+    );
+}
+
+fn append_spline_segments(
+    degree: usize,
+    mut knots: Vec<f64>,
+    mut weights: Vec<f64>,
+    control_points: Vec<Point>,
+    segarc_degrees: f64,
+    strokes: &mut Vec<Stroke>,
+) {
+    if degree == 0
+        || control_points.len() <= degree
+        || knots.len() != control_points.len() + degree + 1
+    {
+        return;
+    }
+    if weights.len() < control_points.len() {
+        weights.resize(control_points.len(), 1.0);
+    }
+
+    let Some((&min_knot, &max_knot)) = knots.first().zip(knots.last()) else {
+        return;
+    };
+    let knot_span = max_knot - min_knot;
+    if knot_span.abs() <= 1.0e-12 {
+        return;
+    }
+    for knot in &mut knots {
+        *knot = (*knot - min_knot) / knot_span;
+    }
+
+    let Some(points) = sample_spline(&knots, &weights, &control_points, degree, segarc_degrees)
+    else {
+        return;
+    };
+    for pair in points.windows(2) {
+        strokes.push(Stroke {
+            start: pair[0],
+            end: pair[1],
+        });
+    }
+}
+
+fn sample_spline(
+    knots: &[f64],
+    weights: &[f64],
+    control_points: &[Point],
+    degree: usize,
+    segarc_degrees: f64,
+) -> Option<Vec<Point>> {
+    let end_u = *knots.last()?;
+    let mut first_nonzero = 1;
+    while first_nonzero < knots.len() && knots[first_nonzero].abs() <= 1.0e-12 {
+        first_nonzero += 1;
+    }
+    if first_nonzero >= knots.len() {
+        return None;
+    }
+
+    let tolerance = segarc_degrees.max(1.0).to_radians();
+    let mut u = 0.0;
+    let mut step = knots[first_nonzero] / 3.0;
+    if step <= 1.0e-12 {
+        step = end_u / ((control_points.len() * 3).max(1) as f64);
+    }
+    if step <= 1.0e-12 {
+        return None;
+    }
+
+    let mut points = Vec::new();
+    let mut previous = evaluate_spline(knots, weights, control_points, degree, 0.0)?;
+    points.push(previous);
+
+    while u < end_u {
+        if u + step > end_u {
+            step = end_u - u;
+        }
+        if step <= 1.0e-12 {
+            break;
+        }
+
+        let next = evaluate_spline(knots, weights, control_points, degree, u + step)?;
+        let test = evaluate_spline(knots, weights, control_points, degree, u + step / 2.0)?;
+        let chord = point_distance(previous, next);
+        let sagitta = point_distance(
+            test,
+            Point::new((previous.x + next.x) / 2.0, (previous.y + next.y) / 2.0),
+        );
+        let radius = if sagitta.abs() > 0.00001 {
+            (chord * chord / 4.0 + sagitta * sagitta) / (2.0 * sagitta)
+        } else {
+            0.0
+        };
+
+        let l1 = point_distance(previous, test);
+        let l2 = point_distance(next, test);
+        let angle = if l1 > 0.00001 && l2 > 0.00001 && radius > 0.0 {
+            let mut sin_ratio = (chord / 2.0) / radius;
+            if sin_ratio.abs() > 1.0 {
+                sin_ratio = 0.0;
+            }
+            2.0 * sin_ratio.asin()
+        } else {
+            0.0
+        };
+
+        if angle > tolerance {
+            step /= 2.0;
+        } else {
+            u += step;
+            points.push(next);
+            previous = next;
+            step *= 2.0;
+        }
+    }
+
+    Some(points)
+}
+
+fn evaluate_spline(
+    knots: &[f64],
+    weights: &[f64],
+    control_points: &[Point],
+    degree: usize,
+    u: f64,
+) -> Option<Point> {
+    let span = find_spline_span(knots, degree, control_points.len(), u)?;
+    let basis = spline_basis_functions(knots, span, degree, u)?;
+    let mut x = 0.0;
+    let mut y = 0.0;
+    let mut denominator = 0.0;
+
+    for (j, basis_value) in basis.iter().enumerate().take(degree + 1) {
+        let idx = span.checked_sub(degree)? + j;
+        let weight = weights.get(idx).copied().unwrap_or(1.0);
+        let factor = basis_value * weight;
+        x += control_points.get(idx)?.x * factor;
+        y += control_points.get(idx)?.y * factor;
+        denominator += factor;
+    }
+
+    if denominator.abs() <= 1.0e-12 {
+        return None;
+    }
+    Some(Point::new(x / denominator, y / denominator))
+}
+
+fn find_spline_span(
+    knots: &[f64],
+    degree: usize,
+    control_point_count: usize,
+    u: f64,
+) -> Option<usize> {
+    if knots.len() < degree + 2 || control_point_count == 0 {
+        return None;
+    }
+    if (u - *knots.last()?).abs() <= 1.0e-12 {
+        return Some(control_point_count - 1);
+    }
+
+    let mut low = degree;
+    let mut high = control_point_count;
+    let mut mid = (low + high) / 2;
+    while u < *knots.get(mid)? || u >= *knots.get(mid + 1)? {
+        if u < knots[mid] {
+            high = mid;
+        } else {
+            low = mid;
+        }
+        let next = (low + high) / 2;
+        if next == mid {
+            break;
+        }
+        mid = next;
+    }
+    Some(mid)
+}
+
+fn spline_basis_functions(knots: &[f64], span: usize, degree: usize, u: f64) -> Option<Vec<f64>> {
+    let mut basis = vec![0.0; degree + 1];
+    let mut left = vec![0.0; degree + 1];
+    let mut right = vec![0.0; degree + 1];
+    basis[0] = 1.0;
+
+    for j in 1..=degree {
+        left[j] = u - *knots.get(span + 1 - j)?;
+        right[j] = *knots.get(span + j)? - u;
+        let mut saved = 0.0;
+        for r in 0..j {
+            let denominator = right[r + 1] + left[j - r];
+            let temp = if denominator.abs() <= 1.0e-12 {
+                0.0
+            } else {
+                basis[r] / denominator
+            };
+            basis[r] = saved + right[r + 1] * temp;
+            saved = left[j - r] * temp;
+        }
+        basis[j] = saved;
+    }
+
+    Some(basis)
+}
+
+fn point_distance(a: Point, b: Point) -> f64 {
+    let dx = a.x - b.x;
+    let dy = a.y - b.y;
+    (dx * dx + dy * dy).sqrt()
 }
 
 fn ellipse_point(
@@ -1071,6 +1336,114 @@ ENDSEC
         assert!(!strokes.is_empty());
         assert_point_close(strokes[0].start, Point::new(1.0, 4.0));
         assert_point_close(strokes.last().unwrap().end, Point::new(0.0, 2.0));
+    }
+
+    #[test]
+    fn approximates_spline_entities() {
+        let strokes = parse_dxf_segments(
+            "\
+0
+SPLINE
+70
+8
+71
+2
+40
+0
+40
+0
+40
+0
+40
+1
+40
+1
+40
+1
+10
+0
+20
+0
+10
+1
+20
+1
+10
+2
+20
+0
+0
+ENDSEC
+",
+            20.0,
+        );
+
+        assert!(strokes.len() > 1);
+        assert_point_close(strokes[0].start, Point::new(0.0, 0.0));
+        assert_point_close(strokes.last().unwrap().end, Point::new(2.0, 0.0));
+        assert!(strokes.iter().any(|stroke| stroke.end.y > 0.25));
+    }
+
+    #[test]
+    fn approximates_weighted_spline_entities() {
+        let strokes = parse_dxf_segments(
+            "\
+0
+SPLINE
+70
+8
+71
+2
+40
+0
+40
+0
+40
+0
+40
+1
+40
+1
+40
+1
+41
+1
+41
+4
+41
+1
+10
+0
+20
+0
+10
+1
+20
+1
+10
+2
+20
+0
+0
+ENDSEC
+",
+            20.0,
+        );
+
+        assert!(strokes.len() > 1);
+        assert_point_close(strokes[0].start, Point::new(0.0, 0.0));
+        assert_point_close(strokes.last().unwrap().end, Point::new(2.0, 0.0));
+        assert!(strokes.iter().any(|stroke| stroke.end.y > 0.6));
+    }
+
+    #[test]
+    fn ignores_invalid_spline_entities() {
+        let strokes = parse_dxf_segments(
+            "0\nSPLINE\n71\n3\n40\n0\n40\n1\n10\n0\n20\n0\n10\n1\n20\n1\n0\nENDSEC\n",
+            20.0,
+        );
+
+        assert!(strokes.is_empty());
     }
 
     #[test]
