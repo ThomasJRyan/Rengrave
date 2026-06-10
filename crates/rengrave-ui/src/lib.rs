@@ -754,6 +754,29 @@ impl eframe::App for RengraveApp {
                     number_row(ui, "Clean dia", &mut self.controls.clean_dia, 0.01);
                     number_row(ui, "Clean step %", &mut self.controls.clean_step, 1.0);
                     number_row(ui, "Clean V", &mut self.controls.clean_v, 0.01);
+                    text_row(ui, "Clean paths", &mut self.controls.clean_paths);
+                    ui.checkbox(&mut self.controls.v_flop, "Flip normals");
+
+                    ui.separator();
+                    ui.heading("Advanced");
+                    combo_row(ui, "Height calc", self.controls.height_calc.label(), |ui| {
+                        ui.selectable_value(
+                            &mut self.controls.height_calc,
+                            HeightCalcChoice::MaxUse,
+                            HeightCalcChoice::MaxUse.label(),
+                        );
+                        ui.selectable_value(
+                            &mut self.controls.height_calc,
+                            HeightCalcChoice::MaxAll,
+                            HeightCalcChoice::MaxAll.label(),
+                        );
+                    });
+                    text_row(ui, "Preamble", &mut self.controls.gpre);
+                    text_row(ui, "Postamble", &mut self.controls.gpost);
+                    ui.horizontal_wrapped(|ui| {
+                        ui.checkbox(&mut self.controls.var_dis, "Disable variables");
+                        ui.checkbox(&mut self.controls.ext_char, "Extended chars");
+                    });
 
                     ui.separator();
                     ui.heading("Output");
@@ -992,6 +1015,7 @@ struct UiControls {
     units: UnitsChoice,
     bit_shape: BitShapeChoice,
     arc_fit: ArcFitChoice,
+    height_calc: HeightCalcChoice,
     origin: OriginChoice,
     justify: JustifyChoice,
     yscale: f64,
@@ -1021,10 +1045,13 @@ struct UiControls {
     clean_dia: f64,
     clean_step: f64,
     clean_v: f64,
+    clean_paths: String,
     bmp_turn_policy: BitmapTurnPolicy,
     bmp_turds: f64,
     bmp_alpha: f64,
     bmp_optto: f64,
+    gpre: String,
+    gpost: String,
     flip: bool,
     mirror: bool,
     outer: bool,
@@ -1033,6 +1060,9 @@ struct UiControls {
     use_image_size: bool,
     inlay: bool,
     bmp_long: bool,
+    var_dis: bool,
+    ext_char: bool,
+    v_flop: bool,
 }
 
 impl UiControls {
@@ -1042,6 +1072,7 @@ impl UiControls {
             units: UnitsChoice::parse(settings.get_last("units").unwrap_or("in")),
             bit_shape: BitShapeChoice::parse(settings.get_last("bit_shape").unwrap_or("VBIT")),
             arc_fit: ArcFitChoice::parse(settings.get_last("arc_fit").unwrap_or("none")),
+            height_calc: HeightCalcChoice::parse(settings.get_last("H_CALC").unwrap_or("max_use")),
             origin: OriginChoice::parse(settings.get_last("origin").unwrap_or("Default")),
             justify: JustifyChoice::parse(settings.get_last("justify").unwrap_or("Left")),
             yscale: setting_f64(settings, "YSCALE", 2.0),
@@ -1071,12 +1102,21 @@ impl UiControls {
             clean_dia: setting_f64(settings, "clean_dia", 0.25),
             clean_step: setting_f64(settings, "clean_step", 50.0),
             clean_v: setting_f64(settings, "clean_v", 0.05),
+            clean_paths: settings
+                .get_last("clean_paths")
+                .unwrap_or("1,1,0,1,0,1,0,0")
+                .to_owned(),
             bmp_turn_policy: BitmapTurnPolicy::parse(
                 settings.get_last("bmp_turnp").unwrap_or("minority"),
             ),
             bmp_turds: setting_f64(settings, "bmp_turds", 2.0),
             bmp_alpha: setting_f64(settings, "bmp_alpha", 1.0),
             bmp_optto: setting_f64(settings, "bmp_optto", 0.2),
+            gpre: settings
+                .get_last("gpre")
+                .unwrap_or("G17 G64 P0.001 M3 S3000")
+                .to_owned(),
+            gpost: settings.get_last("gpost").unwrap_or("M5|M2").to_owned(),
             flip: get_legacy_bool(settings, "flip", false),
             mirror: get_legacy_bool(settings, "mirror", false),
             outer: get_legacy_bool(settings, "outer", true),
@@ -1085,6 +1125,9 @@ impl UiControls {
             use_image_size: get_legacy_bool(settings, "useIMGsize", false),
             inlay: get_legacy_bool(settings, "inlay", false),
             bmp_long: get_legacy_bool(settings, "bmp_long", true),
+            var_dis: get_legacy_bool(settings, "var_dis", true),
+            ext_char: get_legacy_bool(settings, "ext_char", false),
+            v_flop: get_legacy_bool(settings, "v_flop", false),
         }
     }
 
@@ -1094,6 +1137,7 @@ impl UiControls {
         push_setting(&mut entries, "units", self.units.value(), false);
         push_setting(&mut entries, "bit_shape", self.bit_shape.value(), false);
         push_setting(&mut entries, "arc_fit", self.arc_fit.value(), false);
+        push_setting(&mut entries, "H_CALC", self.height_calc.value(), false);
         push_setting(&mut entries, "origin", self.origin.value(), false);
         push_setting(&mut entries, "justify", self.justify.value(), false);
         push_setting(
@@ -1258,6 +1302,7 @@ impl UiControls {
             format_setting_number(self.clean_v),
             false,
         );
+        push_setting(&mut entries, "clean_paths", self.clean_paths.trim(), false);
         push_setting(
             &mut entries,
             "bmp_turnp",
@@ -1282,6 +1327,8 @@ impl UiControls {
             format_setting_number(self.bmp_optto),
             false,
         );
+        push_setting(&mut entries, "gpre", self.gpre.trim(), false);
+        push_setting(&mut entries, "gpost", self.gpost.trim(), false);
         push_bool(&mut entries, "flip", self.flip);
         push_bool(&mut entries, "mirror", self.mirror);
         push_bool(&mut entries, "outer", self.outer);
@@ -1290,7 +1337,40 @@ impl UiControls {
         push_bool(&mut entries, "useIMGsize", self.use_image_size);
         push_bool(&mut entries, "inlay", self.inlay);
         push_bool(&mut entries, "bmp_long", self.bmp_long);
+        push_bool(&mut entries, "var_dis", self.var_dis);
+        push_bool(&mut entries, "ext_char", self.ext_char);
+        push_bool(&mut entries, "v_flop", self.v_flop);
         entries
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HeightCalcChoice {
+    MaxUse,
+    MaxAll,
+}
+
+impl HeightCalcChoice {
+    fn parse(value: &str) -> Self {
+        if value == "max_all" {
+            Self::MaxAll
+        } else {
+            Self::MaxUse
+        }
+    }
+
+    fn value(self) -> &'static str {
+        match self {
+            Self::MaxUse => "max_use",
+            Self::MaxAll => "max_all",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::MaxUse => "Used chars",
+            Self::MaxAll => "All chars",
+        }
     }
 }
 
@@ -1981,6 +2061,16 @@ fn number_row(ui: &mut egui::Ui, label: &str, value: &mut f64, speed: f64) {
     ui.horizontal(|ui| {
         ui.add_sized([124.0, 20.0], egui::Label::new(label));
         ui.add(egui::DragValue::new(value).speed(speed).max_decimals(4));
+    });
+}
+
+fn text_row(ui: &mut egui::Ui, label: &str, value: &mut String) {
+    ui.horizontal(|ui| {
+        ui.add_sized([124.0, 20.0], egui::Label::new(label));
+        ui.add_sized(
+            [ui.available_width().max(80.0), 22.0],
+            egui::TextEdit::singleline(value),
+        );
     });
 }
 
@@ -3338,6 +3428,50 @@ mod tests {
         assert_eq!(value_for("bmp_optto"), Some("0.125"));
         assert_eq!(value_for("bmp_long"), Some("0"));
         assert_eq!(value_for("useIMGsize"), Some("1"));
+    }
+
+    #[test]
+    fn ui_controls_emit_advanced_core_overrides() {
+        let mut settings = LegacySettings::default();
+        settings.set_or_push("H_CALC", "max_all", false);
+        settings.set_or_push("gpre", "G17|M3 S12000", false);
+        settings.set_or_push("gpost", "M5|M2", false);
+        settings.set_or_push("clean_paths", "1,0,1,0,1,0,1,1", false);
+        settings.set_or_push("var_dis", "0", false);
+        settings.set_or_push("ext_char", "1", false);
+        settings.set_or_push("v_flop", "1", false);
+
+        let mut controls = UiControls::from_settings(&settings);
+        assert_eq!(controls.height_calc, HeightCalcChoice::MaxAll);
+        assert_eq!(controls.gpre, "G17|M3 S12000");
+        assert_eq!(controls.clean_paths, "1,0,1,0,1,0,1,1");
+        assert!(!controls.var_dis);
+        assert!(controls.ext_char);
+        assert!(controls.v_flop);
+
+        controls.height_calc = HeightCalcChoice::MaxUse;
+        controls.gpre = " G90|M3 S9000 ".to_owned();
+        controls.gpost = " M5|M30 ".to_owned();
+        controls.clean_paths = " 0,1,0,1,0,1,0,1 ".to_owned();
+        controls.var_dis = true;
+        controls.ext_char = false;
+        controls.v_flop = false;
+
+        let overrides = controls.overrides();
+        let value_for = |key: &str| {
+            overrides
+                .iter()
+                .find(|entry| entry.key == key)
+                .map(|entry| entry.value.as_str())
+        };
+
+        assert_eq!(value_for("H_CALC"), Some("max_use"));
+        assert_eq!(value_for("gpre"), Some("G90|M3 S9000"));
+        assert_eq!(value_for("gpost"), Some("M5|M30"));
+        assert_eq!(value_for("clean_paths"), Some("0,1,0,1,0,1,0,1"));
+        assert_eq!(value_for("var_dis"), Some("1"));
+        assert_eq!(value_for("ext_char"), Some("0"));
+        assert_eq!(value_for("v_flop"), Some("0"));
     }
 
     #[test]

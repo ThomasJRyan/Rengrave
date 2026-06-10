@@ -41,8 +41,9 @@ This document records what has actually been implemented in the Rust port and wh
 - The left panel also shows a cached input preview: CXF/TTF sample strokes, DXF line artwork, or a bitmap thumbnail, with decode/parser errors shown inline.
 - Current UI settings can be saved back out as reusable `fengrave_set` comments, including selected input/default directory, UI overrides, and TCODE text. Existing settings files are used as a base when present; new settings paths save from defaults.
 - UI path preferences are persisted under the platform config directory and restored on the next launch when CLI arguments do not override them.
-- Common F-Engrave settings are exposed as working controls: mode, units, justification, origin, height/width/spacing, angle, text radius, flip/mirror, Add Box, safe/cut Z, stroke, feed/plunge, arc fitting, bit shape, V-bit/inlay/depth settings, cleanup diameter/step/V size, and bitmap image-size/long-curve toggles.
+- Common F-Engrave settings are exposed as working controls: mode, units, justification, origin, height/width/spacing, angle, text radius, flip/mirror, Add Box, safe/cut Z, stroke, feed/plunge, arc fitting, bit shape, V-bit/inlay/depth settings, cleanup diameter/step/V size/path mask/normal flip, and bitmap image-size/long-curve toggles.
 - The right panel has a Bitmap section that reports Potrace detected/missing status, indicates when the selected input requires Potrace, and exposes Potrace turn policy, turd size, alpha max, and optimization tolerance.
+- The right panel has an Advanced section for core-supported settings that were previously hidden: height calculation mode, G-code preamble/postamble, variable output, and extended TTF/CXF character conversion.
 - UI controls emit legacy `fengrave_set` overrides into `rengrave-core`; they do not write temporary settings files.
 - The app calculates through the same batch core path used by the CLI, now on a background worker so the preview and controls stay responsive.
 - Calculation has an indeterminate progress indicator, a Cancel action, and stale-result handling. If inputs change while a worker is running, the old result is ignored instead of replacing the current state.
@@ -54,12 +55,12 @@ This document records what has actually been implemented in the Rust port and wh
 
 ## Why The UI Looks Bare
 
-The UI is now an MVP rather than only a shell, but it still lacks several expected desktop workflow pieces. There are no native OS file dialogs, rich font/image preview editing controls, cooperative mid-algorithm cancellation, or full F-Engrave-style menu coverage. Controls cover common settings, but not every legacy knob. Background jobs keep the UI responsive, but the current Cancel action ignores late worker results rather than interrupting every core loop immediately.
+The UI is now an MVP rather than only a shell, but it still lacks several expected desktop workflow pieces. There are no native OS file dialogs, rich font/image preview editing controls, cooperative mid-algorithm cancellation, or full F-Engrave-style menu coverage. Controls cover common and several advanced settings, but not every legacy knob. Background jobs keep the UI responsive, but the current Cancel action ignores late worker results rather than interrupting every core loop immediately.
 
 ## Tests And Validation In Place
 
 - Core tests currently cover settings, CXF/TTF parsing, DXF entities, bitmap conversion, layout transforms, Add Box/Circle, G-code, SVG/DXF export, cleanup, v-carve options, and batch generation.
-- UI tests cover default output paths, settings save serialization, path-field parsing, in-app browser directory behavior, input catalog scanning, input preview loading, preference persistence, worker stale-result detection, control-to-legacy override emission, bitmap/Potrace control mapping, preview fitting, output preview truncation, text-file write errors, linear preview parsing, and full-circle arc preview parsing.
+- UI tests cover default output paths, settings save serialization, path-field parsing, in-app browser directory behavior, input catalog scanning, input preview loading, preference persistence, worker stale-result detection, control-to-legacy override emission, bitmap/Potrace control mapping, advanced setting mapping, preview fitting, output preview truncation, text-file write errors, linear preview parsing, and full-circle arc preview parsing.
 - Recent validation has been run with:
   - `cargo test -p rengrave-core`
   - `cargo test -p rengrave-ui`
