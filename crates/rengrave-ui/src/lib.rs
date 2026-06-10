@@ -9,7 +9,7 @@ use std::sync::{
 use std::thread;
 
 use eframe::egui;
-use rengrave_core::batch::{BatchOutput, BatchRequest, prepare_batch_output};
+use rengrave_core::batch::{BatchOutput, BatchRequest, SecondaryGcode, prepare_batch_output};
 use rengrave_core::dxf::read_dxf_font;
 use rengrave_core::external::{PotraceStatus, detect_potrace, requires_potrace};
 use rengrave_core::font::{Font, Stroke, read_cxf, read_ttf};
@@ -57,6 +57,7 @@ struct RengraveApp {
     gcode: String,
     svg: Option<String>,
     dxf: Option<String>,
+    secondary_gcode: Vec<SecondaryGcode>,
     gcode_lines: usize,
     preview_segments: Vec<PreviewSegment>,
     preview_rapids: Vec<PreviewSegment>,
@@ -137,6 +138,7 @@ impl RengraveApp {
             gcode: String::new(),
             svg: None,
             dxf: None,
+            secondary_gcode: Vec::new(),
             gcode_lines: 0,
             preview_segments: Vec::new(),
             preview_rapids: Vec::new(),
@@ -185,6 +187,7 @@ impl RengraveApp {
             output: None,
             svg_output: include_exports.then(|| PathBuf::from(&self.svg_path)),
             dxf_output: include_exports.then(|| PathBuf::from(&self.dxf_path)),
+            include_secondary: include_exports,
             settings_overrides: self.controls.overrides(),
         }
     }
@@ -321,6 +324,7 @@ impl RengraveApp {
                 self.gcode.clear();
                 self.svg = None;
                 self.dxf = None;
+                self.secondary_gcode.clear();
                 self.gcode_lines = 0;
                 self.preview_segments.clear();
                 self.preview_rapids.clear();
@@ -349,6 +353,7 @@ impl RengraveApp {
         self.gcode = output.gcode;
         self.svg = output.svg;
         self.dxf = output.dxf;
+        self.secondary_gcode = output.secondary_gcode;
     }
 
     fn export_current(&mut self, kind: ExportKind) {
@@ -373,6 +378,37 @@ impl RengraveApp {
                 self.warnings.push(err);
             }
         }
+    }
+
+    fn export_secondary_outputs(&mut self) {
+        if self.secondary_gcode.is_empty() {
+            self.status = "Cleanup export unavailable".to_owned();
+            return;
+        }
+
+        let primary_path = PathBuf::from(self.gcode_path.trim());
+        if primary_path.as_os_str().is_empty() {
+            self.status = "Cleanup export failed".to_owned();
+            self.warnings.push("G-code output path is empty".to_owned());
+            return;
+        }
+
+        let mut written = 0usize;
+        for output in &self.secondary_gcode {
+            let path = secondary_output_path(&primary_path, &output.suffix);
+            match fs::write(&path, &output.gcode) {
+                Ok(_) => written += 1,
+                Err(err) => {
+                    self.status = "Cleanup export failed".to_owned();
+                    self.warnings
+                        .push(format!("unable to write `{}`: {err}", path.display()));
+                    return;
+                }
+            }
+        }
+
+        self.status = format!("Cleanup exported: {written} files");
+        self.save_preferences();
     }
 
     fn open_browser(&mut self, target: FileBrowserTarget) {
@@ -815,6 +851,16 @@ impl eframe::App for RengraveApp {
                     {
                         self.export_current(ExportKind::Gcode);
                     }
+                    ui.label(format!("Cleanup files: {}", self.secondary_gcode.len()));
+                    if ui
+                        .add_enabled(
+                            !self.secondary_gcode.is_empty(),
+                            egui::Button::new("Export cleanup files"),
+                        )
+                        .clicked()
+                    {
+                        self.export_secondary_outputs();
+                    }
                     if path_row(ui, "SVG", &mut self.svg_path) {
                         self.choose_path(FileBrowserTarget::SvgOutput);
                     }
@@ -945,6 +991,9 @@ impl RengraveApp {
                 }
                 if menu_action(ui, "Export G-code", !self.gcode.is_empty()) {
                     self.export_current(ExportKind::Gcode);
+                }
+                if menu_action(ui, "Export cleanup files", !self.secondary_gcode.is_empty()) {
+                    self.export_secondary_outputs();
                 }
                 if menu_action(ui, "Export SVG", self.svg.is_some()) {
                     self.export_current(ExportKind::Svg);
@@ -2051,6 +2100,20 @@ fn default_output_path(default_dir: &Option<PathBuf>, file_name: &str) -> String
         .to_string()
 }
 
+fn secondary_output_path(path: &Path, suffix: &str) -> PathBuf {
+    let stem = path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("output");
+    let extension = path.extension().and_then(|value| value.to_str());
+    let mut file_name = format!("{stem}_{suffix}");
+    if let Some(extension) = extension {
+        file_name.push('.');
+        file_name.push_str(extension);
+    }
+    path.with_file_name(file_name)
+}
+
 fn calculation_request_is_stale(current: &BatchRequest, expected: &BatchRequest) -> bool {
     current.batch != expected.batch
         || current.gcode_file != expected.gcode_file
@@ -2058,6 +2121,7 @@ fn calculation_request_is_stale(current: &BatchRequest, expected: &BatchRequest)
         || current.default_dir != expected.default_dir
         || current.text != expected.text
         || current.settings_overrides != expected.settings_overrides
+        || current.include_secondary != expected.include_secondary
         || current.svg_output.is_some() != expected.svg_output.is_some()
         || current.dxf_output.is_some() != expected.dxf_output.is_some()
 }
@@ -3235,6 +3299,18 @@ mod tests {
     }
 
     #[test]
+    fn secondary_output_paths_append_suffix_before_extension() {
+        assert_eq!(
+            secondary_output_path(Path::new("/tmp/job.ngc"), "clean"),
+            PathBuf::from("/tmp/job_clean.ngc")
+        );
+        assert_eq!(
+            secondary_output_path(Path::new("/tmp/job"), "v_clean"),
+            PathBuf::from("/tmp/job_v_clean")
+        );
+    }
+
+    #[test]
     fn calculation_staleness_ignores_output_path_text() {
         let expected = BatchRequest {
             batch: true,
@@ -3272,11 +3348,19 @@ mod tests {
             svg_output: Some(PathBuf::from("/tmp/out.svg")),
             ..expected.clone()
         };
+        let secondary_toggle_changed = BatchRequest {
+            include_secondary: true,
+            ..expected.clone()
+        };
 
         assert!(calculation_request_is_stale(&text_changed, &expected));
         assert!(calculation_request_is_stale(&settings_changed, &expected));
         assert!(calculation_request_is_stale(
             &export_toggle_changed,
+            &expected
+        ));
+        assert!(calculation_request_is_stale(
+            &secondary_toggle_changed,
             &expected
         ));
     }

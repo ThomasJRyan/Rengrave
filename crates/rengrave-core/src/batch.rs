@@ -27,6 +27,7 @@ pub struct BatchRequest {
     pub output: Option<PathBuf>,
     pub svg_output: Option<PathBuf>,
     pub dxf_output: Option<PathBuf>,
+    pub include_secondary: bool,
     pub settings_overrides: Vec<LegacySetting>,
 }
 
@@ -64,7 +65,7 @@ pub fn prepare_batch_output(request: &BatchRequest) -> Result<BatchOutput, Batch
     let generated_gcode = generate_engrave_gcode(
         &document.settings,
         &document.text,
-        request.output.is_some(),
+        request.output.is_some() || request.include_secondary,
         request.svg_output.is_some(),
         request.dxf_output.is_some(),
         &mut warnings,
@@ -738,6 +739,46 @@ mod tests {
                 .gcode
                 .contains("secondary cleanup operation")
         );
+    }
+
+    #[test]
+    fn batch_prepares_cleanup_companion_gcode_when_explicitly_requested() {
+        let font_path = std::env::temp_dir().join(format!(
+            "rengrave-ui-cleanup-{}-{}.cxf",
+            std::process::id(),
+            "batch"
+        ));
+        let settings_path = std::env::temp_dir().join(format!(
+            "rengrave-ui-cleanup-{}-{}.ngc",
+            std::process::id(),
+            "batch"
+        ));
+        fs::write(
+            &font_path,
+            "[A] 4\nL 0,0,10,0\nL 10,0,10,10\nL 10,10,0,10\nL 0,10,0,0\n",
+        )
+        .unwrap();
+        fs::write(
+            &settings_path,
+            "(fengrave_set cut_type   v-carve )\n(fengrave_set clean_paths  1,0,0,0,0,0,0,0 )\n",
+        )
+        .unwrap();
+
+        let output = prepare_batch_output(&BatchRequest {
+            batch: true,
+            gcode_file: Some(settings_path.clone()),
+            font_or_image: Some(font_path.clone()),
+            text: Some("A".to_owned()),
+            include_secondary: true,
+            ..BatchRequest::default()
+        })
+        .unwrap();
+
+        let _ = fs::remove_file(font_path);
+        let _ = fs::remove_file(settings_path);
+        assert!(output.warnings.is_empty());
+        assert_eq!(output.secondary_gcode.len(), 1);
+        assert_eq!(output.secondary_gcode[0].suffix, "clean");
     }
 
     #[test]

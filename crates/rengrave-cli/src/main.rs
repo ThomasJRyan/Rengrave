@@ -78,6 +78,7 @@ fn run_batch(cli: Cli) -> anyhow::Result<()> {
         output: cli.output,
         svg_output: cli.svg_output,
         dxf_output: cli.dxf_output,
+        include_secondary: false,
         settings_overrides: Vec::new(),
     };
     let output = prepare_batch_output(&request)?;

@@ -2,6 +2,12 @@
 
 This document records what has actually been implemented in the Rust port and what is still missing for F-Engrave parity. The short version: most progress is still in `rengrave-core` and batch/CLI generation, but the `eframe/egui` UI now exposes a usable MVP workflow for loading inputs, editing common settings, calculating, previewing, and exporting output.
 
+## Latest Checkpoint
+
+- Cleanup companion G-code generation is now an explicit batch option, so the UI can request secondary cleanup files without pretending it is a CLI file-write operation.
+- The UI stores secondary cleanup outputs from the core calculation, shows how many cleanup files are available, and can export them next to the selected primary G-code path using F-Engrave-style suffixes such as `_clean`.
+- Stale-output detection now includes the secondary-output request flag, preventing cleanup files from silently falling out of sync with the visible preview/output.
+
 ## Current Shape
 
 - `f-engrave_source/` is kept untouched as the behavior and licensing reference.
@@ -30,6 +36,7 @@ This document records what has actually been implemented in the Rust port and wh
 - Initial inlay/depth-limit/effective diameter handling.
 - Initial v-carve roughing/multipass depth caps.
 - Initial cleanup path generation and secondary cleanup G-code files.
+- Batch generation can now request secondary cleanup outputs independently of writing the primary G-code to a CLI output path.
 - SVG and DXF export helpers from generated layout segments.
 
 ## Implemented UI Work
@@ -49,6 +56,7 @@ This document records what has actually been implemented in the Rust port and wh
 - Calculation has an indeterminate progress indicator, a Cancel action, and stale-result handling. If inputs change while a worker is running, the old result is ignored instead of replacing the current state.
 - After a successful calculation, the UI tracks the batch request that produced the displayed output and marks the output stale if text, input paths, or generation settings change before recalculation.
 - It stores generated G-code/SVG/DXF payloads and can write them to user-editable paths.
+- It stores generated secondary cleanup G-code payloads, displays the available cleanup-file count, and exports cleanup files beside the primary G-code path.
 - File, Run, and View menus expose the same load/save/export/calculate/cancel/copy/Fit/layer actions as the panels and toolbar.
 - The bottom panel has Status, G-code, SVG, and DXF tabs so generated text output can be inspected without exporting first.
 - It previews cut moves, separately parses and draws rapid XY moves as a toggleable dashed layer, and approximates center-format full-circle arcs for display.
@@ -62,7 +70,7 @@ The UI is now an MVP rather than only a shell, but it still lacks several expect
 
 - Core tests currently cover settings, CXF/TTF parsing, DXF entities, bitmap conversion, layout transforms, Add Box/Circle, G-code, SVG/DXF export, cleanup, v-carve options, and batch generation.
 - A crate-level golden-output harness now exists under `crates/rengrave-core/tests/golden.rs` with a minimal CXF fixture and checked G-code/SVG regression outputs. These first expected files pin current R-Engrave output; they are not yet F-Engrave-generated parity fixtures.
-- UI tests cover default output paths, native save-dialog filename helpers, settings save serialization, path-field parsing, in-app browser directory behavior, input catalog scanning, input preview loading, preference persistence, worker stale-result detection, output stale-state detection, control-to-legacy override emission, bitmap/Potrace control mapping, advanced setting mapping, preview fitting, output preview truncation, text-file write errors, cut/rapid preview parsing, and full-circle arc preview parsing.
+- UI tests cover default and secondary output paths, native save-dialog filename helpers, settings save serialization, path-field parsing, in-app browser directory behavior, input catalog scanning, input preview loading, preference persistence, worker stale-result detection, output stale-state detection, control-to-legacy override emission, bitmap/Potrace control mapping, advanced setting mapping, preview fitting, output preview truncation, text-file write errors, cut/rapid preview parsing, and full-circle arc preview parsing.
 - Recent validation has been run with:
   - `cargo test -p rengrave-core`
   - `cargo test -p rengrave-ui`
@@ -87,7 +95,7 @@ The UI is now an MVP rather than only a shell, but it still lacks several expect
 ## Recommended Next Checkpoints
 
 1. Build a golden-fixture harness that can compare generated output against checked-in F-Engrave fixtures with tolerances.
-2. Replace or supplement the in-app browser with native file pickers, enrich font/image preview controls, and broaden the settings editor.
+2. Enrich font/image preview controls, add more complete F-Engrave-style setting panels, and make secondary outputs inspectable in the bottom output area.
 3. Expand parity tests for default text, multiline text, text-on-circle, flip/mirror/origin/justify, DXF imports, bitmap imports, Add Box/Circle, arc-fit modes, and settings round trips.
 4. Audit V-carve and cleanup output against F-Engrave fixtures before adding more UI around those features.
 5. Add detailed progress reporting and cooperative cancellation checks inside expensive core import, cleanup, and v-carve routines.
