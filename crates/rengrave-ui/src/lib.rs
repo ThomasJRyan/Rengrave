@@ -2550,6 +2550,12 @@ impl InputPreview {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct BitmapTraceStats {
+    black_pixels: u64,
+    white_pixels: u64,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 enum InputPreviewData {
     Empty,
@@ -2568,6 +2574,7 @@ enum InputPreviewData {
         mask_width: usize,
         mask_height: usize,
         mask_rgba: Vec<u8>,
+        trace_stats: BitmapTraceStats,
     },
     Error(String),
 }
@@ -3411,7 +3418,7 @@ fn load_bitmap_preview(path: &Path) -> InputPreviewData {
                     INPUT_PREVIEW_THUMBNAIL_HEIGHT,
                 )
                 .to_rgba8();
-            let mask_thumbnail = bitmap_trace_mask_thumbnail(&image);
+            let (mask_thumbnail, trace_stats) = bitmap_trace_mask_thumbnail_and_stats(&image);
             InputPreviewData::Bitmap {
                 original_width,
                 original_height,
@@ -3421,16 +3428,20 @@ fn load_bitmap_preview(path: &Path) -> InputPreviewData {
                 mask_width: mask_thumbnail.width() as usize,
                 mask_height: mask_thumbnail.height() as usize,
                 mask_rgba: mask_thumbnail.into_raw(),
+                trace_stats,
             }
         }
         Err(err) => InputPreviewData::Error(format!("unable to decode bitmap preview: {err}")),
     }
 }
 
-fn bitmap_trace_mask_thumbnail(image: &image::DynamicImage) -> image::RgbaImage {
+fn bitmap_trace_mask_thumbnail_and_stats(
+    image: &image::DynamicImage,
+) -> (image::RgbaImage, BitmapTraceStats) {
     let rgba = image.to_rgba8();
     let (width, height) = rgba.dimensions();
     let mut mask = image::RgbaImage::new(width, height);
+    let mut stats = BitmapTraceStats::default();
     for (x, y, pixel) in rgba.enumerate_pixels() {
         let pixel = pixel.0;
         let alpha = pixel[3] as u32;
@@ -3439,11 +3450,16 @@ fn bitmap_trace_mask_thumbnail(image: &image::DynamicImage) -> image::RgbaImage 
         let blue = composite_over_white(pixel[2] as u32, alpha);
         let luma = (299 * red + 587 * green + 114 * blue) / 1000;
         let value = if luma < 128 { 0 } else { 255 };
+        if value == 0 {
+            stats.black_pixels += 1;
+        } else {
+            stats.white_pixels += 1;
+        }
         mask.put_pixel(x, y, image::Rgba([value, value, value, 255]));
     }
 
     if width <= INPUT_PREVIEW_THUMBNAIL_WIDTH && height <= INPUT_PREVIEW_THUMBNAIL_HEIGHT {
-        return mask;
+        return (mask, stats);
     }
 
     let scale = (INPUT_PREVIEW_THUMBNAIL_WIDTH as f64 / width as f64)
@@ -3451,16 +3467,31 @@ fn bitmap_trace_mask_thumbnail(image: &image::DynamicImage) -> image::RgbaImage 
         .min(1.0);
     let scaled_width = ((width as f64 * scale).round() as u32).max(1);
     let scaled_height = ((height as f64 * scale).round() as u32).max(1);
-    image::imageops::resize(
-        &mask,
-        scaled_width,
-        scaled_height,
-        image::imageops::FilterType::Nearest,
+    (
+        image::imageops::resize(
+            &mask,
+            scaled_width,
+            scaled_height,
+            image::imageops::FilterType::Nearest,
+        ),
+        stats,
     )
 }
 
 fn composite_over_white(channel: u32, alpha: u32) -> u32 {
     (channel * alpha + 255 * (255 - alpha)) / 255
+}
+
+fn bitmap_trace_stats_readout(stats: BitmapTraceStats) -> String {
+    let total = stats.black_pixels + stats.white_pixels;
+    if total == 0 {
+        return "Trace mask: no pixels".to_owned();
+    }
+    let black_percent = stats.black_pixels as f64 * 100.0 / total as f64;
+    format!(
+        "Trace mask: {} black / {} white ({black_percent:.1}% black)",
+        stats.black_pixels, stats.white_pixels
+    )
 }
 
 fn draw_input_preview(ui: &mut egui::Ui, preview: &mut InputPreview) {
@@ -3492,8 +3523,10 @@ fn draw_input_preview(ui: &mut egui::Ui, preview: &mut InputPreview) {
             mask_width,
             mask_height,
             mask_rgba,
+            trace_stats,
         } => {
             ui.label(format!("Bitmap · {original_width} x {original_height} px"));
+            ui.monospace(bitmap_trace_stats_readout(*trace_stats));
             if preview.texture.is_none() {
                 let image = egui::ColorImage::from_rgba_unmultiplied(
                     [*thumbnail_width, *thumbnail_height],
@@ -5394,6 +5427,7 @@ mod tests {
                 mask_width,
                 mask_height,
                 mask_rgba,
+                trace_stats,
             } => {
                 assert_eq!(original_width, 4);
                 assert_eq!(original_height, 2);
@@ -5403,6 +5437,13 @@ mod tests {
                 assert!(mask_width <= INPUT_PREVIEW_THUMBNAIL_WIDTH as usize);
                 assert!(mask_height <= INPUT_PREVIEW_THUMBNAIL_HEIGHT as usize);
                 assert_eq!(mask_rgba.len(), mask_width * mask_height * 4);
+                assert_eq!(
+                    trace_stats,
+                    BitmapTraceStats {
+                        black_pixels: 8,
+                        white_pixels: 0
+                    }
+                );
             }
             other => panic!("unexpected preview: {other:?}"),
         }
@@ -5415,12 +5456,40 @@ mod tests {
         image.put_pixel(1, 0, image::Rgba([255, 255, 255, 255]));
         image.put_pixel(2, 0, image::Rgba([0, 0, 0, 0]));
 
-        let mask = bitmap_trace_mask_thumbnail(&image::DynamicImage::ImageRgba8(image));
+        let (mask, _) =
+            bitmap_trace_mask_thumbnail_and_stats(&image::DynamicImage::ImageRgba8(image));
         let rgba = mask.into_raw();
 
         assert_eq!(&rgba[0..4], &[0, 0, 0, 255]);
         assert_eq!(&rgba[4..8], &[255, 255, 255, 255]);
         assert_eq!(&rgba[8..12], &[255, 255, 255, 255]);
+    }
+
+    #[test]
+    fn bitmap_trace_mask_stats_count_full_size_pixels() {
+        let mut image = image::RgbaImage::new(3, 1);
+        image.put_pixel(0, 0, image::Rgba([0, 0, 0, 255]));
+        image.put_pixel(1, 0, image::Rgba([255, 255, 255, 255]));
+        image.put_pixel(2, 0, image::Rgba([0, 0, 0, 0]));
+
+        let (_, stats) =
+            bitmap_trace_mask_thumbnail_and_stats(&image::DynamicImage::ImageRgba8(image));
+
+        assert_eq!(
+            stats,
+            BitmapTraceStats {
+                black_pixels: 1,
+                white_pixels: 2
+            }
+        );
+        assert_eq!(
+            bitmap_trace_stats_readout(stats),
+            "Trace mask: 1 black / 2 white (33.3% black)"
+        );
+        assert_eq!(
+            bitmap_trace_stats_readout(BitmapTraceStats::default()),
+            "Trace mask: no pixels"
+        );
     }
 
     #[test]
