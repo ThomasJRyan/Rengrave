@@ -148,6 +148,7 @@ impl RengraveApp {
             text: document.text,
             transform: ViewTransform {
                 zoom: DEFAULT_PREVIEW_ZOOM,
+                viewport_rotation_degrees: preferences.viewport_rotation_degrees,
                 ..ViewTransform::default()
             },
             status,
@@ -181,7 +182,7 @@ impl RengraveApp {
                 preferences.dxf_path
             },
             show_toolpath: get_legacy_bool(&document.settings, "show_v_path", true),
-            show_rapids: true,
+            show_rapids: preferences.show_rapids,
             show_cleanup: preferences.show_cleanup,
             show_bounds: get_legacy_bool(&document.settings, "show_box", true),
             show_axes: get_legacy_bool(&document.settings, "show_axis", true),
@@ -652,8 +653,10 @@ impl RengraveApp {
             gcode_path: self.gcode_path.clone(),
             svg_path: self.svg_path.clone(),
             dxf_path: self.dxf_path.clone(),
+            show_rapids: self.show_rapids,
             show_grid: self.show_grid,
             show_cleanup: self.show_cleanup,
+            viewport_rotation_degrees: self.transform.viewport_rotation_degrees,
             preview_sample_text: self.preview_sample_text.clone(),
         };
         if let Err(err) = preferences.save(path) {
@@ -710,14 +713,19 @@ impl eframe::App for RengraveApp {
                             .text("Zoom")
                             .clamping(egui::SliderClamping::Always),
                     );
-                    ui.add(
-                        egui::Slider::new(
-                            &mut self.transform.viewport_rotation_degrees,
-                            -180.0..=180.0,
+                    if ui
+                        .add(
+                            egui::Slider::new(
+                                &mut self.transform.viewport_rotation_degrees,
+                                -180.0..=180.0,
+                            )
+                            .text("View")
+                            .clamping(egui::SliderClamping::Always),
                         )
-                        .text("View")
-                        .clamping(egui::SliderClamping::Always),
-                    );
+                        .changed()
+                    {
+                        self.save_preferences();
+                    }
                     ui.separator();
                     ui.label("Status");
                     ui.monospace(&self.status);
@@ -1196,7 +1204,9 @@ impl eframe::App for RengraveApp {
                     ui.separator();
                     ui.heading("Preview");
                     ui.checkbox(&mut self.show_toolpath, "Toolpath");
-                    ui.checkbox(&mut self.show_rapids, "Rapids");
+                    if ui.checkbox(&mut self.show_rapids, "Rapids").changed() {
+                        self.save_preferences();
+                    }
                     if ui
                         .add_enabled(
                             !self.preview_cleanup_segments.is_empty(),
@@ -1447,10 +1457,13 @@ impl RengraveApp {
                 }
                 if menu_action(ui, "Reset view rotation", true) {
                     self.transform.viewport_rotation_degrees = 0.0;
+                    self.save_preferences();
                 }
                 ui.separator();
                 ui.checkbox(&mut self.show_toolpath, "Toolpath layer");
-                ui.checkbox(&mut self.show_rapids, "Rapid layer");
+                if ui.checkbox(&mut self.show_rapids, "Rapid layer").changed() {
+                    self.save_preferences();
+                }
                 if ui
                     .add_enabled(
                         !self.preview_cleanup_segments.is_empty(),
@@ -4009,7 +4022,7 @@ fn vector_input_preview_axis_segments(bounds: PreviewBounds) -> Vec<PreviewSegme
     axes
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 struct UiPreferences {
     settings_path: String,
     input_path: String,
@@ -4017,8 +4030,10 @@ struct UiPreferences {
     gcode_path: String,
     svg_path: String,
     dxf_path: String,
+    show_rapids: bool,
     show_grid: bool,
     show_cleanup: bool,
+    viewport_rotation_degrees: f64,
     preview_sample_text: String,
 }
 
@@ -4031,8 +4046,10 @@ impl Default for UiPreferences {
             gcode_path: String::new(),
             svg_path: String::new(),
             dxf_path: String::new(),
+            show_rapids: true,
             show_grid: true,
             show_cleanup: true,
+            viewport_rotation_degrees: 0.0,
             preview_sample_text: String::new(),
         }
     }
@@ -4072,8 +4089,14 @@ impl UiPreferences {
                 "gcode_path" => preferences.gcode_path = value,
                 "svg_path" => preferences.svg_path = value,
                 "dxf_path" => preferences.dxf_path = value,
+                "show_rapids" => preferences.show_rapids = value != "0" && value != "false",
                 "show_grid" => preferences.show_grid = value != "0" && value != "false",
                 "show_cleanup" => preferences.show_cleanup = value != "0" && value != "false",
+                "viewport_rotation_degrees" => {
+                    if let Ok(rotation) = value.parse::<f64>() {
+                        preferences.viewport_rotation_degrees = rotation.clamp(-180.0, 180.0);
+                    }
+                }
                 "preview_sample_text" => preferences.preview_sample_text = value,
                 _ => {}
             }
@@ -4082,6 +4105,7 @@ impl UiPreferences {
     }
 
     fn to_text(&self) -> String {
+        let viewport_rotation_degrees = format_setting_number(self.viewport_rotation_degrees);
         [
             ("settings_path", self.settings_path.as_str()),
             ("input_path", self.input_path.as_str()),
@@ -4089,8 +4113,13 @@ impl UiPreferences {
             ("gcode_path", self.gcode_path.as_str()),
             ("svg_path", self.svg_path.as_str()),
             ("dxf_path", self.dxf_path.as_str()),
+            ("show_rapids", if self.show_rapids { "1" } else { "0" }),
             ("show_grid", if self.show_grid { "1" } else { "0" }),
             ("show_cleanup", if self.show_cleanup { "1" } else { "0" }),
+            (
+                "viewport_rotation_degrees",
+                viewport_rotation_degrees.as_str(),
+            ),
             ("preview_sample_text", self.preview_sample_text.as_str()),
         ]
         .into_iter()
@@ -6190,8 +6219,10 @@ mod tests {
             gcode_path: "/tmp/out.ngc".to_owned(),
             svg_path: "/tmp/out.svg".to_owned(),
             dxf_path: "/tmp/out.dxf".to_owned(),
+            show_rapids: false,
             show_grid: false,
             show_cleanup: false,
+            viewport_rotation_degrees: 42.5,
             preview_sample_text: "Sample=A".to_owned(),
         };
 
@@ -6205,9 +6236,19 @@ mod tests {
     fn ui_preferences_default_grid_visible_for_old_files() {
         let preferences = UiPreferences::parse("input_path=/tmp/example.cxf\n");
 
+        assert!(preferences.show_rapids);
         assert!(preferences.show_grid);
         assert!(preferences.show_cleanup);
+        assert_eq!(preferences.viewport_rotation_degrees, 0.0);
         assert!(preferences.preview_sample_text.is_empty());
+    }
+
+    #[test]
+    fn ui_preferences_clamp_viewport_rotation() {
+        let preferences = UiPreferences::parse("viewport_rotation_degrees=270\nshow_rapids=0\n");
+
+        assert_eq!(preferences.viewport_rotation_degrees, 180.0);
+        assert!(!preferences.show_rapids);
     }
 
     #[test]
