@@ -89,6 +89,7 @@ struct RengraveApp {
     input_catalog: InputCatalog,
     input_catalog_filter: InputCatalogFilter,
     input_preview: InputPreview,
+    preview_sample_text: String,
     preferences_path: Option<PathBuf>,
     calculation: Option<CalculationJob>,
     next_calculation_id: u64,
@@ -185,6 +186,7 @@ impl RengraveApp {
             input_catalog,
             input_catalog_filter: InputCatalogFilter::default(),
             input_preview: InputPreview::default(),
+            preview_sample_text: preferences.preview_sample_text,
             preferences_path,
             calculation: None,
             next_calculation_id: 1,
@@ -641,6 +643,7 @@ impl RengraveApp {
             svg_path: self.svg_path.clone(),
             dxf_path: self.dxf_path.clone(),
             show_grid: self.show_grid,
+            preview_sample_text: self.preview_sample_text.clone(),
         };
         if let Err(err) = preferences.save(path) {
             self.warnings
@@ -835,6 +838,16 @@ impl eframe::App for RengraveApp {
                             self.reload_input_preview();
                         }
                     });
+                    if input_preview_accepts_sample(path_from_text(&self.input_path).as_deref()) {
+                        let sample_action = text_row(ui, "Sample", &mut self.preview_sample_text);
+                        if sample_action.value_changed {
+                            self.save_preferences();
+                        }
+                        if ui.button("Use engraving text").clicked() {
+                            self.preview_sample_text.clear();
+                            self.save_preferences();
+                        }
+                    }
                     self.ensure_input_preview();
                     draw_input_preview(ui, &mut self.input_preview);
                     ui.separator();
@@ -1526,7 +1539,8 @@ impl RengraveApp {
 
     fn ensure_input_preview(&mut self) {
         let path = path_from_text(&self.input_path);
-        let sample_text = input_preview_sample_for_path(path.as_deref(), &self.text);
+        let sample_text =
+            input_preview_sample_for_path(path.as_deref(), &self.text, &self.preview_sample_text);
         if self.input_preview.path != path || self.input_preview.sample_text != sample_text {
             self.input_preview = InputPreview::load(path, sample_text);
         }
@@ -1534,7 +1548,8 @@ impl RengraveApp {
 
     fn reload_input_preview(&mut self) {
         let path = path_from_text(&self.input_path);
-        let sample_text = input_preview_sample_for_path(path.as_deref(), &self.text);
+        let sample_text =
+            input_preview_sample_for_path(path.as_deref(), &self.text, &self.preview_sample_text);
         self.input_preview = InputPreview::load(path, sample_text);
         self.status = "Input preview refreshed".to_owned();
     }
@@ -3078,14 +3093,18 @@ fn number_row(ui: &mut egui::Ui, label: &str, value: &mut f64, speed: f64) {
     });
 }
 
-fn text_row(ui: &mut egui::Ui, label: &str, value: &mut String) {
+fn text_row(ui: &mut egui::Ui, label: &str, value: &mut String) -> PathRowAction {
+    let mut action = PathRowAction::default();
     ui.horizontal(|ui| {
         ui.add_sized([124.0, 20.0], egui::Label::new(label));
-        ui.add_sized(
-            [ui.available_width().max(80.0), 22.0],
-            egui::TextEdit::singleline(value),
-        );
+        action.value_changed = ui
+            .add_sized(
+                [ui.available_width().max(80.0), 22.0],
+                egui::TextEdit::singleline(value),
+            )
+            .changed();
     });
+    action
 }
 
 fn clean_path_checkbox(ui: &mut egui::Ui, label: &str, clean_paths: &mut String, index: usize) {
@@ -3399,13 +3418,24 @@ fn format_bytes(bytes: u64) -> String {
     }
 }
 
-fn input_preview_sample_for_path(path: Option<&Path>, text: &str) -> Option<String> {
+fn input_preview_accepts_sample(path: Option<&Path>) -> bool {
+    path.and_then(InputCatalogKind::from_path)
+        .is_some_and(|kind| matches!(kind, InputCatalogKind::CxfFont | InputCatalogKind::TtfFont))
+}
+
+fn input_preview_sample_for_path(
+    path: Option<&Path>,
+    text: &str,
+    preview_sample_text: &str,
+) -> Option<String> {
     let path = path?;
-    matches!(
-        InputCatalogKind::from_path(path),
-        Some(InputCatalogKind::CxfFont | InputCatalogKind::TtfFont)
-    )
-    .then(|| preview_text_sample(text))
+    input_preview_accepts_sample(Some(path)).then(|| {
+        if preview_sample_text.trim().is_empty() {
+            preview_text_sample(text)
+        } else {
+            preview_text_sample(preview_sample_text)
+        }
+    })
 }
 
 fn preview_text_sample(text: &str) -> String {
@@ -3877,6 +3907,7 @@ struct UiPreferences {
     svg_path: String,
     dxf_path: String,
     show_grid: bool,
+    preview_sample_text: String,
 }
 
 impl Default for UiPreferences {
@@ -3889,6 +3920,7 @@ impl Default for UiPreferences {
             svg_path: String::new(),
             dxf_path: String::new(),
             show_grid: true,
+            preview_sample_text: String::new(),
         }
     }
 }
@@ -3928,6 +3960,7 @@ impl UiPreferences {
                 "svg_path" => preferences.svg_path = value,
                 "dxf_path" => preferences.dxf_path = value,
                 "show_grid" => preferences.show_grid = value != "0" && value != "false",
+                "preview_sample_text" => preferences.preview_sample_text = value,
                 _ => {}
             }
         }
@@ -3943,6 +3976,7 @@ impl UiPreferences {
             ("svg_path", self.svg_path.as_str()),
             ("dxf_path", self.dxf_path.as_str()),
             ("show_grid", if self.show_grid { "1" } else { "0" }),
+            ("preview_sample_text", self.preview_sample_text.as_str()),
         ]
         .into_iter()
         .map(|(key, value)| format!("{key}={}", escape_pref_value(value)))
@@ -5678,6 +5712,30 @@ mod tests {
     }
 
     #[test]
+    fn input_preview_sample_override_applies_only_to_fonts() {
+        assert_eq!(
+            input_preview_sample_for_path(Some(Path::new("/tmp/font.cxf")), "Generated", "Custom"),
+            Some("Custom".to_owned())
+        );
+        assert_eq!(
+            input_preview_sample_for_path(Some(Path::new("/tmp/font.ttf")), "Generated", "  "),
+            Some("Generated".to_owned())
+        );
+        assert_eq!(
+            input_preview_sample_for_path(
+                Some(Path::new("/tmp/artwork.dxf")),
+                "Generated",
+                "Custom"
+            ),
+            None
+        );
+        assert_eq!(
+            input_preview_sample_for_path(Some(Path::new("/tmp/image.png")), "Generated", "Custom"),
+            None
+        );
+    }
+
+    #[test]
     fn input_preview_reports_missing_font_sample_chars() {
         let dir = std::env::temp_dir().join(format!(
             "rengrave-ui-cxf-preview-missing-{}",
@@ -5919,6 +5977,7 @@ mod tests {
             svg_path: "/tmp/out.svg".to_owned(),
             dxf_path: "/tmp/out.dxf".to_owned(),
             show_grid: false,
+            preview_sample_text: "Sample=A".to_owned(),
         };
 
         let encoded = preferences.to_text();
@@ -5932,6 +5991,7 @@ mod tests {
         let preferences = UiPreferences::parse("input_path=/tmp/example.cxf\n");
 
         assert!(preferences.show_grid);
+        assert!(preferences.preview_sample_text.is_empty());
     }
 
     #[test]
