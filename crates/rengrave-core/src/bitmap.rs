@@ -9,6 +9,8 @@ use image::DynamicImage;
 
 use crate::settings::{LegacySettings, get_legacy_bool};
 
+const BITMAP_TRACE_THRESHOLD: u32 = 128;
+
 #[derive(Debug, thiserror::Error)]
 pub enum BitmapError {
     #[error("unable to decode bitmap `{path}`: {source}")]
@@ -27,6 +29,32 @@ pub enum BitmapError {
     PotraceFailed { stderr: String },
     #[error("bitmap vectorization canceled")]
     Canceled,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct BitmapTraceStats {
+    pub black_pixels: usize,
+    pub white_pixels: usize,
+}
+
+pub fn bitmap_trace_mask_and_stats(image: &DynamicImage) -> (image::RgbaImage, BitmapTraceStats) {
+    let rgba = image.to_rgba8();
+    let (width, height) = rgba.dimensions();
+    let mut mask = image::RgbaImage::new(width, height);
+    let mut stats = BitmapTraceStats::default();
+
+    for (x, y, pixel) in rgba.enumerate_pixels() {
+        let value = if bitmap_pixel_is_black(pixel.0) {
+            stats.black_pixels += 1;
+            0
+        } else {
+            stats.white_pixels += 1;
+            255
+        };
+        mask.put_pixel(x, y, image::Rgba([value, value, value, 255]));
+    }
+
+    (mask, stats)
 }
 
 pub fn vectorize_bitmap_to_dxf(
@@ -166,12 +194,7 @@ fn image_to_pbm_bytes_with_cancel(
         let mut bit = 0;
         for x in 0..width {
             let pixel = rgba.get_pixel(x, y).0;
-            let alpha = pixel[3] as u32;
-            let red = composite_over_white(pixel[0] as u32, alpha);
-            let green = composite_over_white(pixel[1] as u32, alpha);
-            let blue = composite_over_white(pixel[2] as u32, alpha);
-            let luma = (299 * red + 587 * green + 114 * blue) / 1000;
-            if luma < 128 {
+            if bitmap_pixel_is_black(pixel) {
                 byte |= 0x80 >> bit;
             }
             bit += 1;
@@ -187,6 +210,15 @@ fn image_to_pbm_bytes_with_cancel(
     }
 
     Ok(output)
+}
+
+fn bitmap_pixel_is_black(pixel: [u8; 4]) -> bool {
+    let alpha = pixel[3] as u32;
+    let red = composite_over_white(pixel[0] as u32, alpha);
+    let green = composite_over_white(pixel[1] as u32, alpha);
+    let blue = composite_over_white(pixel[2] as u32, alpha);
+    let luma = (299 * red + 587 * green + 114 * blue) / 1000;
+    luma < BITMAP_TRACE_THRESHOLD
 }
 
 fn check_canceled(cancel: &dyn Fn() -> bool) -> Result<(), BitmapError> {
@@ -265,6 +297,28 @@ mod tests {
     use super::*;
     use image::{DynamicImage, Rgba, RgbaImage};
     use std::cell::Cell;
+
+    #[test]
+    fn trace_mask_matches_pbm_threshold_and_counts_full_image() {
+        let mut image = RgbaImage::new(3, 1);
+        image.put_pixel(0, 0, Rgba([0, 0, 0, 255]));
+        image.put_pixel(1, 0, Rgba([255, 255, 255, 255]));
+        image.put_pixel(2, 0, Rgba([0, 0, 0, 0]));
+
+        let (mask, stats) = bitmap_trace_mask_and_stats(&DynamicImage::ImageRgba8(image));
+        let rgba = mask.into_raw();
+
+        assert_eq!(&rgba[0..4], &[0, 0, 0, 255]);
+        assert_eq!(&rgba[4..8], &[255, 255, 255, 255]);
+        assert_eq!(&rgba[8..12], &[255, 255, 255, 255]);
+        assert_eq!(
+            stats,
+            BitmapTraceStats {
+                black_pixels: 1,
+                white_pixels: 2
+            }
+        );
+    }
 
     #[test]
     fn bitmap_conversion_writes_packed_pbm_bits() {

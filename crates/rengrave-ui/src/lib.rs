@@ -15,6 +15,7 @@ use rengrave_core::batch::{
     BatchOutput, BatchProgress, BatchRequest, SecondaryGcode,
     prepare_batch_output_with_cancel_and_progress,
 };
+use rengrave_core::bitmap::{BitmapTraceStats, bitmap_trace_mask_and_stats};
 use rengrave_core::dxf::read_dxf_font;
 use rengrave_core::external::{PotraceStatus, detect_potrace, requires_potrace};
 use rengrave_core::font::{Font, Stroke, read_cxf, read_ttf};
@@ -2714,12 +2715,6 @@ impl InputPreview {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-struct BitmapTraceStats {
-    black_pixels: u64,
-    white_pixels: u64,
-}
-
 #[derive(Debug, Clone, PartialEq)]
 enum InputPreviewData {
     Empty,
@@ -3639,25 +3634,8 @@ fn load_bitmap_preview(path: &Path) -> InputPreviewData {
 fn bitmap_trace_mask_thumbnail_and_stats(
     image: &image::DynamicImage,
 ) -> (image::RgbaImage, BitmapTraceStats) {
-    let rgba = image.to_rgba8();
-    let (width, height) = rgba.dimensions();
-    let mut mask = image::RgbaImage::new(width, height);
-    let mut stats = BitmapTraceStats::default();
-    for (x, y, pixel) in rgba.enumerate_pixels() {
-        let pixel = pixel.0;
-        let alpha = pixel[3] as u32;
-        let red = composite_over_white(pixel[0] as u32, alpha);
-        let green = composite_over_white(pixel[1] as u32, alpha);
-        let blue = composite_over_white(pixel[2] as u32, alpha);
-        let luma = (299 * red + 587 * green + 114 * blue) / 1000;
-        let value = if luma < 128 { 0 } else { 255 };
-        if value == 0 {
-            stats.black_pixels += 1;
-        } else {
-            stats.white_pixels += 1;
-        }
-        mask.put_pixel(x, y, image::Rgba([value, value, value, 255]));
-    }
+    let (mask, stats) = bitmap_trace_mask_and_stats(image);
+    let (width, height) = mask.dimensions();
 
     if width <= INPUT_PREVIEW_THUMBNAIL_WIDTH && height <= INPUT_PREVIEW_THUMBNAIL_HEIGHT {
         return (mask, stats);
@@ -3677,10 +3655,6 @@ fn bitmap_trace_mask_thumbnail_and_stats(
         ),
         stats,
     )
-}
-
-fn composite_over_white(channel: u32, alpha: u32) -> u32 {
-    (channel * alpha + 255 * (255 - alpha)) / 255
 }
 
 fn bitmap_trace_stats_readout(stats: BitmapTraceStats) -> String {
