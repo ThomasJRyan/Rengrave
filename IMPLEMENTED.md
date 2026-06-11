@@ -4,6 +4,8 @@ This document records what has actually been implemented in the Rust port and wh
 
 ## Latest Checkpoint
 
+- The golden/regression harness now includes end-to-end Rust batch coverage for multiline text, text-on-circle with Add Circle SVG/G-code output, transform/settings comment round trips, and DXF image input with SVG/DXF export payloads.
+- A simple DXF fixture was added under `crates/rengrave-core/tests/fixtures/inputs/` so DXF import is represented in the integration fixture set instead of only lower-level unit tests.
 - Cleanup companion G-code generation is now an explicit batch option, so the UI can request secondary cleanup files without pretending it is a CLI file-write operation.
 - The UI stores secondary cleanup outputs from the core calculation, shows how many cleanup files are available, and can export them next to the selected primary G-code path using F-Engrave-style suffixes such as `_clean`.
 - The bottom output area now has a Cleanup tab that shows generated companion G-code grouped by suffix before export.
@@ -121,7 +123,7 @@ The UI is now an MVP rather than only a shell, but it still lacks several expect
 ## Tests And Validation In Place
 
 - Core tests currently cover settings, CXF/TTF parsing, DXF entities, bitmap conversion, layout transforms, Add Box/Circle, G-code, SVG/DXF export, cleanup, v-carve options, batch generation, cancellation stage boundaries, CXF/TTF/DXF parser cancellation, V-carve sampling cancellation, cleanup scanline cancellation, bitmap conversion/vectorization cancellation, and settings-only fallback output.
-- A crate-level golden-output harness now exists under `crates/rengrave-core/tests/golden.rs` with a minimal CXF fixture, checked G-code/SVG regression outputs, and numeric-tolerant G-code comparison helpers. These first expected files pin current R-Engrave output; they are not yet F-Engrave-generated parity fixtures.
+- A crate-level golden-output harness now exists under `crates/rengrave-core/tests/golden.rs` with minimal CXF and DXF fixtures, checked G-code/SVG regression outputs, numeric-tolerant G-code comparison helpers, and end-to-end Rust batch cases for multiline text, text-on-circle Add Circle output, transform/settings round trips, and DXF SVG/DXF export generation. These tests pin current R-Engrave output; they are not yet F-Engrave-generated parity fixtures.
 - F-Engrave fixture generation was rechecked on 2026-06-10 with `python f-engrave_source/f-engrave.py -b -f crates/rengrave-core/tests/fixtures/inputs/simple.cxf -t AB`; it still fails before batch mode because `pyclipper` is missing.
 - UI tests cover default and secondary output paths, default-directory export path reset helpers, export-all availability, cleanup companion preview formatting, active-tab clipboard payload selection, demo-font first-run generation, core progress status labels, toolbar job-summary formatting, V-carve multipass state formatting, cleanup path checkbox serialization, default control mapping, view-layer settings serialization, native save-dialog filename helpers, settings Save As follow-up policy, browse-selection follow-up policy, settings save serialization, path-field parsing, loaded-document input-path display policy, explicit settings launch behavior, in-app browser directory behavior, input catalog scanning/filtering, input preview loading, vector input preview readouts, font missing-character preview warnings, bitmap trace-mask preview thresholding and coverage stats, font text-sample and custom-sample selection, preference persistence, worker stale-result detection, output stale-state detection, stale-reason summaries, recalculation availability, control-to-legacy override emission, bitmap/Potrace control mapping, advanced setting mapping, preview fitting, grid spacing/persistence, 1280x800/1920x1080 layout smoke checks, generated extents and path-length formatting, cursor zooming, screen-to-model coordinate conversion, output preview truncation, text-file write errors, cut/rapid preview parsing, and center/radius arc preview parsing.
 - Recent validation has been run with:
@@ -149,6 +151,6 @@ The UI is now an MVP rather than only a shell, but it still lacks several expect
 
 1. Generate actual F-Engrave reference fixtures once `pyclipper` is available, then wire them into the existing tolerance-ready golden harness.
 2. Continue enriching font/image preview controls and add more complete F-Engrave-style setting panels.
-3. Expand parity tests for default text, multiline text, text-on-circle, flip/mirror/origin/justify, DXF imports, bitmap imports, Add Box/Circle, arc-fit modes, and settings round trips.
+3. Continue expanding parity tests for bitmap imports, Add Box edge cases, arc-fit modes, TTF conversion, cleanup, and V-carve/inlay outputs; multiline text, text-on-circle, transform/settings round trips, and basic DXF import now have integration coverage.
 4. Audit V-carve and cleanup output against F-Engrave fixtures before adding more UI around those features.
 5. Replace the deterministic UI smoke checks with screenshot-based native UI checks if/when a reliable headless renderer is added.

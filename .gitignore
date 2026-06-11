@@ -3,5 +3,7 @@
 *.tap
 *.dxf
 *.svg
+!crates/rengrave-core/tests/fixtures/**/*.dxf
+!crates/rengrave-core/tests/fixtures/**/*.svg
 
 f-engrave_source/
