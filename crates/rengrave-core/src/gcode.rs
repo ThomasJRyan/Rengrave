@@ -213,9 +213,19 @@ pub fn write_vcarve_gcode(
 
     for rough_cap in vcarve_options.rough_pass_caps(max_depth) {
         let mut current_loop = None;
+        let mut loop_moves = Vec::new();
+        let mut emit_state = VCarveEmitState::new(gcode_options.safe_z, dp);
         for point in points {
             let z = vcarve_options.pass_depth_for_radius(point.radius, rough_cap);
             if current_loop != Some(point.loop_id) {
+                flush_vcarve_moves(
+                    &mut lines,
+                    &mut emit_state,
+                    &loop_moves,
+                    gcode_options.accuracy,
+                    dp,
+                );
+                loop_moves.clear();
                 lines.push(format!("G0 Z{safe_value}"));
                 lines.push(format!(
                     "G0 X{} Y{}",
@@ -228,16 +238,17 @@ pub fn write_vcarve_gcode(
                     lines.push(format!("G1 Z{} F{plunge}", format_number(z, dp)));
                     lines.push(format!("F{feed}"));
                 }
-            } else {
-                lines.push(format!(
-                    "G1 X{} Y{} Z{}",
-                    format_number(point.position.x, dp),
-                    format_number(point.position.y, dp),
-                    format_number(z, dp)
-                ));
             }
+            loop_moves.push(VCarveMove::new(point.position.x, point.position.y, z));
             current_loop = Some(point.loop_id);
         }
+        flush_vcarve_moves(
+            &mut lines,
+            &mut emit_state,
+            &loop_moves,
+            gcode_options.accuracy,
+            dp,
+        );
     }
 
     lines.push(format!("G0 Z{safe_value}"));
@@ -862,6 +873,166 @@ fn sign(value: f64) -> i32 {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct VCarveMove {
+    x: f64,
+    y: f64,
+    z: f64,
+}
+
+impl VCarveMove {
+    fn new(x: f64, y: f64, z: f64) -> Self {
+        Self { x, y, z }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct VCarveEmitState {
+    last_x: Option<String>,
+    last_y: Option<String>,
+    last_z: Option<String>,
+}
+
+impl VCarveEmitState {
+    fn new(safe_z: f64, dp: usize) -> Self {
+        Self {
+            last_x: None,
+            last_y: None,
+            last_z: Some(format_number(safe_z, dp)),
+        }
+    }
+}
+
+fn flush_vcarve_moves(
+    lines: &mut Vec<String>,
+    state: &mut VCarveEmitState,
+    moves: &[VCarveMove],
+    tolerance: f64,
+    dp: usize,
+) {
+    if moves.is_empty() {
+        return;
+    }
+
+    for movement in douglas_vcarve(moves.to_vec(), tolerance, true) {
+        push_vcarve_move(lines, state, movement, dp);
+    }
+}
+
+fn push_vcarve_move(
+    lines: &mut Vec<String>,
+    state: &mut VCarveEmitState,
+    movement: VCarveMove,
+    dp: usize,
+) {
+    let mut line = String::from("G1");
+    let mut changed = false;
+    let x_value = format_number(movement.x, dp);
+    let y_value = format_number(movement.y, dp);
+    let z_value = format_number(movement.z, dp);
+
+    if state.last_x.as_deref() != Some(x_value.as_str()) {
+        line.push_str(&format!(" X{x_value}"));
+        state.last_x = Some(x_value);
+        changed = true;
+    }
+    if state.last_y.as_deref() != Some(y_value.as_str()) {
+        line.push_str(&format!(" Y{y_value}"));
+        state.last_y = Some(y_value);
+        changed = true;
+    }
+    if state.last_z.as_deref() != Some(z_value.as_str()) {
+        line.push_str(&format!(" Z{z_value}"));
+        state.last_z = Some(z_value);
+        changed = true;
+    }
+
+    if changed {
+        lines.push(line);
+    }
+}
+
+fn douglas_vcarve(mut moves: Vec<VCarveMove>, tolerance: f64, first: bool) -> Vec<VCarveMove> {
+    if moves.len() == 1 {
+        return vec![moves[0]];
+    }
+
+    let start = moves[0];
+    let mut end = *moves.last().unwrap();
+    let mut closed_point = None;
+    while same_vcarve_move(start, end) {
+        closed_point = moves.pop();
+        let Some(last) = moves.last().copied() else {
+            return Vec::new();
+        };
+        end = last;
+    }
+
+    let mut worst_dist = 0.0;
+    let mut worst_index = 0usize;
+    for (index, movement) in moves.iter().enumerate() {
+        if index == 0 || index == moves.len() - 1 {
+            continue;
+        }
+        let dist = dist_vcarve_segment(start, end, *movement);
+        if dist > worst_dist {
+            worst_dist = dist;
+            worst_index = index;
+        }
+    }
+
+    let mut output = Vec::new();
+    if worst_dist > tolerance {
+        if first {
+            output.push(start);
+        }
+        output.extend(douglas_vcarve(
+            moves[..=worst_index].to_vec(),
+            tolerance,
+            false,
+        ));
+        output.push(moves[worst_index]);
+        output.extend(douglas_vcarve(
+            moves[worst_index..].to_vec(),
+            tolerance,
+            false,
+        ));
+        if first {
+            output.push(end);
+        }
+    } else if first {
+        output.push(start);
+        output.push(end);
+    }
+
+    if closed_point.is_some() {
+        output.push(start);
+    }
+    output
+}
+
+fn same_vcarve_move(a: VCarveMove, b: VCarveMove) -> bool {
+    (a.x - b.x).abs() < ZERO && (a.y - b.y).abs() < ZERO && (a.z - b.z).abs() < ZERO
+}
+
+fn dist_vcarve_segment(start: VCarveMove, end: VCarveMove, point: VCarveMove) -> f64 {
+    let dx = end.x - start.x;
+    let dy = end.y - start.y;
+    let dz = end.z - start.z;
+    let d2 = dx * dx + dy * dy + dz * dz;
+    if d2 == 0.0 {
+        return 0.0;
+    }
+
+    let mut t =
+        (dx * (point.x - start.x) + dy * (point.y - start.y) + dz * (point.z - start.z)) / d2;
+    t = t.clamp(0.0, 1.0);
+    let ex = point.x - start.x - t * dx;
+    let ey = point.y - start.y - t * dy;
+    let ez = point.z - start.z - t * dz;
+    (ex * ex + ey * ey + ez * ez).sqrt()
+}
+
 fn format_number(value: f64, digits: usize) -> String {
     format!("{value:.digits$}")
 }
@@ -1044,7 +1215,7 @@ mod tests {
         );
 
         assert!(lines.contains(&"G1 Z-0.0000".to_owned()));
-        assert!(lines.contains(&"G1 X1.0000 Y0.0000 Z-0.8660".to_owned()));
+        assert!(lines.contains(&"G1 X1.0000 Z-0.8660".to_owned()));
     }
 
     #[test]
@@ -1082,9 +1253,9 @@ mod tests {
             &vcarve,
         );
 
-        assert!(lines.contains(&"G1 X1.0000 Y0.0000 Z-0.4000".to_owned()));
-        assert!(lines.contains(&"G1 X1.0000 Y0.0000 Z-0.7660".to_owned()));
-        assert!(lines.contains(&"G1 X1.0000 Y0.0000 Z-0.8660".to_owned()));
+        assert!(lines.contains(&"G1 X1.0000 Z-0.4000".to_owned()));
+        assert!(lines.contains(&"G1 X1.0000 Z-0.7660".to_owned()));
+        assert!(lines.contains(&"G1 X1.0000 Z-0.8660".to_owned()));
         assert_eq!(
             lines
                 .iter()
@@ -1092,6 +1263,47 @@ mod tests {
                 .count(),
             3
         );
+    }
+
+    #[test]
+    fn vcarve_writer_simplifies_collinear_xyz_samples() {
+        let options = GcodeOptions {
+            safe_z: 0.25,
+            depth_z: -0.005,
+            feed: 5.0,
+            plunge: 0.0,
+            accuracy: 0.001,
+            units: Units::Inch,
+            preamble: "G17 G64 P0.001 M3 S3000".to_owned(),
+            postamble: "M5|M2".to_owned(),
+            variables_disabled: true,
+            arc_fit: ArcFit::None,
+        };
+        let vcarve = VCarveOptions::from_legacy(&crate::settings::default_legacy_settings());
+        let lines = write_vcarve_gcode(
+            &[
+                VCarvePoint {
+                    position: Point::new(0.0, 0.0),
+                    radius: 0.0,
+                    loop_id: 1,
+                },
+                VCarvePoint {
+                    position: Point::new(0.5, 0.0),
+                    radius: 0.25,
+                    loop_id: 1,
+                },
+                VCarvePoint {
+                    position: Point::new(1.0, 0.0),
+                    radius: 0.5,
+                    loop_id: 1,
+                },
+            ],
+            &options,
+            &vcarve,
+        );
+
+        assert!(!lines.iter().any(|line| line.starts_with("G1 X0.5000")));
+        assert!(lines.contains(&"G1 X1.0000 Z-0.8660".to_owned()));
     }
 
     #[test]

@@ -16,6 +16,10 @@ pub struct VCarveOptions {
     pub inlay_depth: f64,
     pub rough_stock: f64,
     pub max_cut: f64,
+    pub drive_corner_angle: f64,
+    pub step_corner_angle: f64,
+    pub check_mode: VCarveCheckMode,
+    pub v_flop: bool,
 }
 
 impl VCarveOptions {
@@ -38,6 +42,10 @@ impl VCarveOptions {
             inlay_depth: get_f64(settings, "v_depth_lim", 0.0),
             rough_stock: get_f64(settings, "v_rough_stk", 0.0),
             max_cut: get_f64(settings, "v_max_cut", -1.0),
+            drive_corner_angle: get_f64(settings, "v_drv_crner", 135.0),
+            step_corner_angle: get_f64(settings, "v_stp_crner", 200.0),
+            check_mode: VCarveCheckMode::parse(settings.get_last("v_check_all").unwrap_or("all")),
+            v_flop: get_legacy_bool(settings, "v_flop", false),
         }
     }
 
@@ -141,6 +149,22 @@ impl BitShape {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VCarveCheckMode {
+    All,
+    Character,
+}
+
+impl VCarveCheckMode {
+    fn parse(value: &str) -> Self {
+        if value == "chr" {
+            Self::Character
+        } else {
+            Self::All
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct VCarvePoint {
     pub position: Point,
@@ -166,69 +190,583 @@ pub fn generate_vcarve_points_with_cancel(
     accuracy: f64,
     cancel: &dyn Fn() -> bool,
 ) -> Result<Vec<VCarvePoint>, VCarveCanceled> {
+    let Some(grid) = PartitionGrid::new(segments, options.max_radius(), options.step_len) else {
+        return Ok(Vec::new());
+    };
+
     let mut output = Vec::new();
-    for (loop_index, path) in collect_paths(segments, accuracy).into_iter().enumerate() {
-        check_canceled(cancel)?;
-        if path.len() < 2 {
-            continue;
-        }
-        append_path_vcarve_points(&path, loop_index + 1, options, &mut output, cancel)?;
-    }
-    Ok(output)
-}
-
-fn append_path_vcarve_points(
-    path: &[Point],
-    loop_id: usize,
-    options: &VCarveOptions,
-    output: &mut Vec<VCarvePoint>,
-    cancel: &dyn Fn() -> bool,
-) -> Result<(), VCarveCanceled> {
-    let closed = point_distance(path[0], *path.last().unwrap()) <= ZERO;
-    let area = signed_area(path);
+    let drive_corner_angle = if options.inlay {
+        360.0 - options.step_corner_angle
+    } else {
+        options.drive_corner_angle
+    };
     let max_radius = options.max_radius();
+    let mut delta_angle = (options.step_len / max_radius.max(ZERO)).to_degrees();
+    if delta_angle < 2.0 {
+        delta_angle = 2.0;
+    }
+    let not_ball_carve = options.bit_shape != BitShape::Ball;
+    let bit_angle_enabled = options.bit_angle_degrees != 0.0;
 
-    for (idx, pair) in path.windows(2).enumerate() {
+    let mut xa = 9999.0;
+    let mut ya = 9999.0;
+    let mut xb = 9999.0;
+    let mut yb = 9999.0;
+    let mut x0 = 9999.0;
+    let mut y0 = 9999.0;
+    let mut previous_seg_sin = 2.0;
+    let mut previous_seg_cos = 2.0;
+    let mut previous_char_num = None;
+    let mut theta = 9999.0;
+    let mut loop_id = 0usize;
+
+    for line_index in 0..segments.len() {
         check_canceled(cancel)?;
-        let start = pair[0];
-        let end = pair[1];
+        let segment = traversal_segment(segments, line_index, options.v_flop);
+        let start = segment.start;
+        let end = segment.end;
         let dx = end.x - start.x;
         let dy = end.y - start.y;
         let length = (dx * dx + dy * dy).sqrt();
-        if length <= ZERO {
+        if length < ZERO {
             continue;
         }
 
-        let steps = ((length / options.step_len).floor() as usize).max(2);
-        let tangent = Point::new(dx / length, dy / length);
-        let inward = inward_normal(tangent, area, closed);
+        let char_num = segment.loop_id;
+        let mut new_loop = false;
+        let seg_sin = dy / length;
+        let seg_cos = -dx / length;
+        let phi_degrees = legacy_angle(seg_sin, seg_cos);
 
-        for step in 0..steps {
-            check_canceled(cancel)?;
-            let t = step as f64 / steps as f64;
-            let outline = Point::new(start.x + dx * t, start.y + dy * t);
-            let radius = if step == 0 {
-                0.0
-            } else {
-                max_clear_radius(path, idx, outline, inward, max_radius)
-            };
+        if (start.x - x0).abs() > ZERO
+            || (start.y - y0).abs() > ZERO
+            || previous_char_num != Some(char_num)
+        {
+            new_loop = true;
+            loop_id += 1;
+            xa = start.x;
+            ya = start.y;
+            xb = end.x;
+            yb = end.y;
+            theta = 9999.0;
+            previous_seg_sin = 2.0;
+            previous_seg_cos = 2.0;
+        }
+
+        let delta = corner_delta(dx, dy, previous_seg_sin, previous_seg_cos);
+        if delta < drive_corner_angle && bit_angle_enabled && not_ball_carve {
             output.push(VCarvePoint {
-                position: Point::new(outline.x + inward.x * radius, outline.y + inward.y * radius),
-                radius,
+                position: start,
+                radius: 0.0,
                 loop_id,
             });
         }
+
+        if delta > options.step_corner_angle {
+            let phi_steps = (((delta - 180.0) / delta_angle).floor() as usize).max(2);
+            let step_phi = (delta - 180.0) / phi_steps as f64;
+            for step in 1..phi_steps {
+                check_canceled(cancel)?;
+                let sub_phi = (-(step as f64) * step_phi + theta).to_radians();
+                let sub_seg_cos = sub_phi.cos();
+                let sub_seg_sin = sub_phi.sin();
+                let radius = grid.find_max_circle(
+                    start,
+                    max_radius,
+                    char_num,
+                    sub_seg_sin,
+                    sub_seg_cos,
+                    true,
+                    options.check_mode,
+                );
+                record_vcarve_point(&mut output, start, sub_phi, radius, loop_id);
+            }
+        }
+
+        theta = phi_degrees;
+        x0 = end.x;
+        y0 = end.y;
+        previous_seg_sin = seg_sin;
+        previous_seg_cos = seg_cos;
+        previous_char_num = Some(char_num);
+
+        let steps = ((length / options.step_len).floor() as usize).max(2);
+        let step_dx = dx / steps as f64;
+        let step_dy = dy / steps as f64;
+        let phi_radians = legacy_angle(seg_sin, seg_cos).to_radians();
+        let mut saved_first_cut = None;
+        let mut step = if new_loop && bit_angle_enabled && not_ball_carve {
+            -1isize
+        } else {
+            0isize
+        };
+        while step < steps as isize - 1 {
+            check_canceled(cancel)?;
+            step += 1;
+            let outline = Point::new(
+                start.x + step_dx * step as f64,
+                start.y + step_dy * step as f64,
+            );
+            let mut radius = grid.find_max_circle(
+                outline,
+                max_radius,
+                char_num,
+                seg_sin,
+                seg_cos,
+                false,
+                options.check_mode,
+            );
+            if step == 0 && not_ball_carve {
+                radius = 0.0;
+            }
+            record_vcarve_point(&mut output, outline, phi_radians, radius, loop_id);
+
+            if new_loop && step == 1 {
+                saved_first_cut = Some((outline, phi_radians, radius));
+            }
+        }
+
+        if (end.x - xa).abs() < ZERO && (end.y - ya).abs() < ZERO {
+            let close_dx = xb - xa;
+            let close_dy = yb - ya;
+            let close_delta = corner_delta(close_dx, close_dy, previous_seg_sin, previous_seg_cos);
+            let first_point = saved_first_cut.unwrap_or((start, phi_radians, 0.0));
+
+            if close_delta < drive_corner_angle {
+                output.push(VCarvePoint {
+                    position: Point::new(xa, ya),
+                    radius: 0.0,
+                    loop_id,
+                });
+            } else if close_delta > options.step_corner_angle {
+                let phi_steps = (((close_delta - 180.0) / delta_angle).floor() as usize).max(2);
+                let step_phi = (close_delta - 180.0) / phi_steps as f64;
+                for step in 1..phi_steps {
+                    check_canceled(cancel)?;
+                    let sub_phi = (-(step as f64) * step_phi + theta).to_radians();
+                    let sub_seg_cos = sub_phi.cos();
+                    let sub_seg_sin = sub_phi.sin();
+                    let radius = grid.find_max_circle(
+                        Point::new(xa, ya),
+                        max_radius,
+                        char_num,
+                        sub_seg_sin,
+                        sub_seg_cos,
+                        true,
+                        options.check_mode,
+                    );
+                    record_vcarve_point(&mut output, Point::new(xa, ya), sub_phi, radius, loop_id);
+                }
+                record_vcarve_point(
+                    &mut output,
+                    first_point.0,
+                    first_point.1,
+                    first_point.2,
+                    loop_id,
+                );
+            } else {
+                record_vcarve_point(
+                    &mut output,
+                    first_point.0,
+                    first_point.1,
+                    first_point.2,
+                    loop_id,
+                );
+            }
+        }
     }
 
-    if closed {
-        check_canceled(cancel)?;
-        output.push(VCarvePoint {
-            position: path[0],
-            radius: 0.0,
-            loop_id,
-        });
+    Ok(reorder_loops(output, accuracy))
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PartitionLine {
+    start: Point,
+    end: Point,
+    char_num: usize,
+    center: Point,
+    reach: f64,
+}
+
+#[derive(Debug, Clone)]
+struct PartitionGrid {
+    min: Point,
+    x_len: f64,
+    y_len: f64,
+    x_count: usize,
+    y_count: usize,
+    cells: Vec<Vec<PartitionLine>>,
+}
+
+impl PartitionGrid {
+    fn new(segments: &[EngraveSegment], max_radius: f64, step_len: f64) -> Option<Self> {
+        if segments.is_empty() {
+            return None;
+        }
+
+        let mut min = Point::new(f64::INFINITY, f64::INFINITY);
+        let mut max = Point::new(f64::NEG_INFINITY, f64::NEG_INFINITY);
+        for segment in segments {
+            for point in [segment.start, segment.end] {
+                min.x = min.x.min(point.x);
+                min.y = min.y.min(point.y);
+                max.x = max.x.max(point.x);
+                max.y = max.y.max(point.y);
+            }
+        }
+        if !min.x.is_finite() || !min.y.is_finite() || !max.x.is_finite() || !max.y.is_finite() {
+            return None;
+        }
+
+        let width = max.x - min.x;
+        let height = max.y - min.y;
+        let partition_size = (2.0 * max_radius + step_len) * 1.1;
+        let x_count_minus_1 = ((width / partition_size) as usize).max(1);
+        let y_count_minus_1 = ((height / partition_size) as usize).max(1);
+        let mut x_len = width / x_count_minus_1 as f64;
+        let mut y_len = height / y_count_minus_1 as f64;
+        if x_len < ZERO {
+            x_len = 1.0;
+        }
+        if y_len < ZERO {
+            y_len = 1.0;
+        }
+        let x_count = x_count_minus_1 + 1;
+        let y_count = y_count_minus_1 + 1;
+        let mut grid = Self {
+            min,
+            x_len,
+            y_len,
+            x_count,
+            y_count,
+            cells: vec![Vec::new(); x_count * y_count],
+        };
+
+        for segment in segments {
+            let dx = segment.end.x - segment.start.x;
+            let dy = segment.end.y - segment.start.y;
+            let length = (dx * dx + dy * dy).sqrt();
+            let line = PartitionLine {
+                start: segment.start,
+                end: segment.end,
+                char_num: segment.loop_id,
+                center: Point::new(
+                    (segment.start.x + segment.end.x) / 2.0,
+                    (segment.start.y + segment.end.y) / 2.0,
+                ),
+                reach: length / 2.0 + max_radius,
+            };
+
+            for index in grid.active_indices(segment.start, segment.end) {
+                grid.cells[index].push(line);
+            }
+        }
+
+        Some(grid)
     }
-    Ok(())
+
+    fn find_max_circle(
+        &self,
+        point: Point,
+        mut radius: f64,
+        char_num: usize,
+        seg_sin: f64,
+        seg_cos: f64,
+        corner: bool,
+        check_mode: VCarveCheckMode,
+    ) -> f64 {
+        let x_index = self.x_index(point.x);
+        let y_index = self.y_index(point.y);
+        let candidate_reach = radius.abs();
+        let nearby: Vec<_> = self.cells[self.cell_index(x_index, y_index)]
+            .iter()
+            .copied()
+            .filter(|line| {
+                point_distance(line.center, point) < (candidate_reach + line.reach).abs()
+            })
+            .collect();
+
+        for line in nearby {
+            let x_max = line.start.x.max(line.end.x) + radius * 2.0;
+            let x_min = line.start.x.min(line.end.x) - radius * 2.0;
+            let y_max = line.start.y.max(line.end.y) + radius * 2.0;
+            let y_min = line.start.y.min(line.end.y) - radius * 2.0;
+            if point.x < x_min || point.x > x_max || point.y < y_min || point.y > y_max {
+                continue;
+            }
+            if check_mode == VCarveCheckMode::Character && char_num != line.char_num {
+                continue;
+            }
+            if corner
+                && ((point.x - line.start.x).abs() <= ZERO
+                    && (point.y - line.start.y).abs() <= ZERO
+                    || (point.x - line.end.x).abs() <= ZERO && (point.y - line.end.y).abs() <= ZERO)
+            {
+                continue;
+            }
+
+            let xc1 = (line.start.x - point.x) * seg_cos - (line.start.y - point.y) * seg_sin;
+            let yc1 = (line.start.x - point.x) * seg_sin + (line.start.y - point.y) * seg_cos;
+            let xc2 = (line.end.x - point.x) * seg_cos - (line.end.y - point.y) * seg_sin;
+            let yc2 = (line.end.x - point.x) * seg_sin + (line.end.y - point.y) * seg_cos;
+
+            if (xc2 - xc1).abs() < ZERO && (yc2 - yc1).abs() > ZERO {
+                let candidate = xc1.abs();
+                if yc1.max(yc2) >= candidate && yc1.min(yc2) <= candidate {
+                    radius = radius.min(candidate);
+                }
+            } else if (yc2 - yc1).abs() < ZERO
+                && (xc2 - xc1).abs() > ZERO
+                && xc1.max(xc2) >= 0.0
+                && xc1.min(xc2) <= 0.0
+                && yc1 > ZERO
+            {
+                radius = radius.min(yc1 / 2.0);
+            }
+
+            if (yc2 - yc1).abs() > ZERO && (xc2 - xc1).abs() > ZERO {
+                let m = (yc2 - yc1) / (xc2 - xc1);
+                if m.abs() > ZERO {
+                    let b = yc1 - m * xc1;
+                    let sq = m + 1.0 / m;
+                    let a = 1.0 + m * m - 2.0 * m * sq;
+                    let bb = -2.0 * b * sq;
+                    let c = -b * b;
+                    let discriminant = bb * bb - 4.0 * a * c;
+                    if discriminant >= 0.0 && a.abs() > ZERO {
+                        let root = discriminant.sqrt();
+                        for xq in [(-bb + root) / (2.0 * a), (-bb - root) / (2.0 * a)] {
+                            if xq >= xc1.min(xc2) && xq <= xc1.max(xc2) {
+                                let candidate = xq * sq + b;
+                                if candidate >= 0.0 {
+                                    radius = radius.min(candidate);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if yc1 > ZERO {
+                radius = radius.min((xc1 * xc1 + yc1 * yc1) / (2.0 * yc1));
+            }
+            if yc2 > ZERO {
+                radius = radius.min((xc2 * xc2 + yc2 * yc2) / (2.0 * yc2));
+            }
+
+            if yc1.abs() < ZERO && xc1.abs() < ZERO && yc2 > ZERO {
+                radius = 0.0;
+            }
+            if yc2.abs() < ZERO && xc2.abs() < ZERO && yc1 > ZERO {
+                radius = 0.0;
+            }
+        }
+
+        radius.max(0.0)
+    }
+
+    fn active_indices(&self, start: Point, end: Point) -> Vec<usize> {
+        let x1_g = start.x - self.min.x;
+        let y1_g = start.y - self.min.y;
+        let x2_g = end.x - self.min.x;
+        let y2_g = end.y - self.min.y;
+
+        let x1_i = self.local_x_index(x1_g);
+        let x2_i = self.local_x_index(x2_g);
+        let y1_i = self.local_y_index(y1_g);
+        let y2_i = self.local_y_index(y2_g);
+
+        let x_min = x1_i.min(x2_i);
+        let x_max = x1_i.max(x2_i);
+        let y_min = y1_i.min(y2_i);
+        let y_max = y1_i.max(y2_i);
+
+        let mut check_points = Vec::new();
+        if x_max > x_min && (x2_g - x1_g).abs() > ZERO {
+            if y_max > y_min && (y2_g - y1_g).abs() > ZERO {
+                check_points.push((x1_i, y1_i));
+                check_points.push((x2_i, y2_i));
+                let slope = (y2_g - y1_g) / (x2_g - x1_g);
+                let intercept = y1_g - slope * x1_g;
+                for x_index in x_min + 1..x_max {
+                    let x_value = x_index as f64 * self.x_len;
+                    let y_value = slope * x_value + intercept;
+                    check_points.push((x_index, self.local_y_index(y_value)));
+                }
+                for y_index in y_min + 1..y_max {
+                    let y_value = y_index as f64 * self.y_len;
+                    let x_value = (y_value - intercept) / slope;
+                    check_points.push((self.local_x_index(x_value), y_index));
+                }
+            } else {
+                for x_index in x_min..=x_max {
+                    check_points.push((x_index, y_min));
+                }
+            }
+        } else {
+            for y_index in y_min..=y_max {
+                check_points.push((x_min, y_index));
+            }
+        }
+
+        let mut indices = Vec::new();
+        for (x_index, y_index) in check_points {
+            let x_start = x_index.saturating_sub(1);
+            let x_end = (x_index + 2).min(self.x_count);
+            let y_start = y_index.saturating_sub(1);
+            let y_end = (y_index + 2).min(self.y_count);
+            for x in x_start..x_end {
+                for y in y_start..y_end {
+                    indices.push(self.cell_index(x, y));
+                }
+            }
+        }
+        indices.sort_unstable();
+        indices.dedup();
+        indices
+    }
+
+    fn x_index(&self, x: f64) -> usize {
+        self.local_x_index(x - self.min.x)
+    }
+
+    fn y_index(&self, y: f64) -> usize {
+        self.local_y_index(y - self.min.y)
+    }
+
+    fn local_x_index(&self, x: f64) -> usize {
+        trunc_index(x / self.x_len, self.x_count)
+    }
+
+    fn local_y_index(&self, y: f64) -> usize {
+        trunc_index(y / self.y_len, self.y_count)
+    }
+
+    fn cell_index(&self, x: usize, y: usize) -> usize {
+        x + y * self.x_count
+    }
+}
+
+fn traversal_segment(
+    segments: &[EngraveSegment],
+    line_index: usize,
+    v_flop: bool,
+) -> EngraveSegment {
+    if !v_flop {
+        segments[line_index]
+    } else {
+        let segment = segments[segments.len() - 1 - line_index];
+        EngraveSegment {
+            start: segment.end,
+            end: segment.start,
+            loop_id: segment.loop_id,
+        }
+    }
+}
+
+fn record_vcarve_point(
+    output: &mut Vec<VCarvePoint>,
+    outline: Point,
+    phi: f64,
+    radius: f64,
+    loop_id: usize,
+) {
+    let (offset_x, offset_y) = transform(0.0, radius, -phi);
+    output.push(VCarvePoint {
+        position: Point::new(outline.x + offset_x, outline.y + offset_y),
+        radius,
+        loop_id,
+    });
+}
+
+fn transform(x: f64, y: f64, angle: f64) -> (f64, f64) {
+    (
+        x * angle.cos() - y * angle.sin(),
+        x * angle.sin() + y * angle.cos(),
+    )
+}
+
+fn corner_delta(dx: f64, dy: f64, previous_seg_sin: f64, previous_seg_cos: f64) -> f64 {
+    if previous_seg_cos > 1.0 {
+        180.0
+    } else {
+        let x_tmp = dx * previous_seg_cos - dy * previous_seg_sin;
+        let y_tmp = dx * previous_seg_sin + dy * previous_seg_cos;
+        let length = (x_tmp * x_tmp + y_tmp * y_tmp).sqrt();
+        if length < ZERO {
+            180.0
+        } else {
+            legacy_angle(y_tmp / length, x_tmp / length)
+        }
+    }
+}
+
+fn legacy_angle(sin: f64, cos: f64) -> f64 {
+    let angle = cos.clamp(-1.0, 1.0).acos().to_degrees();
+    let mut angle = if sin >= 0.0 { angle } else { 360.0 - angle };
+    if angle < 0.001 && sin < 0.0 {
+        angle = 360.0;
+    }
+    if angle > 359.999 && sin >= 0.0 {
+        angle = 0.0;
+    }
+    angle
+}
+
+fn trunc_index(value: f64, count: usize) -> usize {
+    if !value.is_finite() || value <= 0.0 {
+        0
+    } else {
+        (value as usize).min(count.saturating_sub(1))
+    }
+}
+
+fn reorder_loops(points: Vec<VCarvePoint>, accuracy: f64) -> Vec<VCarvePoint> {
+    if points.len() < 2 {
+        return points;
+    }
+
+    let mut loops = Vec::new();
+    let mut start = 0usize;
+    for index in 1..points.len() {
+        if points[index].loop_id != points[index - 1].loop_id {
+            loops.push((start, index - 1));
+            start = index;
+        }
+    }
+    loops.push((start, points.len() - 1));
+    if loops.len() < 2 {
+        return points;
+    }
+
+    let mut ordered = Vec::with_capacity(loops.len());
+    ordered.push(loops.remove(0));
+    while !loops.is_empty() {
+        let (_, current_end) = *ordered.last().unwrap();
+        let current = points[current_end].position;
+        let mut nearest = 0usize;
+        let mut nearest_distance = point_distance_squared(current, points[loops[0].0].position);
+        for (index, (loop_start, _)) in loops.iter().enumerate().skip(1) {
+            let distance = point_distance_squared(current, points[*loop_start].position);
+            if distance + accuracy * accuracy < nearest_distance {
+                nearest_distance = distance;
+                nearest = index;
+            }
+        }
+        ordered.push(loops.remove(nearest));
+    }
+
+    let mut output = Vec::with_capacity(points.len());
+    for (start, end) in ordered {
+        output.extend(points[start..=end].iter().copied());
+    }
+    output
+}
+
+fn point_distance_squared(a: Point, b: Point) -> f64 {
+    let dx = a.x - b.x;
+    let dy = a.y - b.y;
+    dx * dx + dy * dy
 }
 
 fn check_canceled(cancel: &dyn Fn() -> bool) -> Result<(), VCarveCanceled> {
@@ -239,86 +777,10 @@ fn check_canceled(cancel: &dyn Fn() -> bool) -> Result<(), VCarveCanceled> {
     }
 }
 
-fn collect_paths(segments: &[EngraveSegment], accuracy: f64) -> Vec<Vec<Point>> {
-    let mut paths = Vec::new();
-    let mut last_end = None;
-    let mut current_loop = None;
-
-    for segment in segments {
-        let starts_new = current_loop != Some(segment.loop_id)
-            || last_end
-                .map(|last| point_distance(last, segment.start) > accuracy)
-                .unwrap_or(true);
-        if starts_new {
-            paths.push(vec![segment.start]);
-        }
-        paths.last_mut().unwrap().push(segment.end);
-        last_end = Some(segment.end);
-        current_loop = Some(segment.loop_id);
-    }
-
-    paths
-}
-
-fn inward_normal(tangent: Point, area: f64, closed: bool) -> Point {
-    if closed && area >= 0.0 {
-        Point::new(-tangent.y, tangent.x)
-    } else {
-        Point::new(tangent.y, -tangent.x)
-    }
-}
-
-fn max_clear_radius(
-    path: &[Point],
-    current_segment: usize,
-    outline: Point,
-    inward: Point,
-    max_radius: f64,
-) -> f64 {
-    let mut radius = max_radius;
-    for (idx, pair) in path.windows(2).enumerate() {
-        if idx == current_segment {
-            continue;
-        }
-        let nearest = nearest_point_on_segment(outline, pair[0], pair[1]);
-        let toward = Point::new(nearest.x - outline.x, nearest.y - outline.y);
-        if dot(toward, inward) <= ZERO {
-            continue;
-        }
-        radius = radius.min(point_distance(outline, nearest) / 2.0);
-    }
-    radius.max(0.0)
-}
-
-fn nearest_point_on_segment(point: Point, start: Point, end: Point) -> Point {
-    let dx = end.x - start.x;
-    let dy = end.y - start.y;
-    let length2 = dx * dx + dy * dy;
-    if length2 <= ZERO {
-        return start;
-    }
-    let t = ((point.x - start.x) * dx + (point.y - start.y) * dy) / length2;
-    Point::new(
-        start.x + dx * t.clamp(0.0, 1.0),
-        start.y + dy * t.clamp(0.0, 1.0),
-    )
-}
-
-fn signed_area(path: &[Point]) -> f64 {
-    path.windows(2)
-        .map(|pair| pair[0].x * pair[1].y - pair[1].x * pair[0].y)
-        .sum::<f64>()
-        / 2.0
-}
-
 fn point_distance(a: Point, b: Point) -> f64 {
     let dx = a.x - b.x;
     let dy = a.y - b.y;
     (dx * dx + dy * dy).sqrt()
-}
-
-fn dot(a: Point, b: Point) -> f64 {
-    a.x * b.x + a.y * b.y
 }
 
 fn get_f64(settings: &LegacySettings, key: &str, default: f64) -> f64 {

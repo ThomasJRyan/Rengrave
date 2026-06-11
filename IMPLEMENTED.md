@@ -4,6 +4,8 @@ This document records what has actually been implemented in the Rust port and wh
 
 ## Latest Checkpoint
 
+- V-carve point generation has been replaced with an F-Engrave-style maximum-circle walk over the outline: it builds nearby-segment partitions, honors V-carve corner thresholds/check scope/flop settings, records circle centers, and produces center-drive paths instead of the previous boxy outline-offset approximation. The supplied `F` comparison now regenerates as a centerline V-carve path.
+- V-carve G-code writing now buffers each loop and runs 3D Douglas-Peucker simplification over X/Y/Z samples before emission, matching F-Engrave's dense-sample reduction and greatly reducing noisy point-by-point output.
 - The UI Image size checkbox now mirrors F-Engrave's scale-preserving behavior for image-vector inputs with known preview bounds: toggling it converts `YSCALE` between absolute height and percent-of-image-height instead of silently changing output size.
 - Bitmap preview trace masks now use a shared `rengrave-core` helper that also feeds the Potrace PBM conversion path, removing duplicated threshold/alpha-compositing logic between core and UI.
 - The central preview now draws a lower-right model-space scale bar using the active inch/mm units, making zoom level and drawing size easier to read at a glance.
@@ -92,7 +94,7 @@ This document records what has actually been implemented in the Rust port and wh
 - Engrave G-code output with safe/depth moves, feeds, variables, units, preamble/postamble, and optional arc fitting.
 - Recovery settings comments are emitted by default for compatibility and can be suppressed with legacy `no_comments 1`.
 - Arc fitting modes `none`, `center`, and `radius` are present.
-- Initial V-carve point generation for V-bit, ball, and flat cutters.
+- F-Engrave-style V-carve point generation for V-bit and ball cutters, including maximum-circle radius checks against nearby outline segments, corner drive/step handling, loop ordering, and legacy check-scope/flop controls. Flat V-carve still falls back to flat engraving output.
 - Initial inlay/depth-limit/effective diameter handling.
 - Initial v-carve roughing/multipass depth caps.
 - Initial cleanup path generation and secondary cleanup G-code files.
@@ -148,7 +150,7 @@ The UI is now an MVP rather than only a shell, but it still lacks several expect
 - Golden fixtures from F-Engrave output. The harness and first R-Engrave regression fixture now exist, but broad comparisons against F-Engrave-generated `.ngc`, `.svg`, and `.dxf` files are still missing because local F-Engrave batch execution currently lacks `pyclipper`.
 - Full F-Engrave UI workflow: richer font/image preview editing controls, complete settings panels, complete v-carve/cleanup parity controls, full config parity, and parity menus.
 - Deeper cooperative cancellation inside remaining lower-level blocking operations. The UI has a background worker, indeterminate progress, core stage reporting, Cancel, stale-state handling, CXF/TTF/DXF parser cancellation, V-carve/cleanup inner-loop cancellation, and bitmap vectorization cancellation; native file reads and some third-party library calls are still not interruptible mid-call.
-- Stronger V-carve parity. The current V-carve implementation is initial and not proven equivalent to F-Engrave’s full algorithm for complex glyphs and artwork.
+- Byte-for-byte V-carve parity. The previous boxy V-carve sampler has been replaced and the supplied `F` fixture now produces center-drive paths with the same motion-line count after comments are removed, but exact text output still differs in a few coordinate-elision and simplification sample choices. More F-Engrave fixtures are needed for complex glyphs, curves, inlays, and artwork.
 - Full prismatic/inlay parity, including all F-Engrave edge cases around Add Box/Flip Normals, cleanup, depth limits, and output ordering.
 - Multipass parity for ordinary engraving and v-carve workflows beyond the currently ported roughing/depth-cap behavior.
 - More exact cleanup-path behavior and ordering compared with F-Engrave.
