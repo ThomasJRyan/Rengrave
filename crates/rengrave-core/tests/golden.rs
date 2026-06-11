@@ -5,6 +5,7 @@ use rengrave_core::batch::{BatchRequest, prepare_batch_output};
 use rengrave_core::settings::{LegacySetting, LegacySettings};
 
 const SIMPLE_CXF: &str = "tests/fixtures/inputs/simple.cxf";
+const ARC_CXF: &str = "tests/fixtures/inputs/arc.cxf";
 const SIMPLE_DXF: &str = "tests/fixtures/inputs/simple.dxf";
 const GCODE_TOLERANCE: f64 = 0.0001;
 const EXPECTED_SIMPLE_NGC: &str = include_str!("fixtures/expected/simple_text.ngc");
@@ -102,6 +103,88 @@ fn text_on_circle_with_add_circle_emits_circle_gcode_and_svg() {
         output.gcode
     );
     assert!(output.svg.as_deref().unwrap().contains("<circle cx="));
+}
+
+#[test]
+fn add_box_flat_text_emits_rectangular_border_in_batch_outputs() {
+    let fixture = core_fixture_path(SIMPLE_CXF);
+    let baseline = prepare_batch_output(&BatchRequest {
+        batch: true,
+        font_or_image: Some(fixture.clone()),
+        text: Some("A".to_owned()),
+        svg_output: Some(PathBuf::from("baseline.svg")),
+        ..BatchRequest::default()
+    })
+    .unwrap();
+    let boxed = prepare_batch_output(&BatchRequest {
+        batch: true,
+        font_or_image: Some(fixture),
+        text: Some("A".to_owned()),
+        svg_output: Some(PathBuf::from("boxed.svg")),
+        settings_overrides: vec![
+            LegacySetting::new("plotbox", "1", false),
+            LegacySetting::new("boxgap", "0.25", false),
+        ],
+        ..BatchRequest::default()
+    })
+    .unwrap();
+
+    assert!(
+        baseline.warnings.is_empty(),
+        "unexpected baseline warnings: {:?}",
+        baseline.warnings
+    );
+    assert!(
+        boxed.warnings.is_empty(),
+        "unexpected boxed warnings: {:?}",
+        boxed.warnings
+    );
+    assert!(boxed.gcode.contains("(fengrave_set plotbox     1 )"));
+    assert!(boxed.gcode.contains("(fengrave_set boxgap      0.25 )"));
+    assert!(
+        count_xy_cut_moves(&boxed.gcode) >= count_xy_cut_moves(&baseline.gcode) + 4,
+        "expected Add Box to append rectangular border moves:\n{}",
+        boxed.gcode
+    );
+    assert!(
+        boxed.svg.as_deref().unwrap().matches("<path").count()
+            > baseline.svg.as_deref().unwrap().matches("<path").count()
+    );
+}
+
+#[test]
+fn arc_fit_modes_emit_expected_batch_gcode_formats() {
+    let fixture = core_fixture_path(ARC_CXF);
+    let without_arcs = batch_arc_fit_output(&fixture, "none");
+    let center_arcs = batch_arc_fit_output(&fixture, "center");
+    let radius_arcs = batch_arc_fit_output(&fixture, "radius");
+
+    assert!(
+        !contains_arc_command(&without_arcs.gcode),
+        "expected no arc commands with arc_fit none:\n{}",
+        without_arcs.gcode
+    );
+    assert!(
+        contains_arc_command(&center_arcs.gcode),
+        "expected center arc fitting to emit G2/G3:\n{}",
+        center_arcs.gcode
+    );
+    assert!(
+        center_arcs
+            .gcode
+            .lines()
+            .any(|line| is_arc_command(line) && line.contains(" I") && line.contains(" J")),
+        "expected center arc fitting to use I/J center offsets:\n{}",
+        center_arcs.gcode
+    );
+    assert!(
+        radius_arcs
+            .gcode
+            .lines()
+            .any(|line| is_arc_command(line) && line.contains(" R")),
+        "expected radius arc fitting to use R radius format:\n{}",
+        radius_arcs.gcode
+    );
 }
 
 #[test]
@@ -218,6 +301,47 @@ fn motion_xy_points(gcode: &str) -> Vec<(f64, f64)> {
             Some((x?, y?))
         })
         .collect()
+}
+
+fn count_xy_cut_moves(gcode: &str) -> usize {
+    gcode
+        .lines()
+        .filter(|line| line.starts_with("G1 ") && line.contains(" X") && line.contains(" Y"))
+        .count()
+}
+
+fn batch_arc_fit_output(fixture: &Path, arc_fit: &str) -> rengrave_core::batch::BatchOutput {
+    let output = prepare_batch_output(&BatchRequest {
+        batch: true,
+        font_or_image: Some(fixture.to_path_buf()),
+        text: Some("O".to_owned()),
+        settings_overrides: vec![
+            LegacySetting::new("arc_fit", arc_fit, false),
+            LegacySetting::new("accuracy", "0.05", false),
+            LegacySetting::new("segarc", "5", false),
+        ],
+        ..BatchRequest::default()
+    })
+    .unwrap();
+
+    assert!(
+        output.warnings.is_empty(),
+        "unexpected arc-fit warnings for {arc_fit}: {:?}",
+        output.warnings
+    );
+    assert_eq!(
+        LegacySettings::parse(&output.gcode).get_last("arc_fit"),
+        Some(arc_fit)
+    );
+    output
+}
+
+fn contains_arc_command(gcode: &str) -> bool {
+    gcode.lines().any(is_arc_command)
+}
+
+fn is_arc_command(line: &str) -> bool {
+    line.starts_with("G2 ") || line.starts_with("G3 ")
 }
 
 fn assert_gcode_eq_with_tolerance(actual: impl AsRef<str>, expected: &str, tolerance: f64) {
