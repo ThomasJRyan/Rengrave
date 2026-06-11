@@ -76,12 +76,14 @@ struct RengraveApp {
     gcode_lines: usize,
     preview_segments: Vec<PreviewSegment>,
     preview_rapids: Vec<PreviewSegment>,
+    preview_cleanup_segments: Vec<PreviewSegment>,
     preview_bounds: Option<PreviewBounds>,
     gcode_path: String,
     svg_path: String,
     dxf_path: String,
     show_toolpath: bool,
     show_rapids: bool,
+    show_cleanup: bool,
     show_bounds: bool,
     show_axes: bool,
     show_grid: bool,
@@ -161,6 +163,7 @@ impl RengraveApp {
             gcode_lines: 0,
             preview_segments: Vec::new(),
             preview_rapids: Vec::new(),
+            preview_cleanup_segments: Vec::new(),
             preview_bounds: None,
             gcode_path: if preferences.gcode_path.trim().is_empty() {
                 default_gcode_path
@@ -179,6 +182,7 @@ impl RengraveApp {
             },
             show_toolpath: get_legacy_bool(&document.settings, "show_v_path", true),
             show_rapids: true,
+            show_cleanup: preferences.show_cleanup,
             show_bounds: get_legacy_bool(&document.settings, "show_box", true),
             show_axes: get_legacy_bool(&document.settings, "show_axis", true),
             show_grid: preferences.show_grid,
@@ -296,6 +300,7 @@ impl RengraveApp {
         self.controls = UiControls::from_settings(&defaults);
         self.show_toolpath = get_legacy_bool(&defaults, "show_v_path", true);
         self.show_rapids = true;
+        self.show_cleanup = true;
         self.show_bounds = get_legacy_bool(&defaults, "show_box", true);
         self.show_axes = get_legacy_bool(&defaults, "show_axis", true);
         self.show_grid = true;
@@ -402,6 +407,7 @@ impl RengraveApp {
                 self.gcode_lines = 0;
                 self.preview_segments.clear();
                 self.preview_rapids.clear();
+                self.preview_cleanup_segments.clear();
                 self.preview_bounds = None;
                 self.last_output_request = None;
             }
@@ -413,8 +419,12 @@ impl RengraveApp {
         let preview_motion = parse_preview_motion(&output.gcode);
         self.preview_segments = preview_motion.cuts;
         self.preview_rapids = preview_motion.rapids;
-        self.preview_bounds =
-            PreviewBounds::from_segment_layers(&self.preview_segments, &self.preview_rapids);
+        self.preview_cleanup_segments = cleanup_preview_segments(&output.secondary_gcode);
+        self.preview_bounds = PreviewBounds::from_segment_layers(&[
+            &self.preview_segments,
+            &self.preview_rapids,
+            &self.preview_cleanup_segments,
+        ]);
         if self.preview_bounds.is_some() {
             self.fit_preview_requested = true;
         }
@@ -643,6 +653,7 @@ impl RengraveApp {
             svg_path: self.svg_path.clone(),
             dxf_path: self.dxf_path.clone(),
             show_grid: self.show_grid,
+            show_cleanup: self.show_cleanup,
             preview_sample_text: self.preview_sample_text.clone(),
         };
         if let Err(err) = preferences.save(path) {
@@ -1186,6 +1197,15 @@ impl eframe::App for RengraveApp {
                     ui.heading("Preview");
                     ui.checkbox(&mut self.show_toolpath, "Toolpath");
                     ui.checkbox(&mut self.show_rapids, "Rapids");
+                    if ui
+                        .add_enabled(
+                            !self.preview_cleanup_segments.is_empty(),
+                            egui::Checkbox::new(&mut self.show_cleanup, "Cleanup"),
+                        )
+                        .changed()
+                    {
+                        self.save_preferences();
+                    }
                     ui.checkbox(&mut self.show_bounds, "Bounds");
                     ui.checkbox(&mut self.show_axes, "Axes");
                     if ui.checkbox(&mut self.show_grid, "Grid").changed() {
@@ -1194,8 +1214,16 @@ impl eframe::App for RengraveApp {
                     ui.label(format!("G-code lines: {}", self.gcode_lines));
                     ui.label(format!("Cut moves: {}", self.preview_segments.len()));
                     ui.label(format!("Rapid moves: {}", self.preview_rapids.len()));
+                    ui.label(format!(
+                        "Cleanup moves: {}",
+                        self.preview_cleanup_segments.len()
+                    ));
                     ui.label(preview_length_readout("Cut length", &self.preview_segments));
                     ui.label(preview_length_readout("Rapid length", &self.preview_rapids));
+                    ui.label(preview_length_readout(
+                        "Cleanup length",
+                        &self.preview_cleanup_segments,
+                    ));
                     if let Some((size, range)) = preview_bounds_readout(self.preview_bounds) {
                         ui.label(size);
                         ui.monospace(range);
@@ -1236,10 +1264,11 @@ impl eframe::App for RengraveApp {
                     }
                     ui.separator();
                     ui.monospace(format!(
-                        "{} lines, {} cut moves, {} rapid moves",
+                        "{} lines, {} cut moves, {} rapid moves, {} cleanup moves",
                         self.gcode_lines,
                         self.preview_segments.len(),
-                        self.preview_rapids.len()
+                        self.preview_rapids.len(),
+                        self.preview_cleanup_segments.len()
                     ));
                 });
                 ui.separator();
@@ -1307,9 +1336,11 @@ impl eframe::App for RengraveApp {
                 self.transform,
                 &self.preview_segments,
                 &self.preview_rapids,
+                &self.preview_cleanup_segments,
                 self.preview_bounds,
                 self.show_toolpath,
                 self.show_rapids,
+                self.show_cleanup,
                 self.show_bounds,
                 self.show_axes,
                 self.show_grid,
@@ -1420,6 +1451,15 @@ impl RengraveApp {
                 ui.separator();
                 ui.checkbox(&mut self.show_toolpath, "Toolpath layer");
                 ui.checkbox(&mut self.show_rapids, "Rapid layer");
+                if ui
+                    .add_enabled(
+                        !self.preview_cleanup_segments.is_empty(),
+                        egui::Checkbox::new(&mut self.show_cleanup, "Cleanup layer"),
+                    )
+                    .changed()
+                {
+                    self.save_preferences();
+                }
                 ui.checkbox(&mut self.show_bounds, "Bounds layer");
                 ui.checkbox(&mut self.show_axes, "Axes layer");
                 if ui.checkbox(&mut self.show_grid, "Grid layer").changed() {
@@ -3978,6 +4018,7 @@ struct UiPreferences {
     svg_path: String,
     dxf_path: String,
     show_grid: bool,
+    show_cleanup: bool,
     preview_sample_text: String,
 }
 
@@ -3991,6 +4032,7 @@ impl Default for UiPreferences {
             svg_path: String::new(),
             dxf_path: String::new(),
             show_grid: true,
+            show_cleanup: true,
             preview_sample_text: String::new(),
         }
     }
@@ -4031,6 +4073,7 @@ impl UiPreferences {
                 "svg_path" => preferences.svg_path = value,
                 "dxf_path" => preferences.dxf_path = value,
                 "show_grid" => preferences.show_grid = value != "0" && value != "false",
+                "show_cleanup" => preferences.show_cleanup = value != "0" && value != "false",
                 "preview_sample_text" => preferences.preview_sample_text = value,
                 _ => {}
             }
@@ -4047,6 +4090,7 @@ impl UiPreferences {
             ("svg_path", self.svg_path.as_str()),
             ("dxf_path", self.dxf_path.as_str()),
             ("show_grid", if self.show_grid { "1" } else { "0" }),
+            ("show_cleanup", if self.show_cleanup { "1" } else { "0" }),
             ("preview_sample_text", self.preview_sample_text.as_str()),
         ]
         .into_iter()
@@ -4162,10 +4206,10 @@ impl PreviewBounds {
         ]
     }
 
-    fn from_segment_layers(cuts: &[PreviewSegment], rapids: &[PreviewSegment]) -> Option<Self> {
-        let mut points = cuts
+    fn from_segment_layers(layers: &[&[PreviewSegment]]) -> Option<Self> {
+        let mut points = layers
             .iter()
-            .chain(rapids.iter())
+            .flat_map(|layer| layer.iter())
             .flat_map(|segment| [segment.start, segment.end].into_iter());
         let first = points.next()?;
         let mut min = first;
@@ -4399,6 +4443,13 @@ fn parse_preview_motion(gcode: &str) -> PreviewMotion {
     motion
 }
 
+fn cleanup_preview_segments(outputs: &[SecondaryGcode]) -> Vec<PreviewSegment> {
+    outputs
+        .iter()
+        .flat_map(|output| parse_preview_motion(&output.gcode).cuts)
+        .collect()
+}
+
 #[derive(Debug, Default)]
 struct MotionParams {
     x: Option<f64>,
@@ -4569,9 +4620,11 @@ fn draw_preview(
     transform: ViewTransform,
     segments: &[PreviewSegment],
     rapids: &[PreviewSegment],
+    cleanup_segments: &[PreviewSegment],
     bounds: Option<PreviewBounds>,
     show_toolpath: bool,
     show_rapids: bool,
+    show_cleanup: bool,
     show_bounds: bool,
     show_axes: bool,
     show_grid: bool,
@@ -4620,6 +4673,15 @@ fn draw_preview(
                 egui::Stroke::new(1.0, egui::Color32::from_rgb(190, 142, 72)),
                 8.0,
                 5.0,
+            );
+        }
+    }
+
+    if show_cleanup {
+        for segment in cleanup_segments {
+            painter.line_segment(
+                [to_screen(segment.start), to_screen(segment.end)],
+                egui::Stroke::new(1.2, egui::Color32::from_rgb(118, 164, 190)),
             );
         }
     }
@@ -4849,7 +4911,7 @@ mod tests {
     }
 
     #[test]
-    fn preview_bounds_include_cut_and_rapid_layers() {
+    fn preview_bounds_include_cut_rapid_and_cleanup_layers() {
         let cuts = vec![PreviewSegment {
             start: Point::new(0.0, 0.0),
             end: Point::new(1.0, 1.0),
@@ -4858,11 +4920,15 @@ mod tests {
             start: Point::new(-2.0, 3.0),
             end: Point::new(4.0, -1.0),
         }];
+        let cleanup = vec![PreviewSegment {
+            start: Point::new(8.0, 2.0),
+            end: Point::new(9.0, 5.0),
+        }];
 
-        let bounds = PreviewBounds::from_segment_layers(&cuts, &rapids).unwrap();
+        let bounds = PreviewBounds::from_segment_layers(&[&cuts, &rapids, &cleanup]).unwrap();
 
         assert_eq!(bounds.min, Point::new(-2.0, -1.0));
-        assert_eq!(bounds.max, Point::new(4.0, 3.0));
+        assert_eq!(bounds.max, Point::new(9.0, 5.0));
     }
 
     #[test]
@@ -6033,6 +6099,35 @@ mod tests {
     }
 
     #[test]
+    fn cleanup_preview_segments_parse_secondary_cut_moves() {
+        let segments = cleanup_preview_segments(&[
+            SecondaryGcode {
+                suffix: "clean".to_owned(),
+                gcode: "G0 X0 Y0\nG1 X1 Y0\n".to_owned(),
+            },
+            SecondaryGcode {
+                suffix: "v_clean".to_owned(),
+                gcode: "G0 X2 Y2\nG1 X2 Y3\n".to_owned(),
+            },
+        ]);
+
+        assert_eq!(
+            segments,
+            vec![
+                PreviewSegment {
+                    start: Point::new(0.0, 0.0),
+                    end: Point::new(1.0, 0.0),
+                },
+                PreviewSegment {
+                    start: Point::new(2.0, 2.0),
+                    end: Point::new(2.0, 3.0),
+                },
+            ]
+        );
+        assert!(cleanup_preview_segments(&[]).is_empty());
+    }
+
+    #[test]
     fn bottom_tab_copy_payload_tracks_visible_output_tabs() {
         let warnings = vec!["missing potrace".to_owned(), "fallback output".to_owned()];
         let cleanup = vec![SecondaryGcode {
@@ -6096,6 +6191,7 @@ mod tests {
             svg_path: "/tmp/out.svg".to_owned(),
             dxf_path: "/tmp/out.dxf".to_owned(),
             show_grid: false,
+            show_cleanup: false,
             preview_sample_text: "Sample=A".to_owned(),
         };
 
@@ -6110,6 +6206,7 @@ mod tests {
         let preferences = UiPreferences::parse("input_path=/tmp/example.cxf\n");
 
         assert!(preferences.show_grid);
+        assert!(preferences.show_cleanup);
         assert!(preferences.preview_sample_text.is_empty());
     }
 
