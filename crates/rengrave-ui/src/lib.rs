@@ -1082,7 +1082,23 @@ impl eframe::App for RengraveApp {
                     number_row(ui, "Alpha max", &mut self.controls.bmp_alpha, 0.05);
                     number_row(ui, "Opt tolerance", &mut self.controls.bmp_optto, 0.01);
                     ui.horizontal_wrapped(|ui| {
-                        ui.checkbox(&mut self.controls.use_image_size, "Image size");
+                        let mut use_image_size = self.controls.use_image_size;
+                        if ui.checkbox(&mut use_image_size, "Image size").changed() {
+                            let input_path = path_from_text(&self.input_path);
+                            let image_height = image_preview_model_height(
+                                input_path.as_deref(),
+                                &self.input_preview.data,
+                            );
+                            if let Some(converted_yscale) = convert_image_size_yscale(
+                                self.controls.yscale,
+                                use_image_size,
+                                image_height,
+                            ) {
+                                self.controls.yscale = converted_yscale;
+                                self.status = "Image size scale converted".to_owned();
+                            }
+                            self.controls.use_image_size = use_image_size;
+                        }
                         ui.checkbox(&mut self.controls.bmp_long, "Long curves");
                     });
 
@@ -3667,6 +3683,39 @@ fn bitmap_trace_stats_readout(stats: BitmapTraceStats) -> String {
         "Trace mask: {} black / {} white ({black_percent:.1}% black)",
         stats.black_pixels, stats.white_pixels
     )
+}
+
+fn image_preview_model_height(path: Option<&Path>, preview: &InputPreviewData) -> Option<f64> {
+    if InputCatalogKind::from_path(path?) != Some(InputCatalogKind::Dxf) {
+        return None;
+    }
+
+    let InputPreviewData::Vector {
+        bounds: Some(bounds),
+        ..
+    } = preview
+    else {
+        return None;
+    };
+    let height = (bounds.max.y - bounds.min.y).abs();
+    (height.is_finite() && height > f64::EPSILON).then_some(height)
+}
+
+fn convert_image_size_yscale(
+    current_yscale: f64,
+    enable_image_size: bool,
+    image_height: Option<f64>,
+) -> Option<f64> {
+    let image_height = image_height?;
+    if !current_yscale.is_finite() || !image_height.is_finite() || image_height <= f64::EPSILON {
+        return None;
+    }
+
+    Some(if enable_image_size {
+        current_yscale * 100.0 / image_height
+    } else {
+        current_yscale / 100.0 * image_height
+    })
 }
 
 fn missing_chars_readout(chars: &[char]) -> String {
@@ -6394,6 +6443,45 @@ mod tests {
             bitmap_trace_stats_readout(BitmapTraceStats::default()),
             "Trace mask: no pixels"
         );
+    }
+
+    #[test]
+    fn image_size_toggle_converts_yscale_like_f_engrave() {
+        let image_height = Some(10.0);
+
+        let percent_height = convert_image_size_yscale(2.5, true, image_height).unwrap();
+        assert!((percent_height - 25.0).abs() < 1e-9);
+
+        let absolute_height =
+            convert_image_size_yscale(percent_height, false, image_height).unwrap();
+        assert!((absolute_height - 2.5).abs() < 1e-9);
+
+        assert_eq!(convert_image_size_yscale(2.5, true, None), None);
+        assert_eq!(convert_image_size_yscale(2.5, true, Some(0.0)), None);
+    }
+
+    #[test]
+    fn image_size_height_uses_dxf_preview_bounds_only() {
+        let preview = InputPreviewData::Vector {
+            label: "DXF artwork".to_owned(),
+            segments: Vec::new(),
+            bounds: Some(PreviewBounds {
+                min: Point::new(-1.0, -2.0),
+                max: Point::new(3.0, 8.0),
+            }),
+            segment_count: 0,
+            missing_chars: Vec::new(),
+        };
+
+        assert_eq!(
+            image_preview_model_height(Some(Path::new("part.dxf")), &preview),
+            Some(10.0)
+        );
+        assert_eq!(
+            image_preview_model_height(Some(Path::new("font.cxf")), &preview),
+            None
+        );
+        assert_eq!(image_preview_model_height(None, &preview), None);
     }
 
     #[test]
