@@ -1344,6 +1344,7 @@ impl eframe::App for RengraveApp {
                 ui.painter(),
                 rect,
                 self.transform,
+                self.controls.units.value(),
                 &self.preview_segments,
                 &self.preview_rapids,
                 &self.preview_cleanup_segments,
@@ -4647,6 +4648,7 @@ fn draw_preview(
     painter: &egui::Painter,
     rect: egui::Rect,
     transform: ViewTransform,
+    unit_label: &str,
     segments: &[PreviewSegment],
     rapids: &[PreviewSegment],
     cleanup_segments: &[PreviewSegment],
@@ -4761,6 +4763,7 @@ fn draw_preview(
             show_cleanup,
         ),
     );
+    draw_preview_scale_bar(painter, rect, transform.zoom, unit_label);
 }
 
 fn draw_preview_grid(
@@ -4843,6 +4846,108 @@ fn draw_grid_axis_lines(
         let stroke = if index % 5 == 0 { major } else { minor };
         painter.line_segment(points_for_value(index as f64 * step), stroke);
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct PreviewScaleBar {
+    model_length: f64,
+    pixel_length: f32,
+}
+
+fn preview_scale_bar(zoom: f64) -> Option<PreviewScaleBar> {
+    if !zoom.is_finite() || zoom <= 0.0 {
+        return None;
+    }
+
+    let model_length = nice_scale_length(96.0 / zoom);
+    Some(PreviewScaleBar {
+        model_length,
+        pixel_length: (model_length * zoom) as f32,
+    })
+}
+
+fn nice_scale_length(raw: f64) -> f64 {
+    if !raw.is_finite() || raw <= 0.0 {
+        return 1.0;
+    }
+
+    let exponent = raw.log10().floor();
+    let magnitude = 10.0_f64.powf(exponent);
+    let normalized = raw / magnitude;
+    let nice = if normalized < 1.5 {
+        1.0
+    } else if normalized < 3.5 {
+        2.0
+    } else if normalized < 7.5 {
+        5.0
+    } else {
+        10.0
+    };
+    nice * magnitude
+}
+
+fn format_scale_bar_label(length: f64, unit_label: &str) -> String {
+    let decimals = if length >= 100.0 {
+        0
+    } else if length >= 10.0 {
+        1
+    } else if length >= 1.0 {
+        2
+    } else {
+        4
+    };
+    let mut value = format!("{length:.decimals$}");
+    if value.contains('.') {
+        while value.ends_with('0') {
+            value.pop();
+        }
+        if value.ends_with('.') {
+            value.pop();
+        }
+    }
+    format!("{value} {unit_label}")
+}
+
+fn draw_preview_scale_bar(painter: &egui::Painter, rect: egui::Rect, zoom: f64, unit_label: &str) {
+    if rect.width() < 170.0 || rect.height() < 90.0 {
+        return;
+    }
+    let Some(scale) = preview_scale_bar(zoom) else {
+        return;
+    };
+
+    let x2 = rect.right() - 14.0;
+    let x1 = x2 - scale.pixel_length;
+    if x1 < rect.left() + 14.0 {
+        return;
+    }
+    let y = rect.bottom() - 22.0;
+    let panel = egui::Rect::from_min_max(
+        egui::pos2(x1 - 10.0, y - 28.0),
+        egui::pos2(x2 + 10.0, y + 10.0),
+    );
+    painter.rect_filled(
+        panel,
+        4.0,
+        egui::Color32::from_rgba_unmultiplied(18, 20, 22, 210),
+    );
+    painter.rect_stroke(
+        panel,
+        4.0,
+        egui::Stroke::new(1.0, egui::Color32::from_rgb(58, 66, 70)),
+        egui::StrokeKind::Inside,
+    );
+    let stroke = egui::Stroke::new(2.0, egui::Color32::from_rgb(214, 220, 224));
+    painter.line_segment([egui::pos2(x1, y), egui::pos2(x2, y)], stroke);
+    painter.line_segment([egui::pos2(x1, y - 5.0), egui::pos2(x1, y + 5.0)], stroke);
+    painter.line_segment([egui::pos2(x2, y - 5.0), egui::pos2(x2, y + 5.0)], stroke);
+    painter.text(
+        egui::pos2((x1 + x2) * 0.5, y - 7.0),
+        egui::Align2::CENTER_BOTTOM,
+        format_scale_bar_label(scale.model_length, unit_label),
+        egui::FontId::monospace(11.0),
+        egui::Color32::from_rgb(214, 220, 224),
+    );
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -5139,6 +5244,31 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["Cleanup 1"]
         );
+    }
+
+    #[test]
+    fn preview_scale_bar_uses_readable_model_lengths() {
+        let normal = preview_scale_bar(80.0).unwrap();
+        assert_eq!(normal.model_length, 1.0);
+        assert_eq!(normal.pixel_length, 80.0);
+
+        let zoomed_out = preview_scale_bar(20.0).unwrap();
+        assert_eq!(zoomed_out.model_length, 5.0);
+        assert_eq!(zoomed_out.pixel_length, 100.0);
+
+        let zoomed_in = preview_scale_bar(500.0).unwrap();
+        assert_eq!(zoomed_in.model_length, 0.2);
+        assert_eq!(zoomed_in.pixel_length, 100.0);
+
+        assert_eq!(preview_scale_bar(0.0), None);
+    }
+
+    #[test]
+    fn preview_scale_bar_label_uses_active_units_without_noise() {
+        assert_eq!(format_scale_bar_label(100.0, "mm"), "100 mm");
+        assert_eq!(format_scale_bar_label(10.0, "mm"), "10 mm");
+        assert_eq!(format_scale_bar_label(1.0, "in"), "1 in");
+        assert_eq!(format_scale_bar_label(0.125, "in"), "0.125 in");
     }
 
     #[test]
