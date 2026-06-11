@@ -4747,6 +4747,20 @@ fn draw_preview(
             egui::Stroke::new(1.0, egui::Color32::from_rgb(80, 130, 160)),
         );
     }
+
+    draw_preview_overlay(
+        painter,
+        rect,
+        &preview_overlay_items(
+            segments,
+            rapids,
+            cleanup_segments,
+            bounds,
+            show_toolpath,
+            show_rapids,
+            show_cleanup,
+        ),
+    );
 }
 
 fn draw_preview_grid(
@@ -4828,6 +4842,107 @@ fn draw_grid_axis_lines(
     for index in start..=end {
         let stroke = if index % 5 == 0 { major } else { minor };
         painter.line_segment(points_for_value(index as f64 * step), stroke);
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PreviewOverlayItem {
+    text: String,
+    color: egui::Color32,
+    swatch: bool,
+}
+
+fn preview_overlay_items(
+    segments: &[PreviewSegment],
+    rapids: &[PreviewSegment],
+    cleanup_segments: &[PreviewSegment],
+    bounds: Option<PreviewBounds>,
+    show_toolpath: bool,
+    show_rapids: bool,
+    show_cleanup: bool,
+) -> Vec<PreviewOverlayItem> {
+    let mut items = Vec::new();
+    if show_toolpath && !segments.is_empty() {
+        items.push(PreviewOverlayItem {
+            text: format!("Cut {}", segments.len()),
+            color: egui::Color32::from_rgb(94, 176, 132),
+            swatch: true,
+        });
+    }
+    if show_rapids && !rapids.is_empty() {
+        items.push(PreviewOverlayItem {
+            text: format!("Rapid {}", rapids.len()),
+            color: egui::Color32::from_rgb(190, 142, 72),
+            swatch: true,
+        });
+    }
+    if show_cleanup && !cleanup_segments.is_empty() {
+        items.push(PreviewOverlayItem {
+            text: format!("Cleanup {}", cleanup_segments.len()),
+            color: egui::Color32::from_rgb(118, 164, 190),
+            swatch: true,
+        });
+    }
+    if let Some(bounds) = bounds {
+        items.push(PreviewOverlayItem {
+            text: format!(
+                "X {}..{}",
+                format_preview_coord(bounds.min.x),
+                format_preview_coord(bounds.max.x)
+            ),
+            color: egui::Color32::from_rgb(214, 220, 224),
+            swatch: false,
+        });
+        items.push(PreviewOverlayItem {
+            text: format!(
+                "Y {}..{}",
+                format_preview_coord(bounds.min.y),
+                format_preview_coord(bounds.max.y)
+            ),
+            color: egui::Color32::from_rgb(214, 220, 224),
+            swatch: false,
+        });
+    }
+    items
+}
+
+fn draw_preview_overlay(painter: &egui::Painter, rect: egui::Rect, items: &[PreviewOverlayItem]) {
+    if items.is_empty() || rect.width() < 140.0 || rect.height() < 90.0 {
+        return;
+    }
+
+    let origin = rect.left_top() + egui::vec2(10.0, 10.0);
+    let line_height = 16.0;
+    let width = 172.0_f32.min((rect.width() - 20.0).max(120.0));
+    let height = items.len() as f32 * line_height + 10.0;
+    let overlay = egui::Rect::from_min_size(origin, egui::vec2(width, height));
+    painter.rect_filled(
+        overlay,
+        4.0,
+        egui::Color32::from_rgba_unmultiplied(18, 20, 22, 210),
+    );
+    painter.rect_stroke(
+        overlay,
+        4.0,
+        egui::Stroke::new(1.0, egui::Color32::from_rgb(58, 66, 70)),
+        egui::StrokeKind::Inside,
+    );
+
+    for (index, item) in items.iter().enumerate() {
+        let y = origin.y + 7.0 + index as f32 * line_height;
+        let text_x = if item.swatch {
+            painter.circle_filled(egui::pos2(origin.x + 9.0, y + 5.5), 3.5, item.color);
+            origin.x + 18.0
+        } else {
+            origin.x + 8.0
+        };
+        painter.text(
+            egui::pos2(text_x, y),
+            egui::Align2::LEFT_TOP,
+            &item.text,
+            egui::FontId::monospace(11.0),
+            item.color,
+        );
     }
 }
 
@@ -4958,6 +5073,72 @@ mod tests {
 
         assert_eq!(bounds.min, Point::new(-2.0, -1.0));
         assert_eq!(bounds.max, Point::new(9.0, 5.0));
+    }
+
+    #[test]
+    fn preview_overlay_items_summarize_visible_layers_and_ranges() {
+        let cuts = vec![PreviewSegment {
+            start: Point::new(0.0, 0.0),
+            end: Point::new(1.0, 1.0),
+        }];
+        let rapids = vec![PreviewSegment {
+            start: Point::new(1.0, 1.0),
+            end: Point::new(2.0, 2.0),
+        }];
+        let cleanup = vec![
+            PreviewSegment {
+                start: Point::new(-1.0, 0.0),
+                end: Point::new(-1.0, 1.0),
+            },
+            PreviewSegment {
+                start: Point::new(-2.0, 0.0),
+                end: Point::new(-2.0, 1.0),
+            },
+        ];
+        let bounds = PreviewBounds {
+            min: Point::new(-2.0, -0.0000001),
+            max: Point::new(2.0, 3.25),
+        };
+
+        let items = preview_overlay_items(&cuts, &rapids, &cleanup, Some(bounds), true, true, true);
+
+        assert_eq!(
+            items
+                .iter()
+                .map(|item| item.text.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "Cut 1",
+                "Rapid 1",
+                "Cleanup 2",
+                "X -2.0000..2.0000",
+                "Y 0.0000..3.2500"
+            ]
+        );
+        assert!(items[0].swatch);
+        assert!(!items[3].swatch);
+    }
+
+    #[test]
+    fn preview_overlay_items_skip_hidden_layers() {
+        let cuts = vec![PreviewSegment {
+            start: Point::new(0.0, 0.0),
+            end: Point::new(1.0, 1.0),
+        }];
+        let cleanup = vec![PreviewSegment {
+            start: Point::new(-1.0, 0.0),
+            end: Point::new(-1.0, 1.0),
+        }];
+
+        let items = preview_overlay_items(&cuts, &[], &cleanup, None, false, true, true);
+
+        assert_eq!(
+            items
+                .iter()
+                .map(|item| item.text.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Cleanup 1"]
+        );
     }
 
     #[test]
