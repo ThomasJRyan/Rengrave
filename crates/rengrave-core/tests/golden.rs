@@ -6,6 +6,7 @@ use rengrave_core::settings::{LegacySetting, LegacySettings};
 
 const SIMPLE_CXF: &str = "tests/fixtures/inputs/simple.cxf";
 const ARC_CXF: &str = "tests/fixtures/inputs/arc.cxf";
+const SQUARE_CXF: &str = "tests/fixtures/inputs/square.cxf";
 const SIMPLE_DXF: &str = "tests/fixtures/inputs/simple.dxf";
 const GCODE_TOLERANCE: f64 = 0.0001;
 const EXPECTED_SIMPLE_NGC: &str = include_str!("fixtures/expected/simple_text.ngc");
@@ -185,6 +186,48 @@ fn arc_fit_modes_emit_expected_batch_gcode_formats() {
         "expected radius arc fitting to use R radius format:\n{}",
         radius_arcs.gcode
     );
+}
+
+#[test]
+fn vcarve_closed_text_generates_depth_moves_and_cleanup_companion() {
+    let fixture = core_fixture_path(SQUARE_CXF);
+    let output = prepare_batch_output(&BatchRequest {
+        batch: true,
+        font_or_image: Some(fixture),
+        text: Some("A".to_owned()),
+        include_secondary: true,
+        settings_overrides: vec![
+            LegacySetting::new("cut_type", "v-carve", false),
+            LegacySetting::new("v_step_len", "0.5", false),
+            LegacySetting::new("clean_paths", "1,0,0,0,0,0,0,0", false),
+        ],
+        ..BatchRequest::default()
+    })
+    .unwrap();
+
+    assert!(
+        output.warnings.is_empty(),
+        "unexpected warnings: {:?}",
+        output.warnings
+    );
+    let parsed = LegacySettings::parse(&output.gcode);
+    assert_eq!(parsed.get_last("cut_type"), Some("v-carve"));
+    assert_eq!(parsed.get_last("clean_paths"), Some("1,0,0,0,0,0,0,0"));
+    assert!(output.gcode.contains("G1 X"));
+    assert!(output.gcode.contains(" Z-"));
+    assert!(
+        !output
+            .gcode
+            .contains("v-carve generation is not ported yet")
+    );
+    assert_eq!(output.secondary_gcode.len(), 1);
+    assert_eq!(output.secondary_gcode[0].suffix, "clean");
+    assert!(
+        output.secondary_gcode[0]
+            .gcode
+            .contains("secondary cleanup operation")
+    );
+    assert!(output.secondary_gcode[0].gcode.contains("G1 X"));
 }
 
 #[test]
