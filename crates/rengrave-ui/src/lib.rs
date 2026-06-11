@@ -971,6 +971,17 @@ impl eframe::App for RengraveApp {
                     number_row(ui, "V step", &mut self.controls.v_step_len, 0.001);
                     number_row(ui, "Allowance", &mut self.controls.allowance, 0.001);
                     number_row(ui, "Depth limit", &mut self.controls.v_depth_lim, 0.01);
+                    number_row(ui, "Drive corner", &mut self.controls.v_drv_crner, 1.0);
+                    number_row(ui, "Step corner", &mut self.controls.v_stp_crner, 1.0);
+                    combo_row(ui, "Check scope", self.controls.v_check_all.label(), |ui| {
+                        for value in VCheckScopeChoice::ALL {
+                            ui.selectable_value(
+                                &mut self.controls.v_check_all,
+                                value,
+                                value.label(),
+                            );
+                        }
+                    });
                     ui.horizontal_wrapped(|ui| {
                         ui.checkbox(&mut self.controls.inlay, "Inlay");
                     });
@@ -1083,6 +1094,9 @@ impl eframe::App for RengraveApp {
                         ui.checkbox(&mut self.controls.recovery_comments, "Recovery comments");
                         ui.checkbox(&mut self.controls.var_dis, "Disable variables");
                         ui.checkbox(&mut self.controls.ext_char, "Extended chars");
+                        ui.checkbox(&mut self.controls.show_thick, "Show thickness");
+                        ui.checkbox(&mut self.controls.show_v_area, "Show V area");
+                        ui.checkbox(&mut self.controls.v_pplot, "Plot during V-carve");
                     });
 
                     ui.separator();
@@ -1559,6 +1573,7 @@ struct UiControls {
     bit_shape: BitShapeChoice,
     arc_fit: ArcFitChoice,
     height_calc: HeightCalcChoice,
+    v_check_all: VCheckScopeChoice,
     origin: OriginChoice,
     justify: JustifyChoice,
     yscale: f64,
@@ -1581,6 +1596,8 @@ struct UiControls {
     v_bit_angle: f64,
     v_bit_dia: f64,
     v_step_len: f64,
+    v_drv_crner: f64,
+    v_stp_crner: f64,
     allowance: f64,
     v_max_cut: f64,
     v_rough_stk: f64,
@@ -1607,6 +1624,9 @@ struct UiControls {
     var_dis: bool,
     ext_char: bool,
     v_flop: bool,
+    v_pplot: bool,
+    show_thick: bool,
+    show_v_area: bool,
 }
 
 impl UiControls {
@@ -1617,6 +1637,9 @@ impl UiControls {
             bit_shape: BitShapeChoice::parse(settings.get_last("bit_shape").unwrap_or("VBIT")),
             arc_fit: ArcFitChoice::parse(settings.get_last("arc_fit").unwrap_or("none")),
             height_calc: HeightCalcChoice::parse(settings.get_last("H_CALC").unwrap_or("max_use")),
+            v_check_all: VCheckScopeChoice::parse(
+                settings.get_last("v_check_all").unwrap_or("all"),
+            ),
             origin: OriginChoice::parse(settings.get_last("origin").unwrap_or("Default")),
             justify: JustifyChoice::parse(settings.get_last("justify").unwrap_or("Left")),
             yscale: setting_f64(settings, "YSCALE", 2.0),
@@ -1639,6 +1662,8 @@ impl UiControls {
             v_bit_angle: setting_f64(settings, "v_bit_angle", 60.0),
             v_bit_dia: setting_f64(settings, "v_bit_dia", 0.5),
             v_step_len: setting_f64(settings, "v_step_len", 0.01),
+            v_drv_crner: setting_f64(settings, "v_drv_crner", 135.0),
+            v_stp_crner: setting_f64(settings, "v_stp_crner", 200.0),
             allowance: setting_f64(settings, "allowance", 0.0),
             v_max_cut: setting_f64(settings, "v_max_cut", -1.0),
             v_rough_stk: setting_f64(settings, "v_rough_stk", 0.0),
@@ -1673,6 +1698,9 @@ impl UiControls {
             var_dis: get_legacy_bool(settings, "var_dis", true),
             ext_char: get_legacy_bool(settings, "ext_char", false),
             v_flop: get_legacy_bool(settings, "v_flop", false),
+            v_pplot: get_legacy_bool(settings, "v_pplot", false),
+            show_thick: get_legacy_bool(settings, "show_thick", true),
+            show_v_area: get_legacy_bool(settings, "show_v_area", true),
         }
     }
 
@@ -1683,6 +1711,7 @@ impl UiControls {
         push_setting(&mut entries, "bit_shape", self.bit_shape.value(), false);
         push_setting(&mut entries, "arc_fit", self.arc_fit.value(), false);
         push_setting(&mut entries, "H_CALC", self.height_calc.value(), false);
+        push_setting(&mut entries, "v_check_all", self.v_check_all.value(), false);
         push_setting(&mut entries, "origin", self.origin.value(), false);
         push_setting(&mut entries, "justify", self.justify.value(), false);
         push_setting(
@@ -1807,6 +1836,18 @@ impl UiControls {
         );
         push_setting(
             &mut entries,
+            "v_drv_crner",
+            format_setting_number(self.v_drv_crner),
+            false,
+        );
+        push_setting(
+            &mut entries,
+            "v_stp_crner",
+            format_setting_number(self.v_stp_crner),
+            false,
+        );
+        push_setting(
+            &mut entries,
             "allowance",
             format_setting_number(self.allowance),
             false,
@@ -1886,6 +1927,9 @@ impl UiControls {
         push_bool(&mut entries, "var_dis", self.var_dis);
         push_bool(&mut entries, "ext_char", self.ext_char);
         push_bool(&mut entries, "v_flop", self.v_flop);
+        push_bool(&mut entries, "v_pplot", self.v_pplot);
+        push_bool(&mut entries, "show_thick", self.show_thick);
+        push_bool(&mut entries, "show_v_area", self.show_v_area);
         entries
     }
 }
@@ -1975,6 +2019,38 @@ impl BitmapTurnPolicy {
             Self::Left => "Left",
             Self::Right => "Right",
             Self::Random => "Random",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VCheckScopeChoice {
+    All,
+    Character,
+}
+
+impl VCheckScopeChoice {
+    const ALL: [Self; 2] = [Self::All, Self::Character];
+
+    fn parse(value: &str) -> Self {
+        if value == "chr" {
+            Self::Character
+        } else {
+            Self::All
+        }
+    }
+
+    fn value(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::Character => "chr",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::All => "All",
+            Self::Character => "Character",
         }
     }
 }
@@ -5924,12 +6000,18 @@ mod tests {
         assert_eq!(controls.units, UnitsChoice::Inch);
         assert_eq!(controls.bit_shape, BitShapeChoice::VBit);
         assert_eq!(controls.arc_fit, ArcFitChoice::NoFit);
+        assert_eq!(controls.v_check_all, VCheckScopeChoice::All);
         assert_eq!(controls.origin, OriginChoice::Default);
         assert_eq!(controls.justify, JustifyChoice::Left);
+        assert_eq!(controls.v_drv_crner, 135.0);
+        assert_eq!(controls.v_stp_crner, 200.0);
         assert_eq!(controls.clean_paths, "1,1,0,1,0,1,0,0");
         assert!(controls.recovery_comments);
         assert!(controls.var_dis);
         assert!(!controls.ext_char);
+        assert!(!controls.v_pplot);
+        assert!(controls.show_thick);
+        assert!(controls.show_v_area);
         assert!(get_legacy_bool(&settings, "show_v_path", false));
         assert!(get_legacy_bool(&settings, "show_box", false));
         assert!(get_legacy_bool(&settings, "show_axis", false));
@@ -5972,6 +6054,12 @@ mod tests {
         settings.set_or_push("var_dis", "0", false);
         settings.set_or_push("ext_char", "1", false);
         settings.set_or_push("v_flop", "1", false);
+        settings.set_or_push("v_pplot", "1", false);
+        settings.set_or_push("show_thick", "0", false);
+        settings.set_or_push("show_v_area", "0", false);
+        settings.set_or_push("v_drv_crner", "120", false);
+        settings.set_or_push("v_stp_crner", "210", false);
+        settings.set_or_push("v_check_all", "chr", false);
 
         let mut controls = UiControls::from_settings(&settings);
         assert_eq!(controls.height_calc, HeightCalcChoice::MaxAll);
@@ -5981,8 +6069,15 @@ mod tests {
         assert!(!controls.var_dis);
         assert!(controls.ext_char);
         assert!(controls.v_flop);
+        assert!(controls.v_pplot);
+        assert!(!controls.show_thick);
+        assert!(!controls.show_v_area);
+        assert_eq!(controls.v_drv_crner, 120.0);
+        assert_eq!(controls.v_stp_crner, 210.0);
+        assert_eq!(controls.v_check_all, VCheckScopeChoice::Character);
 
         controls.height_calc = HeightCalcChoice::MaxUse;
+        controls.v_check_all = VCheckScopeChoice::All;
         controls.gpre = " G90|M3 S9000 ".to_owned();
         controls.gpost = " M5|M30 ".to_owned();
         controls.clean_paths = " 0,1,0,1,0,1,0,1 ".to_owned();
@@ -5990,6 +6085,11 @@ mod tests {
         controls.var_dis = true;
         controls.ext_char = false;
         controls.v_flop = false;
+        controls.v_pplot = false;
+        controls.show_thick = true;
+        controls.show_v_area = true;
+        controls.v_drv_crner = 130.0;
+        controls.v_stp_crner = 220.0;
 
         let overrides = controls.overrides();
         let value_for = |key: &str| {
@@ -6000,6 +6100,7 @@ mod tests {
         };
 
         assert_eq!(value_for("H_CALC"), Some("max_use"));
+        assert_eq!(value_for("v_check_all"), Some("all"));
         assert_eq!(value_for("gpre"), Some("G90|M3 S9000"));
         assert_eq!(value_for("gpost"), Some("M5|M30"));
         assert_eq!(value_for("clean_paths"), Some("0,1,0,1,0,1,0,1"));
@@ -6007,6 +6108,11 @@ mod tests {
         assert_eq!(value_for("var_dis"), Some("1"));
         assert_eq!(value_for("ext_char"), Some("0"));
         assert_eq!(value_for("v_flop"), Some("0"));
+        assert_eq!(value_for("v_pplot"), Some("0"));
+        assert_eq!(value_for("show_thick"), Some("1"));
+        assert_eq!(value_for("show_v_area"), Some("1"));
+        assert_eq!(value_for("v_drv_crner"), Some("130"));
+        assert_eq!(value_for("v_stp_crner"), Some("220"));
     }
 
     #[test]
