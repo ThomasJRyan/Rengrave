@@ -3872,10 +3872,72 @@ fn draw_vector_input_preview(
         return;
     };
 
+    let Some(transform) = vector_input_preview_transform(rect, bounds) else {
+        return;
+    };
+
+    let bounds_points = [
+        Point::new(bounds.min.x, bounds.min.y),
+        Point::new(bounds.max.x, bounds.min.y),
+        Point::new(bounds.max.x, bounds.max.y),
+        Point::new(bounds.min.x, bounds.max.y),
+        Point::new(bounds.min.x, bounds.min.y),
+    ];
+    for pair in bounds_points.windows(2) {
+        painter.line_segment(
+            [transform.to_screen(pair[0]), transform.to_screen(pair[1])],
+            egui::Stroke::new(1.0, egui::Color32::from_rgb(72, 82, 88)),
+        );
+    }
+
+    for axis in vector_input_preview_axis_segments(bounds) {
+        painter.line_segment(
+            [
+                transform.to_screen(axis.start),
+                transform.to_screen(axis.end),
+            ],
+            egui::Stroke::new(0.8, egui::Color32::from_rgb(80, 105, 118)),
+        );
+    }
+
+    for segment in segments {
+        painter.line_segment(
+            [
+                transform.to_screen(segment.start),
+                transform.to_screen(segment.end),
+            ],
+            egui::Stroke::new(1.2, egui::Color32::from_rgb(94, 176, 132)),
+        );
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct VectorInputPreviewTransform {
+    bounds: PreviewBounds,
+    scale: f32,
+    origin: egui::Pos2,
+}
+
+impl VectorInputPreviewTransform {
+    fn to_screen(self, point: Point) -> egui::Pos2 {
+        egui::pos2(
+            self.origin.x + ((point.x - self.bounds.min.x) as f32) * self.scale,
+            self.origin.y - ((point.y - self.bounds.min.y) as f32) * self.scale,
+        )
+    }
+}
+
+fn vector_input_preview_transform(
+    rect: egui::Rect,
+    bounds: PreviewBounds,
+) -> Option<VectorInputPreviewTransform> {
+    if rect.width() <= 1.0 || rect.height() <= 1.0 {
+        return None;
+    }
     let width = (bounds.max.x - bounds.min.x).abs().max(0.001) as f32;
     let height = (bounds.max.y - bounds.min.y).abs().max(0.001) as f32;
-    let scale = ((rect.width() - 16.0) / width)
-        .min((rect.height() - 16.0) / height)
+    let scale = ((rect.width() - 16.0).max(1.0) / width)
+        .min((rect.height() - 16.0).max(1.0) / height)
         .max(0.001);
     let preview_width = width * scale;
     let preview_height = height * scale;
@@ -3883,19 +3945,28 @@ fn draw_vector_input_preview(
         rect.center().x - preview_width / 2.0,
         rect.center().y + preview_height / 2.0,
     );
-    let to_screen = |point: Point| {
-        egui::pos2(
-            origin.x + ((point.x - bounds.min.x) as f32) * scale,
-            origin.y - ((point.y - bounds.min.y) as f32) * scale,
-        )
-    };
+    Some(VectorInputPreviewTransform {
+        bounds,
+        scale,
+        origin,
+    })
+}
 
-    for segment in segments {
-        painter.line_segment(
-            [to_screen(segment.start), to_screen(segment.end)],
-            egui::Stroke::new(1.2, egui::Color32::from_rgb(94, 176, 132)),
-        );
+fn vector_input_preview_axis_segments(bounds: PreviewBounds) -> Vec<PreviewSegment> {
+    let mut axes = Vec::new();
+    if bounds.min.y <= 0.0 && bounds.max.y >= 0.0 {
+        axes.push(PreviewSegment {
+            start: Point::new(bounds.min.x, 0.0),
+            end: Point::new(bounds.max.x, 0.0),
+        });
     }
+    if bounds.min.x <= 0.0 && bounds.max.x >= 0.0 {
+        axes.push(PreviewSegment {
+            start: Point::new(0.0, bounds.min.y),
+            end: Point::new(0.0, bounds.max.y),
+        });
+    }
+    axes
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -5793,6 +5864,54 @@ mod tests {
             }
             other => panic!("unexpected preview: {other:?}"),
         }
+    }
+
+    #[test]
+    fn vector_input_preview_transform_fits_bounds_with_padding() {
+        let rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(220.0, 120.0));
+        let bounds = PreviewBounds {
+            min: Point::new(0.0, 0.0),
+            max: Point::new(10.0, 10.0),
+        };
+
+        let transform = vector_input_preview_transform(rect, bounds).unwrap();
+
+        assert!((transform.scale - 10.4).abs() < 0.0001);
+        let min = transform.to_screen(bounds.min);
+        let max = transform.to_screen(bounds.max);
+        assert!((min.x - 58.0).abs() < 0.0001);
+        assert!((min.y - 112.0).abs() < 0.0001);
+        assert!((max.x - 162.0).abs() < 0.0001);
+        assert!((max.y - 8.0).abs() < 0.0001);
+    }
+
+    #[test]
+    fn vector_input_preview_axes_only_draw_when_origin_crosses_bounds() {
+        let axes = vector_input_preview_axis_segments(PreviewBounds {
+            min: Point::new(-2.0, -1.0),
+            max: Point::new(3.0, 4.0),
+        });
+
+        assert_eq!(
+            axes,
+            vec![
+                PreviewSegment {
+                    start: Point::new(-2.0, 0.0),
+                    end: Point::new(3.0, 0.0),
+                },
+                PreviewSegment {
+                    start: Point::new(0.0, -1.0),
+                    end: Point::new(0.0, 4.0),
+                },
+            ]
+        );
+        assert_eq!(
+            vector_input_preview_axis_segments(PreviewBounds {
+                min: Point::new(1.0, 2.0),
+                max: Point::new(3.0, 4.0),
+            }),
+            Vec::<PreviewSegment>::new()
+        );
     }
 
     #[test]
