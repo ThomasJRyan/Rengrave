@@ -5,6 +5,7 @@ This document records what has actually been implemented in the Rust port and wh
 ## Latest Checkpoint
 
 - The central preview now draws a lower-right model-space scale bar using the active inch/mm units, making zoom level and drawing size easier to read at a glance.
+- Preview axes now label the positive X and Y directions, so model orientation remains readable while using pan/zoom/rotation.
 - The golden/regression harness now includes end-to-end batch coverage for flat-text Add Box output and `arc_fit` modes, including no-arc, center-offset `I/J`, and radius-format `R` G-code.
 - Small arc and closed-square CXF fixtures were added under `crates/rengrave-core/tests/fixtures/inputs/` so arc fitting, V-carve, and cleanup companion output are represented in the crate-level integration fixture set.
 - The golden/regression harness now includes an end-to-end V-carve batch case for closed CXF text with secondary cleanup G-code requested.
@@ -122,7 +123,7 @@ This document records what has actually been implemented in the Rust port and wh
 - The bottom panel has Status, G-code, Cleanup, SVG, and DXF tabs so generated text output can be inspected without exporting first.
 - The active bottom tab can be copied to the clipboard, including cleanup, SVG, and DXF payloads in addition to primary G-code.
 - It previews cut moves, separately parses and draws rapid XY moves as a toggleable dashed layer, parses generated cleanup companion G-code into a separate overlay, and approximates center-format and radius-format arcs for display.
-- It has basic toggles for toolpath, rapid, cleanup, bounds, axes, and grid layers, generated move counts, cut/rapid/cleanup path length readouts, a compact in-canvas layer/range overlay, a model-space scale bar, extents/range readouts, cursor-centered wheel/pinch zoom, live model-coordinate readout, simple zoom/view rotation controls, double-click/menu Fit actions, and bounds-aware recentering of generated geometry in the preview. Legacy toolpath, bounds, and axes layer flags round-trip through saved settings; the R-Engrave-only rapid/cleanup/grid layer preferences and viewport inspection rotation persist in UI state.
+- It has basic toggles for toolpath, rapid, cleanup, bounds, axes, and grid layers, generated move counts, cut/rapid/cleanup path length readouts, a compact in-canvas layer/range overlay, a model-space scale bar, labeled X/Y axes, extents/range readouts, cursor-centered wheel/pinch zoom, live model-coordinate readout, simple zoom/view rotation controls, double-click/menu Fit actions, and bounds-aware recentering of generated geometry in the preview. Legacy toolpath, bounds, and axes layer flags round-trip through saved settings; the R-Engrave-only rapid/cleanup/grid layer preferences and viewport inspection rotation persist in UI state.
 
 ## Why The UI Looks Bare
 

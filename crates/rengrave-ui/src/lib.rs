@@ -4748,6 +4748,20 @@ fn draw_preview(
             ],
             egui::Stroke::new(1.0, egui::Color32::from_rgb(80, 130, 160)),
         );
+        painter.text(
+            to_screen(Point::new(axis_span, 0.0)) + egui::vec2(6.0, -4.0),
+            egui::Align2::LEFT_BOTTOM,
+            "X",
+            egui::FontId::monospace(12.0),
+            egui::Color32::from_rgb(220, 188, 104),
+        );
+        painter.text(
+            to_screen(Point::new(0.0, axis_span)) + egui::vec2(6.0, -4.0),
+            egui::Align2::LEFT_BOTTOM,
+            "Y",
+            egui::FontId::monospace(12.0),
+            egui::Color32::from_rgb(104, 166, 200),
+        );
     }
 
     draw_preview_overlay(
