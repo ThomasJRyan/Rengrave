@@ -1210,8 +1210,8 @@ fn append_bulge_segments(
     let midpoint = Point::new((start.x + end.x) / 2.0, (start.y + end.y) / 2.0);
     let left_normal = Point::new(-dy / chord, dx / chord);
     let center = Point::new(
-        midpoint.x - left_normal.x * h,
-        midpoint.y - left_normal.y * h,
+        midpoint.x + left_normal.x * h,
+        midpoint.y + left_normal.y * h,
     );
     let start_angle = (start.y - center.y).atan2(start.x - center.x);
     let steps = ((theta.abs().to_degrees() / segarc_degrees.max(1.0)).ceil() as usize).max(1);
@@ -1668,8 +1668,30 @@ ENDSEC
         assert!(strokes.iter().any(|stroke| stroke.end.y.abs() > 0.1));
     }
 
+    #[test]
+    fn approximates_non_semicircle_bulges_to_next_vertex() {
+        let strokes = parse_dxf_segments(
+            "0\nPOLYLINE\n70\n1\n0\nVERTEX\n10\n0\n20\n0\n42\n0.25\n0\nVERTEX\n10\n2\n20\n0\n42\n0\n0\nVERTEX\n10\n2\n20\n2\n42\n0\n0\nSEQEND\n",
+            5.0,
+        );
+
+        assert!(strokes.len() > 3);
+        assert_point_close(strokes[0].start, Point::new(0.0, 0.0));
+        for pair in strokes.windows(2) {
+            assert_point_close(pair[0].end, pair[1].start);
+        }
+        assert!(
+            strokes
+                .iter()
+                .any(|stroke| point_is_close(stroke.end, Point::new(2.0, 0.0)))
+        );
+    }
+
     fn assert_point_close(actual: Point, expected: Point) {
-        assert!((actual.x - expected.x).abs() < 1e-9);
-        assert!((actual.y - expected.y).abs() < 1e-9);
+        assert!(point_is_close(actual, expected));
+    }
+
+    fn point_is_close(actual: Point, expected: Point) -> bool {
+        (actual.x - expected.x).abs() < 1e-9 && (actual.y - expected.y).abs() < 1e-9
     }
 }

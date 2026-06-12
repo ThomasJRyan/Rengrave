@@ -379,6 +379,376 @@ pub fn generate_vcarve_points_with_cancel(
     Ok(reorder_loops(output, accuracy))
 }
 
+pub fn sort_image_segments_for_vcarve(
+    segments: &[EngraveSegment],
+    accuracy: f64,
+) -> Vec<EngraveSegment> {
+    if segments.is_empty() {
+        return Vec::new();
+    }
+
+    let mut ecoords = Vec::new();
+    let mut loop_begins = Vec::new();
+    let mut loop_ends = Vec::new();
+    let mut old_end = segments[0].end;
+    let mut current_index = 0usize;
+
+    for (index, segment) in segments.iter().enumerate() {
+        if index == 0 {
+            ecoords.push(segment.start);
+            loop_begins.push(current_index);
+            current_index += 1;
+            ecoords.push(segment.end);
+            old_end = segment.end;
+            continue;
+        }
+
+        if point_distance(old_end, segment.start) > ZERO {
+            loop_ends.push(current_index);
+            current_index += 1;
+            ecoords.push(segment.start);
+            loop_begins.push(current_index);
+        }
+        current_index += 1;
+        ecoords.push(segment.end);
+        old_end = segment.end;
+    }
+    loop_ends.push(current_index);
+
+    let mut open_begins = Vec::new();
+    let mut open_ends = Vec::new();
+    let mut index = 0usize;
+    while index < loop_begins.len() {
+        let start = ecoords[loop_begins[index]];
+        let end = ecoords[loop_ends[index]];
+        if point_distance(start, end) <= ZERO {
+            ecoords[loop_ends[index]] = start;
+            index += 1;
+        } else {
+            open_begins.push(loop_begins.remove(index));
+            open_ends.push(loop_ends.remove(index));
+        }
+    }
+
+    let mut new_begins = Vec::new();
+    let mut new_ends = Vec::new();
+    let mut new_loop_ids = Vec::new();
+    let mut loop_id = 0usize;
+    while !open_begins.is_empty() {
+        let start = open_begins.remove(0);
+        let mut end = open_ends.remove(0);
+        loop_id += 1;
+        new_loop_ids.push(loop_id);
+        new_begins.push(start);
+        new_ends.push(end);
+        let original_start = ecoords[start];
+
+        let mut open = true;
+        while open && !open_begins.is_empty() {
+            let current_end = ecoords[end];
+            let mut best_begin_distance = point_distance(current_end, original_start);
+            let mut best_end_distance = best_begin_distance;
+            let mut best_begin = None;
+            let mut best_end = None;
+
+            for candidate in 0..open_begins.len() {
+                let candidate_start = ecoords[open_begins[candidate]];
+                let candidate_end = ecoords[open_ends[candidate]];
+                let begin_distance = point_distance(current_end, candidate_start);
+                let end_distance = point_distance(current_end, candidate_end);
+
+                if begin_distance < best_begin_distance {
+                    best_begin_distance = begin_distance;
+                    best_begin = Some(candidate);
+                }
+                if end_distance < best_end_distance {
+                    best_end_distance = end_distance;
+                    best_end = Some(candidate);
+                }
+            }
+
+            if best_begin.is_none() && best_end.is_none() {
+                ecoords.push(ecoords[end]);
+                ecoords.push(original_start);
+                new_loop_ids.push(loop_id);
+                new_begins.push(ecoords.len() - 2);
+                new_ends.push(ecoords.len() - 1);
+                open = false;
+            } else if best_end_distance < best_begin_distance {
+                let candidate = best_end.unwrap();
+                let next_end = open_begins.remove(candidate);
+                let next_begin = open_ends.remove(candidate);
+
+                ecoords.push(ecoords[end]);
+                ecoords.push(ecoords[next_begin]);
+                new_loop_ids.push(loop_id);
+                new_begins.push(ecoords.len() - 2);
+                new_ends.push(ecoords.len() - 1);
+                new_loop_ids.push(loop_id);
+                new_begins.push(next_begin);
+                new_ends.push(next_end);
+                end = next_end;
+            } else {
+                let candidate = best_begin.unwrap();
+                let next_begin = open_begins.remove(candidate);
+                let next_end = open_ends.remove(candidate);
+
+                ecoords.push(ecoords[end]);
+                ecoords.push(ecoords[next_begin]);
+                new_loop_ids.push(loop_id);
+                new_begins.push(ecoords.len() - 2);
+                new_ends.push(ecoords.len() - 1);
+                new_loop_ids.push(loop_id);
+                new_begins.push(next_begin);
+                new_ends.push(next_end);
+                end = next_end;
+            }
+        }
+
+        if open && open_begins.is_empty() {
+            ecoords.push(ecoords[end]);
+            ecoords.push(original_start);
+            new_loop_ids.push(loop_id);
+            new_begins.push(ecoords.len() - 2);
+            new_ends.push(ecoords.len() - 1);
+        }
+    }
+
+    for range_index in 0..loop_begins.len() {
+        let start = loop_begins[range_index];
+        let end = loop_ends[range_index];
+        let mut previous = ecoords[start];
+        for point_index in start + 1..=end {
+            let point = ecoords[point_index];
+            if point_distance(previous, point) >= accuracy {
+                previous = point;
+            } else if point_index != end {
+                ecoords[point_index] = previous;
+            } else {
+                ecoords[end] = ecoords[start];
+            }
+        }
+    }
+
+    let mut last_new_loop = None;
+    for range_index in 0..new_begins.len() {
+        let start = new_begins[range_index];
+        let end = new_ends[range_index];
+        let current_loop = new_loop_ids[range_index];
+        if last_new_loop != Some(current_loop) {
+            loop_begins.push(ecoords.len());
+            if last_new_loop.is_some() {
+                loop_ends.push(ecoords.len() - 1);
+            }
+            last_new_loop = Some(current_loop);
+        }
+
+        append_points_in_range(&mut ecoords, start, end);
+    }
+    if loop_begins.len() > loop_ends.len() {
+        loop_ends.push(ecoords.len() - 1);
+    }
+
+    let mut loop_flips = loop_begins
+        .iter()
+        .zip(&loop_ends)
+        .map(|(&start, &end)| signed_area(&ecoords, start, end) <= 0.0)
+        .collect::<Vec<_>>();
+
+    for outer in 0..loop_begins.len() {
+        let poly_start = loop_begins[outer];
+        let poly_end = loop_ends[outer];
+        if poly_start >= poly_end {
+            continue;
+        }
+        let polygon = &ecoords[poly_start..poly_end];
+        for inner in 0..loop_begins.len() {
+            if inner == outer {
+                continue;
+            }
+            let point = ecoords[loop_begins[inner]];
+            if point_inside_polygon(point, polygon) > 0 {
+                loop_flips[inner] = !loop_flips[inner];
+            }
+        }
+    }
+
+    let mut loop_numbers = (0..loop_begins.len()).collect::<Vec<_>>();
+    let mut order = Vec::new();
+    if !loop_flips.is_empty() {
+        if loop_flips[0] {
+            order.push((loop_ends[0], loop_begins[0], loop_numbers[0]));
+        } else {
+            order.push((loop_begins[0], loop_ends[0], loop_numbers[0]));
+        }
+    }
+
+    let mut next_index = 0usize;
+    let total = loop_begins.len();
+    for _ in 0..total.saturating_sub(1) {
+        loop_begins.remove(next_index);
+        let current_end = loop_ends.remove(next_index);
+        loop_flips.remove(next_index);
+        loop_numbers.remove(next_index);
+
+        if loop_begins.is_empty() {
+            break;
+        }
+
+        let current = ecoords[current_end];
+        next_index = 0;
+        let mut best_distance = point_distance_squared(current, ecoords[loop_begins[0]]);
+        for candidate in 1..loop_begins.len() {
+            let distance = point_distance_squared(current, ecoords[loop_begins[candidate]]);
+            if distance < best_distance {
+                best_distance = distance;
+                next_index = candidate;
+            }
+        }
+
+        if loop_flips[next_index] {
+            order.push((
+                loop_ends[next_index],
+                loop_begins[next_index],
+                loop_numbers[next_index],
+            ));
+        } else {
+            order.push((
+                loop_begins[next_index],
+                loop_ends[next_index],
+                loop_numbers[next_index],
+            ));
+        }
+    }
+
+    let mut sorted = Vec::new();
+    for (start, end, loop_number) in order {
+        append_segments_in_range(&ecoords, start, end, loop_number, accuracy, &mut sorted);
+    }
+
+    remove_tiny_segment_loops(sorted)
+}
+
+fn append_points_in_range(points: &mut Vec<Point>, start: usize, end: usize) {
+    if start <= end {
+        for index in start..=end {
+            points.push(points[index]);
+        }
+    } else {
+        for index in (end..=start).rev() {
+            points.push(points[index]);
+        }
+    }
+}
+
+fn signed_area(points: &[Point], start: usize, end: usize) -> f64 {
+    let mut area = 0.0;
+    let mut previous = points[start];
+    for point in points.iter().take(end + 1).skip(start + 1) {
+        area += (point.x - previous.x) * (point.y + previous.y);
+        previous = *point;
+    }
+    area
+}
+
+fn point_inside_polygon(point: Point, polygon: &[Point]) -> i32 {
+    if polygon.is_empty() {
+        return -1;
+    }
+
+    let mut inside = -1;
+    let mut previous = polygon[0];
+    for index in 0..=polygon.len() {
+        let current = polygon[index % polygon.len()];
+        if point.y > previous.y.min(current.y)
+            && point.y <= previous.y.max(current.y)
+            && point.x <= previous.x.max(current.x)
+        {
+            let mut x_intersection = previous.x;
+            if (previous.y - current.y).abs() > ZERO {
+                x_intersection = (point.y - previous.y) * (current.x - previous.x)
+                    / (current.y - previous.y)
+                    + previous.x;
+            }
+            if (previous.x - current.x).abs() < ZERO || point.x <= x_intersection {
+                inside *= -1;
+            }
+        }
+        previous = current;
+    }
+    inside
+}
+
+fn append_segments_in_range(
+    points: &[Point],
+    start: usize,
+    end: usize,
+    loop_number: usize,
+    accuracy: f64,
+    output: &mut Vec<EngraveSegment>,
+) {
+    let step = if start > end { -1isize } else { 1isize };
+    let first = points[start];
+    let mut collapsed_start = None;
+    let mut index = start as isize + step;
+
+    while (step > 0 && index <= end as isize) || (step < 0 && index >= end as isize) {
+        let previous_index = (index - step) as usize;
+        let segment_start = collapsed_start.unwrap_or(points[previous_index]);
+        let segment_end = points[index as usize];
+
+        if point_distance(segment_start, segment_end) >= ZERO {
+            output.push(EngraveSegment {
+                start: segment_start,
+                end: segment_end,
+                loop_id: loop_number,
+            });
+            collapsed_start = None;
+        } else {
+            collapsed_start = Some(segment_start);
+        }
+
+        index += step;
+    }
+
+    if let Some(segment_start) = collapsed_start {
+        let last_distance = point_distance(segment_start, first);
+        if last_distance <= accuracy
+            && output
+                .last()
+                .map(|segment| segment.loop_id == loop_number)
+                .unwrap_or(false)
+        {
+            if let Some(last) = output.last_mut() {
+                last.end = first;
+            }
+        } else {
+            output.push(EngraveSegment {
+                start: segment_start,
+                end: first,
+                loop_id: loop_number,
+            });
+        }
+    }
+}
+
+fn remove_tiny_segment_loops(segments: Vec<EngraveSegment>) -> Vec<EngraveSegment> {
+    let mut output = Vec::new();
+    let mut start = 0usize;
+    while start < segments.len() {
+        let loop_id = segments[start].loop_id;
+        let mut end = start + 1;
+        while end < segments.len() && segments[end].loop_id == loop_id {
+            end += 1;
+        }
+        if end - start >= 3 {
+            output.extend_from_slice(&segments[start..end]);
+        }
+        start = end;
+    }
+    output
+}
+
 #[derive(Debug, Clone, Copy)]
 struct PartitionLine {
     start: Point,
@@ -851,6 +1221,16 @@ mod tests {
         assert!(points.iter().any(|point| point.radius == 0.0));
         assert!(points.iter().any(|point| point.radius > 0.24));
         assert!(points.iter().any(|point| point.position.y > 0.2));
+    }
+
+    #[test]
+    fn image_sort_reverses_counter_clockwise_outer_loop() {
+        let sorted = sort_image_segments_for_vcarve(&square_segments(), 0.001);
+
+        assert_eq!(sorted[0].start, Point::new(0.0, 0.0));
+        assert_eq!(sorted[0].end, Point::new(0.0, 2.0));
+        assert_eq!(sorted[0].loop_id, sorted[1].loop_id);
+        assert!(point_distance(sorted[0].end, sorted[1].start) < ZERO);
     }
 
     #[test]

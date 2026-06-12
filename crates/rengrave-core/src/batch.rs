@@ -14,7 +14,10 @@ use crate::layout::{EngraveCircle, LayoutSettings, layout_text};
 use crate::project::{DocumentError, DocumentRequest, load_document};
 use crate::project::{InputKind, resolve_input_kind};
 use crate::settings::{LegacySetting, LegacySettings, get_legacy_bool};
-use crate::vcarve::{VCarveOptions, generate_vcarve_points_with_cancel};
+use crate::vcarve::{
+    VCarveCheckMode, VCarveOptions, generate_vcarve_points_with_cancel,
+    sort_image_segments_for_vcarve,
+};
 use crate::{FENGRAVE_VERSION, RENGRAVE_VERSION};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -399,7 +402,10 @@ fn write_layout_gcode(
         }));
     }
 
-    let vcarve_options = VCarveOptions::from_legacy(settings);
+    let mut vcarve_options = VCarveOptions::from_legacy(settings);
+    if settings.get_last("input_type") == Some("image") {
+        vcarve_options.check_mode = VCarveCheckMode::All;
+    }
     if vcarve_options.bit_shape == crate::vcarve::BitShape::Flat {
         progress(BatchProgress::WritingEngrave);
         return Ok(Some(GeneratedToolpaths {
@@ -412,8 +418,15 @@ fn write_layout_gcode(
 
     check_canceled(cancel)?;
     progress(BatchProgress::CalculatingVCarve);
+    let sorted_image_segments;
+    let vcarve_segments = if settings.get_last("input_type") == Some("image") {
+        sorted_image_segments = sort_image_segments_for_vcarve(segments, gcode_options.accuracy);
+        &sorted_image_segments
+    } else {
+        segments
+    };
     let points = generate_vcarve_points_with_cancel(
-        segments,
+        vcarve_segments,
         &vcarve_options,
         gcode_options.accuracy,
         cancel,
@@ -435,7 +448,7 @@ fn write_layout_gcode(
                 CleanupBit::VBit => BatchProgress::CalculatingVBitCleanup,
             });
             let cleanup_points = generate_cleanup_points_with_cancel(
-                segments,
+                vcarve_segments,
                 &cleanup_options,
                 &vcarve_options,
                 bit,
@@ -992,6 +1005,44 @@ mod tests {
         assert!(output.gcode.contains("(fengrave_set input_type  image )"));
         assert!(!output.gcode.contains("(Engrave Text:"));
         assert!(output.gcode.contains("G1 X0.0000 Y1.9900"));
+    }
+
+    #[test]
+    fn batch_image_vcarve_sorts_loop_winding_before_sampling() {
+        let path = std::env::temp_dir().join(format!(
+            "rengrave-image-vcarve-sort-{}-{}.dxf",
+            std::process::id(),
+            "batch"
+        ));
+        fs::write(
+            &path,
+            "0\nSECTION\n0\nLWPOLYLINE\n70\n1\n10\n0\n20\n0\n10\n1\n20\n0\n10\n1\n20\n1\n10\n0\n20\n1\n0\nENDSEC\n",
+        )
+        .unwrap();
+
+        let output = prepare_batch_output(&BatchRequest {
+            batch: true,
+            font_or_image: Some(path.clone()),
+            settings_overrides: vec![
+                LegacySetting::new("cut_type", "v-carve", false),
+                LegacySetting::new("YSCALE", "0.1", false),
+                LegacySetting::new("v_step_len", "0.01", false),
+            ],
+            ..BatchRequest::default()
+        })
+        .unwrap();
+
+        let _ = fs::remove_file(path);
+        let min_z = output
+            .gcode
+            .lines()
+            .flat_map(|line| line.split_whitespace())
+            .filter_map(|word| word.strip_prefix('Z'))
+            .filter_map(|value| value.parse::<f64>().ok())
+            .fold(0.0_f64, f64::min);
+
+        assert!(output.warnings.is_empty());
+        assert!(min_z > -0.2, "unexpected outside-cut depth: {min_z}");
     }
 
     #[test]
