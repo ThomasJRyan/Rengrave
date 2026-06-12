@@ -59,7 +59,7 @@
 (fengrave_set bmp_turds   2 )
 (fengrave_set bmp_alpha   1 )
 (fengrave_set bmp_optto   0.2 )
-(fengrave_set gpre        G17 G64 P0.001 M3 S3000 )
+(fengrave_set gpre        G17 M3 S3000 )
 (fengrave_set gpost       M5|M2 )
 (fengrave_set input_type  text )
 (fengrave_set clean_dia   .25 )
@@ -74,7 +74,7 @@
 (#########################################################)
 G90
 G20
-G17 G64 P0.001 M3 S3000
+G17 M3 S3000
 F5.00
 G0 Z0.2500
 G0 X0.0000 Y0.0000

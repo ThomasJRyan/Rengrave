@@ -2,6 +2,9 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+pub const DEFAULT_GCODE_PREAMBLE: &str = "G17 M3 S3000";
+pub const DEFAULT_GCODE_POSTAMBLE: &str = "M5|M2";
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LegacySetting {
     pub key: String,
@@ -156,8 +159,8 @@ pub fn default_legacy_settings() -> LegacySettings {
         ("bmp_turds", "2"),
         ("bmp_alpha", "1"),
         ("bmp_optto", "0.2"),
-        ("gpre", "G17 G64 P0.001 M3 S3000"),
-        ("gpost", "M5|M2"),
+        ("gpre", DEFAULT_GCODE_PREAMBLE),
+        ("gpost", DEFAULT_GCODE_POSTAMBLE),
         ("input_type", "text"),
         ("clean_dia", ".25"),
         ("clean_step", "50"),

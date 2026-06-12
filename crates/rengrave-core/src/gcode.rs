@@ -1,6 +1,8 @@
 use crate::cleanup::{CleanupBit, CleanupOptions, CleanupPoint};
 use crate::layout::{EngraveCircle, EngraveSegment};
-use crate::settings::{LegacySettings, get_legacy_bool};
+use crate::settings::{
+    DEFAULT_GCODE_POSTAMBLE, DEFAULT_GCODE_PREAMBLE, LegacySettings, get_legacy_bool,
+};
 use crate::vcarve::{VCarveOptions, VCarvePoint};
 
 const ZERO: f64 = 0.00001;
@@ -31,9 +33,12 @@ impl GcodeOptions {
             units: Units::parse(settings.get_last("units").unwrap_or("in")),
             preamble: settings
                 .get_last("gpre")
-                .unwrap_or("G17 G64 P0.001 M3 S3000")
+                .unwrap_or(DEFAULT_GCODE_PREAMBLE)
                 .to_owned(),
-            postamble: settings.get_last("gpost").unwrap_or("M5|M2").to_owned(),
+            postamble: settings
+                .get_last("gpost")
+                .unwrap_or(DEFAULT_GCODE_POSTAMBLE)
+                .to_owned(),
             variables_disabled: get_legacy_bool(settings, "var_dis", true),
             arc_fit: ArcFit::parse(settings.get_last("arc_fit").unwrap_or("none")),
         }
@@ -1058,7 +1063,7 @@ mod tests {
             plunge: 0.0,
             accuracy: 0.001,
             units: Units::Inch,
-            preamble: "G17 G64 P0.001 M3 S3000".to_owned(),
+            preamble: DEFAULT_GCODE_PREAMBLE.to_owned(),
             postamble: "M5|M2".to_owned(),
             variables_disabled: true,
             arc_fit: ArcFit::None,
@@ -1087,7 +1092,7 @@ mod tests {
             plunge: 2.0,
             accuracy: 0.001,
             units: Units::Inch,
-            preamble: "G17 G64 P0.001 M3 S3000".to_owned(),
+            preamble: DEFAULT_GCODE_PREAMBLE.to_owned(),
             postamble: "M5|M2".to_owned(),
             variables_disabled: true,
             arc_fit: ArcFit::None,
@@ -1119,7 +1124,7 @@ mod tests {
             plunge: 0.0,
             accuracy: 0.01,
             units: Units::Inch,
-            preamble: "G17 G64 P0.001 M3 S3000".to_owned(),
+            preamble: DEFAULT_GCODE_PREAMBLE.to_owned(),
             postamble: "M5|M2".to_owned(),
             variables_disabled: true,
             arc_fit: ArcFit::Center,
@@ -1142,7 +1147,7 @@ mod tests {
             plunge: 0.0,
             accuracy: 0.01,
             units: Units::Inch,
-            preamble: "G17 G64 P0.001 M3 S3000".to_owned(),
+            preamble: DEFAULT_GCODE_PREAMBLE.to_owned(),
             postamble: "M5|M2".to_owned(),
             variables_disabled: true,
             arc_fit: ArcFit::Radius,
@@ -1163,7 +1168,7 @@ mod tests {
             plunge: 0.0,
             accuracy: 0.001,
             units: Units::Inch,
-            preamble: "G17 G64 P0.001 M3 S3000".to_owned(),
+            preamble: DEFAULT_GCODE_PREAMBLE.to_owned(),
             postamble: "M5|M2".to_owned(),
             variables_disabled: false,
             arc_fit: ArcFit::None,
@@ -1191,7 +1196,7 @@ mod tests {
             plunge: 0.0,
             accuracy: 0.001,
             units: Units::Inch,
-            preamble: "G17 G64 P0.001 M3 S3000".to_owned(),
+            preamble: DEFAULT_GCODE_PREAMBLE.to_owned(),
             postamble: "M5|M2".to_owned(),
             variables_disabled: true,
             arc_fit: ArcFit::None,
@@ -1227,7 +1232,7 @@ mod tests {
             plunge: 0.0,
             accuracy: 0.001,
             units: Units::Inch,
-            preamble: "G17 G64 P0.001 M3 S3000".to_owned(),
+            preamble: DEFAULT_GCODE_PREAMBLE.to_owned(),
             postamble: "M5|M2".to_owned(),
             variables_disabled: true,
             arc_fit: ArcFit::None,
@@ -1274,7 +1279,7 @@ mod tests {
             plunge: 0.0,
             accuracy: 0.001,
             units: Units::Inch,
-            preamble: "G17 G64 P0.001 M3 S3000".to_owned(),
+            preamble: DEFAULT_GCODE_PREAMBLE.to_owned(),
             postamble: "M5|M2".to_owned(),
             variables_disabled: true,
             arc_fit: ArcFit::None,
@@ -1315,7 +1320,7 @@ mod tests {
             plunge: 1.0,
             accuracy: 0.001,
             units: Units::Inch,
-            preamble: "G17 G64 P0.001 M3 S3000".to_owned(),
+            preamble: DEFAULT_GCODE_PREAMBLE.to_owned(),
             postamble: "M5|M2".to_owned(),
             variables_disabled: true,
             arc_fit: ArcFit::None,
@@ -1362,7 +1367,7 @@ mod tests {
             plunge: 0.0,
             accuracy: 0.001,
             units: Units::Inch,
-            preamble: "G17 G64 P0.001 M3 S3000".to_owned(),
+            preamble: DEFAULT_GCODE_PREAMBLE.to_owned(),
             postamble: "M5|M2".to_owned(),
             variables_disabled: true,
             arc_fit: ArcFit::None,

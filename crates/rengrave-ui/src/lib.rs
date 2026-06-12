@@ -22,7 +22,8 @@ use rengrave_core::font::{Font, Stroke, read_cxf, read_ttf};
 use rengrave_core::geometry::{Point, ViewTransform};
 use rengrave_core::project::{DocumentRequest, RengraveDocument, load_document};
 use rengrave_core::settings::{
-    LegacySetting, LegacySettings, default_legacy_settings, get_legacy_bool, legacy_bool_value,
+    DEFAULT_GCODE_POSTAMBLE, DEFAULT_GCODE_PREAMBLE, LegacySetting, LegacySettings,
+    default_legacy_settings, get_legacy_bool, legacy_bool_value,
 };
 use rfd::FileDialog;
 
@@ -1781,9 +1782,12 @@ impl UiControls {
             bmp_optto: setting_f64(settings, "bmp_optto", 0.2),
             gpre: settings
                 .get_last("gpre")
-                .unwrap_or("G17 G64 P0.001 M3 S3000")
+                .unwrap_or(DEFAULT_GCODE_PREAMBLE)
                 .to_owned(),
-            gpost: settings.get_last("gpost").unwrap_or("M5|M2").to_owned(),
+            gpost: settings
+                .get_last("gpost")
+                .unwrap_or(DEFAULT_GCODE_POSTAMBLE)
+                .to_owned(),
             flip: get_legacy_bool(settings, "flip", false),
             mirror: get_legacy_bool(settings, "mirror", false),
             outer: get_legacy_bool(settings, "outer", true),

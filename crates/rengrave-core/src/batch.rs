@@ -900,7 +900,8 @@ mod tests {
 
         let _ = fs::remove_file(path);
         assert!(output.warnings.is_empty());
-        assert!(output.gcode.contains("G90\nG20\nG17 G64 P0.001 M3 S3000"));
+        assert!(output.gcode.contains("G90\nG20\nG17 M3 S3000"));
+        assert!(!output.gcode.contains("G64"));
         assert!(output.gcode.contains("G1 Z-0.0050"));
         assert!(output.gcode.contains("G1 X0.0000 Y1.9900"));
     }
