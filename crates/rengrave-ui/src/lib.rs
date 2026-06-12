@@ -27,6 +27,7 @@ use rengrave_core::settings::{
 use rfd::FileDialog;
 
 const DEFAULT_PREVIEW_ZOOM: f64 = 80.0;
+const MM_PER_INCH: f64 = 25.4;
 const PREVIEW_FIT_PADDING: f32 = 24.0;
 const OUTPUT_PREVIEW_CHARS: usize = 8000;
 const INPUT_PREVIEW_VECTOR_HEIGHT: f32 = 180.0;
@@ -143,6 +144,11 @@ impl RengraveApp {
         } else {
             "Startup warning".to_owned()
         };
+        let use_metric_defaults = gcode_file.is_none();
+        let mut controls = UiControls::from_settings(&document.settings);
+        if use_metric_defaults {
+            controls.convert_units(UnitsChoice::default_ui());
+        }
         let (default_gcode_path, default_svg_path, default_dxf_path) =
             default_output_paths(&default_dir);
         let mut app = Self {
@@ -157,7 +163,7 @@ impl RengraveApp {
             settings_path: path_to_text(&gcode_file),
             input_path: path_to_text(&display_input_path),
             default_dir_path: path_to_text(&default_dir),
-            controls: UiControls::from_settings(&document.settings),
+            controls,
             gcode: String::new(),
             svg: None,
             dxf: None,
@@ -299,7 +305,7 @@ impl RengraveApp {
 
     fn reset_controls_to_defaults(&mut self) {
         let defaults = default_legacy_settings();
-        self.controls = UiControls::from_settings(&defaults);
+        self.controls = default_ui_controls();
         self.show_toolpath = get_legacy_bool(&defaults, "show_v_path", true);
         self.show_rapids = true;
         self.show_cleanup = true;
@@ -896,18 +902,20 @@ impl eframe::App for RengraveApp {
                             CutTypeChoice::VCarve.label(),
                         );
                     });
+                    let mut selected_units = self.controls.units;
                     combo_row(ui, "Units", self.controls.units.label(), |ui| {
                         ui.selectable_value(
-                            &mut self.controls.units,
+                            &mut selected_units,
                             UnitsChoice::Inch,
                             UnitsChoice::Inch.label(),
                         );
                         ui.selectable_value(
-                            &mut self.controls.units,
+                            &mut selected_units,
                             UnitsChoice::Mm,
                             UnitsChoice::Mm.label(),
                         );
                     });
+                    self.controls.convert_units(selected_units);
                     combo_row(ui, "Justify", self.controls.justify.label(), |ui| {
                         for value in JustifyChoice::ALL {
                             ui.selectable_value(&mut self.controls.justify, value, value.label());
@@ -1717,9 +1725,13 @@ struct UiControls {
 
 impl UiControls {
     fn from_settings(settings: &LegacySettings) -> Self {
-        Self {
+        let explicit_units = settings.get_last("units");
+        let source_units = explicit_units
+            .map(UnitsChoice::parse)
+            .unwrap_or(UnitsChoice::Inch);
+        let mut controls = Self {
             cut_type: CutTypeChoice::parse(settings.get_last("cut_type").unwrap_or("engrave")),
-            units: UnitsChoice::parse(settings.get_last("units").unwrap_or("in")),
+            units: source_units,
             bit_shape: BitShapeChoice::parse(settings.get_last("bit_shape").unwrap_or("VBIT")),
             arc_fit: ArcFitChoice::parse(settings.get_last("arc_fit").unwrap_or("none")),
             height_calc: HeightCalcChoice::parse(settings.get_last("H_CALC").unwrap_or("max_use")),
@@ -1787,7 +1799,40 @@ impl UiControls {
             v_pplot: get_legacy_bool(settings, "v_pplot", false),
             show_thick: get_legacy_bool(settings, "show_thick", true),
             show_v_area: get_legacy_bool(settings, "show_v_area", true),
+        };
+        if explicit_units.is_none() {
+            controls.convert_units(UnitsChoice::default_ui());
         }
+        controls
+    }
+
+    fn convert_units(&mut self, target_units: UnitsChoice) {
+        if self.units == target_units {
+            return;
+        }
+
+        let factor = self.units.conversion_factor_to(target_units);
+        self.units = target_units;
+
+        self.yscale *= factor;
+        self.text_radius *= factor;
+        self.safe_z *= factor;
+        self.depth_z *= factor;
+        self.stroke_thickness *= factor;
+        self.xorigin *= factor;
+        self.yorigin *= factor;
+        self.accuracy *= factor;
+        self.feed *= factor;
+        self.plunge *= factor;
+        self.boxgap *= factor;
+        self.v_bit_dia *= factor;
+        self.v_step_len *= factor;
+        self.allowance *= factor;
+        self.v_max_cut *= factor;
+        self.v_rough_stk *= factor;
+        self.v_depth_lim *= factor;
+        self.clean_dia *= factor;
+        self.clean_v *= factor;
     }
 
     fn overrides(&self) -> Vec<LegacySetting> {
@@ -2020,6 +2065,12 @@ impl UiControls {
     }
 }
 
+fn default_ui_controls() -> UiControls {
+    let mut controls = UiControls::from_settings(&default_legacy_settings());
+    controls.convert_units(UnitsChoice::default_ui());
+    controls
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum HeightCalcChoice {
     MaxUse,
@@ -2178,6 +2229,10 @@ enum UnitsChoice {
 }
 
 impl UnitsChoice {
+    fn default_ui() -> Self {
+        Self::Mm
+    }
+
     fn parse(value: &str) -> Self {
         if value == "mm" { Self::Mm } else { Self::Inch }
     }
@@ -2193,6 +2248,14 @@ impl UnitsChoice {
         match self {
             Self::Inch => "Inch",
             Self::Mm => "mm",
+        }
+    }
+
+    fn conversion_factor_to(self, target: Self) -> f64 {
+        match (self, target) {
+            (Self::Inch, Self::Mm) => MM_PER_INCH,
+            (Self::Mm, Self::Inch) => 1.0 / MM_PER_INCH,
+            _ => 1.0,
         }
     }
 }
@@ -5142,6 +5205,13 @@ fn draw_dashed_line(
 mod tests {
     use super::*;
 
+    fn assert_close(actual: f64, expected: f64) {
+        assert!(
+            (actual - expected).abs() < 1e-9,
+            "expected {expected}, got {actual}"
+        );
+    }
+
     #[test]
     fn parses_linear_gcode_moves_for_preview() {
         let motion = parse_preview_motion(
@@ -6719,6 +6789,111 @@ mod tests {
         assert!(get_legacy_bool(&settings, "show_v_path", false));
         assert!(get_legacy_bool(&settings, "show_box", false));
         assert!(get_legacy_bool(&settings, "show_axis", false));
+    }
+
+    #[test]
+    fn ui_default_controls_use_millimeters() {
+        let controls = default_ui_controls();
+
+        assert_eq!(controls.units, UnitsChoice::Mm);
+        assert_close(controls.yscale, 50.8);
+        assert_close(controls.safe_z, 6.35);
+        assert_close(controls.depth_z, -0.127);
+        assert_close(controls.stroke_thickness, 0.254);
+        assert_close(controls.accuracy, 0.0254);
+        assert_close(controls.feed, 127.0);
+        assert_close(controls.boxgap, 6.35);
+        assert_close(controls.v_bit_dia, 12.7);
+        assert_close(controls.v_step_len, 0.254);
+        assert_close(controls.v_max_cut, -25.4);
+        assert_close(controls.clean_dia, 6.35);
+        assert_close(controls.clean_v, 1.27);
+    }
+
+    #[test]
+    fn ui_controls_convert_units_bidirectionally() {
+        let mut controls = UiControls::from_settings(&default_legacy_settings());
+        controls.yscale = 2.0;
+        controls.xscale_percent = 111.0;
+        controls.line_space = 1.3;
+        controls.angle_degrees = 15.0;
+        controls.text_radius = 1.5;
+        controls.safe_z = 0.25;
+        controls.depth_z = -0.125;
+        controls.stroke_thickness = 0.02;
+        controls.xorigin = 3.0;
+        controls.yorigin = 4.0;
+        controls.segarc = 7.0;
+        controls.accuracy = 0.002;
+        controls.feed = 7.5;
+        controls.plunge = 1.25;
+        controls.boxgap = 0.5;
+        controls.v_bit_angle = 55.0;
+        controls.v_bit_dia = 0.375;
+        controls.v_step_len = 0.02;
+        controls.v_drv_crner = 120.0;
+        controls.v_stp_crner = 220.0;
+        controls.allowance = 0.01;
+        controls.v_max_cut = -0.25;
+        controls.v_rough_stk = 0.015;
+        controls.v_depth_lim = -0.5;
+        controls.clean_dia = 0.125;
+        controls.clean_step = 45.0;
+        controls.clean_v = 0.03;
+
+        controls.convert_units(UnitsChoice::Mm);
+
+        assert_eq!(controls.units, UnitsChoice::Mm);
+        assert_close(controls.yscale, 50.8);
+        assert_close(controls.text_radius, 38.1);
+        assert_close(controls.safe_z, 6.35);
+        assert_close(controls.depth_z, -3.175);
+        assert_close(controls.stroke_thickness, 0.508);
+        assert_close(controls.xorigin, 76.2);
+        assert_close(controls.yorigin, 101.6);
+        assert_close(controls.accuracy, 0.0508);
+        assert_close(controls.feed, 190.5);
+        assert_close(controls.plunge, 31.75);
+        assert_close(controls.boxgap, 12.7);
+        assert_close(controls.v_bit_dia, 9.525);
+        assert_close(controls.v_step_len, 0.508);
+        assert_close(controls.allowance, 0.254);
+        assert_close(controls.v_max_cut, -6.35);
+        assert_close(controls.v_rough_stk, 0.381);
+        assert_close(controls.v_depth_lim, -12.7);
+        assert_close(controls.clean_dia, 3.175);
+        assert_close(controls.clean_v, 0.762);
+        assert_close(controls.xscale_percent, 111.0);
+        assert_close(controls.line_space, 1.3);
+        assert_close(controls.angle_degrees, 15.0);
+        assert_close(controls.segarc, 7.0);
+        assert_close(controls.v_bit_angle, 55.0);
+        assert_close(controls.v_drv_crner, 120.0);
+        assert_close(controls.v_stp_crner, 220.0);
+        assert_close(controls.clean_step, 45.0);
+
+        controls.convert_units(UnitsChoice::Inch);
+
+        assert_eq!(controls.units, UnitsChoice::Inch);
+        assert_close(controls.yscale, 2.0);
+        assert_close(controls.text_radius, 1.5);
+        assert_close(controls.safe_z, 0.25);
+        assert_close(controls.depth_z, -0.125);
+        assert_close(controls.stroke_thickness, 0.02);
+        assert_close(controls.xorigin, 3.0);
+        assert_close(controls.yorigin, 4.0);
+        assert_close(controls.accuracy, 0.002);
+        assert_close(controls.feed, 7.5);
+        assert_close(controls.plunge, 1.25);
+        assert_close(controls.boxgap, 0.5);
+        assert_close(controls.v_bit_dia, 0.375);
+        assert_close(controls.v_step_len, 0.02);
+        assert_close(controls.allowance, 0.01);
+        assert_close(controls.v_max_cut, -0.25);
+        assert_close(controls.v_rough_stk, 0.015);
+        assert_close(controls.v_depth_lim, -0.5);
+        assert_close(controls.clean_dia, 0.125);
+        assert_close(controls.clean_v, 0.03);
     }
 
     #[test]
