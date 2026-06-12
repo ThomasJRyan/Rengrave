@@ -71,6 +71,7 @@ struct RengraveApp {
     settings_path: String,
     input_path: String,
     default_dir_path: String,
+    tool_view: ToolView,
     controls: UiControls,
     gcode: String,
     svg: Option<String>,
@@ -138,6 +139,8 @@ impl RengraveApp {
             }
         };
         let display_input_path = document_input_path_for_display(&font_or_image, &document);
+        let tool_view =
+            ToolView::from_settings_and_path(&document.settings, display_input_path.as_deref());
         let input_catalog =
             InputCatalog::scan(input_catalog_start_dir(&display_input_path, &default_dir));
         let status = if document.warnings.is_empty() {
@@ -150,6 +153,7 @@ impl RengraveApp {
         if use_metric_defaults {
             controls.convert_units(UnitsChoice::default_ui());
         }
+        controls.cut_type = tool_view.cut_type();
         let (default_gcode_path, default_svg_path, default_dxf_path) =
             default_output_paths(&default_dir);
         let mut app = Self {
@@ -164,6 +168,7 @@ impl RengraveApp {
             settings_path: path_to_text(&gcode_file),
             input_path: path_to_text(&display_input_path),
             default_dir_path: path_to_text(&default_dir),
+            tool_view,
             controls,
             gcode: String::new(),
             svg: None,
@@ -261,6 +266,11 @@ impl RengraveApp {
                 self.text = document.text;
                 self.input_path = path_to_text(&display_input_path);
                 self.controls = UiControls::from_settings(&document.settings);
+                self.tool_view = ToolView::from_settings_and_path(
+                    &document.settings,
+                    display_input_path.as_deref(),
+                );
+                self.controls.cut_type = self.tool_view.cut_type();
                 self.show_toolpath = get_legacy_bool(&document.settings, "show_v_path", true);
                 self.show_bounds = get_legacy_bool(&document.settings, "show_box", true);
                 self.show_axes = get_legacy_bool(&document.settings, "show_axis", true);
@@ -307,6 +317,7 @@ impl RengraveApp {
     fn reset_controls_to_defaults(&mut self) {
         let defaults = default_legacy_settings();
         self.controls = default_ui_controls();
+        self.controls.cut_type = self.tool_view.cut_type();
         self.show_toolpath = get_legacy_bool(&defaults, "show_v_path", true);
         self.show_rapids = true;
         self.show_cleanup = true;
@@ -615,6 +626,7 @@ impl RengraveApp {
             }
             FileBrowserTarget::Input => {
                 self.input_path = text;
+                self.update_tool_view_for_input_path(&path);
                 self.refresh_input_catalog();
             }
             FileBrowserTarget::DefaultDir => {
@@ -644,10 +656,595 @@ impl RengraveApp {
     }
 
     fn select_input_catalog_entry(&mut self, path: PathBuf, ctx: egui::Context) {
+        self.update_tool_view_for_input_path(&path);
         self.input_path = path.display().to_string();
         self.status = "Input selected".to_owned();
         self.save_preferences();
         self.start_calculation(ctx);
+    }
+
+    fn set_tool_view(&mut self, tool_view: ToolView) {
+        if self.tool_view == tool_view {
+            self.controls.cut_type = tool_view.cut_type();
+            return;
+        }
+        self.tool_view = tool_view;
+        self.controls.cut_type = tool_view.cut_type();
+        self.status = format!("{} selected", tool_view.label());
+    }
+
+    fn update_tool_view_for_input_path(&mut self, path: &Path) {
+        let Some(kind) = InputCatalogKind::from_path(path) else {
+            return;
+        };
+        let next = self.tool_view.with_input_kind(kind);
+        self.set_tool_view(next);
+    }
+
+    fn show_tool_view_tabs(&mut self, ui: &mut egui::Ui) {
+        let mut selected = self.tool_view;
+        ui.horizontal_wrapped(|ui| {
+            for tool_view in ToolView::ALL {
+                if ui
+                    .selectable_label(selected == tool_view, tool_view.label())
+                    .clicked()
+                {
+                    selected = tool_view;
+                }
+            }
+        });
+        if selected != self.tool_view {
+            self.set_tool_view(selected);
+        }
+    }
+
+    fn show_workflow_input_panel(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Input");
+        self.show_input_paths(ui);
+
+        if self.tool_view.uses_text() {
+            ui.separator();
+            self.show_text_input_panel(ui);
+        }
+
+        ui.separator();
+        self.show_input_catalog_panel(ui);
+
+        ui.separator();
+        self.show_input_preview_panel(ui);
+
+        ui.separator();
+        ui.label(format!("Legacy keys: {}", self.settings_count));
+    }
+
+    fn show_input_paths(&mut self, ui: &mut egui::Ui) {
+        let settings_path_action = path_row(ui, "Settings", &mut self.settings_path);
+        if settings_path_action.browse_clicked {
+            self.choose_path(FileBrowserTarget::Settings, ui.ctx().clone());
+        }
+        let input_path_action = path_row(ui, "Input", &mut self.input_path);
+        if input_path_action.browse_clicked {
+            self.choose_path(FileBrowserTarget::Input, ui.ctx().clone());
+        }
+        let default_dir_action = path_row(ui, "Default dir", &mut self.default_dir_path);
+        if default_dir_action.browse_clicked {
+            self.choose_path(FileBrowserTarget::DefaultDir, ui.ctx().clone());
+        }
+        if settings_path_action.value_changed
+            || input_path_action.value_changed
+            || default_dir_action.value_changed
+        {
+            self.save_preferences();
+        }
+        ui.horizontal_wrapped(|ui| {
+            if ui.button("Load").clicked() {
+                self.reload_document(ui.ctx().clone());
+            }
+            if ui
+                .add_enabled(
+                    !self.settings_path.trim().is_empty(),
+                    egui::Button::new("Save Settings"),
+                )
+                .clicked()
+            {
+                self.save_current_settings();
+            }
+            if ui.button("Save As").clicked() {
+                self.choose_path(FileBrowserTarget::SettingsOutput, ui.ctx().clone());
+            }
+            if ui.button("Calculate").clicked() {
+                self.start_calculation(ui.ctx().clone());
+            }
+        });
+    }
+
+    fn show_text_input_panel(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Text");
+        ui.add_sized(
+            [ui.available_width(), 120.0],
+            egui::TextEdit::multiline(&mut self.text),
+        );
+    }
+
+    fn show_input_catalog_panel(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.heading("Catalog");
+            if ui.button("Scan").clicked() {
+                self.refresh_input_catalog();
+            }
+            if let Some(dir) = &self.input_catalog.dir {
+                ui.monospace(dir.display().to_string());
+            }
+        });
+        if let Some(error) = &self.input_catalog.error {
+            ui.colored_label(egui::Color32::from_rgb(225, 176, 84), error);
+        }
+        if self.input_catalog.entries.is_empty() {
+            ui.label("No supported files found");
+            return;
+        }
+
+        let visible_entries = visible_input_catalog_entries_for_tool(
+            &self.input_catalog.entries,
+            self.input_catalog_filter,
+            self.tool_view,
+        );
+        if visible_entries.is_empty() {
+            ui.label("No compatible files found");
+            return;
+        }
+
+        egui::ScrollArea::vertical()
+            .max_height(180.0)
+            .show(ui, |ui| {
+                for entry in visible_entries {
+                    let selected = path_from_text(&self.input_path).as_ref() == Some(&entry.path);
+                    let label = format!(
+                        "{}  {}  {}",
+                        entry.kind.label(),
+                        entry.name,
+                        format_bytes(entry.size_bytes)
+                    );
+                    if ui.selectable_label(selected, label).clicked() {
+                        self.select_input_catalog_entry(entry.path, ui.ctx().clone());
+                    }
+                }
+            });
+    }
+
+    fn show_input_preview_panel(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.heading("Preview");
+            if ui.button("Refresh").clicked() {
+                self.reload_input_preview();
+            }
+        });
+        if self.tool_view.uses_text()
+            && input_preview_accepts_sample(path_from_text(&self.input_path).as_deref())
+        {
+            let sample_action = text_row(ui, "Sample", &mut self.preview_sample_text);
+            if sample_action.value_changed {
+                self.save_preferences();
+            }
+            if ui.button("Use engraving text").clicked() {
+                self.preview_sample_text.clear();
+                self.save_preferences();
+            }
+        }
+        self.ensure_input_preview();
+        draw_input_preview(ui, &mut self.input_preview);
+    }
+
+    fn show_workflow_settings_panel(&mut self, ui: &mut egui::Ui) {
+        ui.heading(self.tool_view.settings_heading());
+        self.show_units_row(ui);
+
+        ui.separator();
+        self.show_layout_settings(ui);
+
+        ui.separator();
+        self.show_machine_settings(ui);
+
+        if self.tool_view.uses_image() && input_path_requires_potrace(&self.input_path) {
+            ui.separator();
+            self.show_bitmap_settings(ui);
+        }
+
+        if self.tool_view.uses_vcarve() {
+            ui.separator();
+            self.show_vcarve_settings(ui);
+            ui.separator();
+            self.show_multipass_settings(ui);
+            ui.separator();
+            self.show_cleanup_settings(ui);
+        }
+
+        ui.separator();
+        self.show_output_controls(ui);
+
+        ui.separator();
+        self.show_preview_controls(ui);
+
+        ui.separator();
+        self.show_advanced_settings(ui);
+    }
+
+    fn show_units_row(&mut self, ui: &mut egui::Ui) {
+        let mut selected_units = self.controls.units;
+        combo_row(ui, "Units", self.controls.units.label(), |ui| {
+            ui.selectable_value(
+                &mut selected_units,
+                UnitsChoice::Inch,
+                UnitsChoice::Inch.label(),
+            );
+            ui.selectable_value(
+                &mut selected_units,
+                UnitsChoice::Mm,
+                UnitsChoice::Mm.label(),
+            );
+        });
+        self.controls.convert_units(selected_units);
+    }
+
+    fn show_layout_settings(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.heading("Layout");
+            if ui.button("Defaults").clicked() {
+                self.reset_controls_to_defaults();
+            }
+        });
+        combo_row(ui, "Origin", self.controls.origin.label(), |ui| {
+            for value in OriginChoice::ALL {
+                ui.selectable_value(&mut self.controls.origin, value, value.label());
+            }
+        });
+        number_row(ui, "Height", &mut self.controls.yscale, 0.05);
+        number_row(ui, "Width %", &mut self.controls.xscale_percent, 1.0);
+        number_row(ui, "X origin", &mut self.controls.xorigin, 0.01);
+        number_row(ui, "Y origin", &mut self.controls.yorigin, 0.01);
+
+        if self.tool_view.uses_text() {
+            combo_row(ui, "Justify", self.controls.justify.label(), |ui| {
+                for value in JustifyChoice::ALL {
+                    ui.selectable_value(&mut self.controls.justify, value, value.label());
+                }
+            });
+            number_row(ui, "Line space", &mut self.controls.line_space, 0.05);
+            number_row(
+                ui,
+                "Character space %",
+                &mut self.controls.char_space_percent,
+                1.0,
+            );
+            number_row(
+                ui,
+                "Word space %",
+                &mut self.controls.word_space_percent,
+                1.0,
+            );
+            number_row(ui, "Text angle", &mut self.controls.angle_degrees, 1.0);
+            number_row(ui, "Text radius", &mut self.controls.text_radius, 0.05);
+            ui.horizontal_wrapped(|ui| {
+                ui.checkbox(&mut self.controls.outer, "Outer");
+                ui.checkbox(&mut self.controls.upper, "Upper");
+            });
+        } else {
+            let mut use_image_size = self.controls.use_image_size;
+            if ui.checkbox(&mut use_image_size, "Image size").changed() {
+                let input_path = path_from_text(&self.input_path);
+                let image_height =
+                    image_preview_model_height(input_path.as_deref(), &self.input_preview.data);
+                if let Some(converted_yscale) =
+                    convert_image_size_yscale(self.controls.yscale, use_image_size, image_height)
+                {
+                    self.controls.yscale = converted_yscale;
+                    self.status = "Image size scale converted".to_owned();
+                }
+                self.controls.use_image_size = use_image_size;
+            }
+        }
+
+        ui.horizontal_wrapped(|ui| {
+            ui.checkbox(&mut self.controls.flip, "Flip");
+            ui.checkbox(&mut self.controls.mirror, "Mirror");
+            ui.checkbox(&mut self.controls.plotbox, "Box");
+        });
+        number_row(ui, "Box gap", &mut self.controls.boxgap, 0.01);
+    }
+
+    fn show_machine_settings(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Cut");
+        number_row(ui, "Safe Z", &mut self.controls.safe_z, 0.01);
+        if !self.tool_view.uses_vcarve() {
+            number_row(ui, "Cut Z", &mut self.controls.depth_z, 0.001);
+            number_row(ui, "Stroke", &mut self.controls.stroke_thickness, 0.001);
+        }
+        number_row(ui, "Feed", &mut self.controls.feed, 0.5);
+        number_row(ui, "Plunge", &mut self.controls.plunge, 0.5);
+        number_row(ui, "Accuracy", &mut self.controls.accuracy, 0.0005);
+        if !self.tool_view.uses_vcarve() {
+            combo_row(ui, "Arc fit", self.controls.arc_fit.label(), |ui| {
+                ui.selectable_value(
+                    &mut self.controls.arc_fit,
+                    ArcFitChoice::NoFit,
+                    ArcFitChoice::NoFit.label(),
+                );
+                ui.selectable_value(
+                    &mut self.controls.arc_fit,
+                    ArcFitChoice::Center,
+                    ArcFitChoice::Center.label(),
+                );
+                ui.selectable_value(
+                    &mut self.controls.arc_fit,
+                    ArcFitChoice::Radius,
+                    ArcFitChoice::Radius.label(),
+                );
+            });
+        }
+    }
+
+    fn show_bitmap_settings(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Bitmap Trace");
+        ui.horizontal_wrapped(|ui| {
+            let color = if self.potrace_status.available {
+                egui::Color32::from_rgb(94, 176, 132)
+            } else {
+                egui::Color32::from_rgb(225, 176, 84)
+            };
+            ui.colored_label(color, &self.potrace_status.message);
+            if ui.button("Refresh").clicked() {
+                self.refresh_potrace_status();
+            }
+        });
+        combo_row(
+            ui,
+            "Turn policy",
+            self.controls.bmp_turn_policy.label(),
+            |ui| {
+                for value in BitmapTurnPolicy::ALL {
+                    ui.selectable_value(&mut self.controls.bmp_turn_policy, value, value.label());
+                }
+            },
+        );
+        number_row(ui, "Turd size", &mut self.controls.bmp_turds, 1.0);
+        number_row(ui, "Alpha max", &mut self.controls.bmp_alpha, 0.05);
+        number_row(ui, "Opt tolerance", &mut self.controls.bmp_optto, 0.01);
+        ui.checkbox(&mut self.controls.bmp_long, "Long curves");
+    }
+
+    fn show_vcarve_settings(&mut self, ui: &mut egui::Ui) {
+        ui.heading("V-carve");
+        combo_row(ui, "Bit", self.controls.bit_shape.label(), |ui| {
+            ui.selectable_value(
+                &mut self.controls.bit_shape,
+                BitShapeChoice::VBit,
+                BitShapeChoice::VBit.label(),
+            );
+            ui.selectable_value(
+                &mut self.controls.bit_shape,
+                BitShapeChoice::Ball,
+                BitShapeChoice::Ball.label(),
+            );
+            ui.selectable_value(
+                &mut self.controls.bit_shape,
+                BitShapeChoice::Flat,
+                BitShapeChoice::Flat.label(),
+            );
+        });
+        number_row(ui, "V angle", &mut self.controls.v_bit_angle, 1.0);
+        number_row(ui, "V diameter", &mut self.controls.v_bit_dia, 0.01);
+        number_row(ui, "V step", &mut self.controls.v_step_len, 0.001);
+        number_row(ui, "Allowance", &mut self.controls.allowance, 0.001);
+        number_row(ui, "Depth limit", &mut self.controls.v_depth_lim, 0.01);
+        number_row(ui, "Drive corner", &mut self.controls.v_drv_crner, 1.0);
+        number_row(ui, "Step corner", &mut self.controls.v_stp_crner, 1.0);
+        combo_row(ui, "Check scope", self.controls.v_check_all.label(), |ui| {
+            for value in VCheckScopeChoice::ALL {
+                ui.selectable_value(&mut self.controls.v_check_all, value, value.label());
+            }
+        });
+        ui.horizontal_wrapped(|ui| {
+            ui.checkbox(&mut self.controls.inlay, "Inlay");
+            ui.checkbox(&mut self.controls.v_flop, "Flip normals");
+        });
+    }
+
+    fn show_multipass_settings(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Multipass");
+        number_row(ui, "Finish stock", &mut self.controls.v_rough_stk, 0.01);
+        let multipass_enabled = vcarve_multipass_enabled(self.controls.v_rough_stk);
+        ui.add_enabled_ui(multipass_enabled, |ui| {
+            number_row(ui, "Max depth/pass", &mut self.controls.v_max_cut, 0.01);
+        });
+        let color = if multipass_enabled {
+            egui::Color32::from_rgb(94, 176, 132)
+        } else {
+            egui::Color32::from_rgb(160, 168, 172)
+        };
+        ui.colored_label(
+            color,
+            vcarve_multipass_summary(self.controls.v_rough_stk, self.controls.v_max_cut),
+        );
+    }
+
+    fn show_cleanup_settings(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Cleanup");
+        number_row(ui, "Clean dia", &mut self.controls.clean_dia, 0.01);
+        number_row(ui, "Clean step %", &mut self.controls.clean_step, 1.0);
+        number_row(ui, "Clean V", &mut self.controls.clean_v, 0.01);
+        ui.label("Straight");
+        ui.horizontal_wrapped(|ui| {
+            clean_path_checkbox(ui, "Profile", &mut self.controls.clean_paths, 0);
+            clean_path_checkbox(ui, "X", &mut self.controls.clean_paths, 1);
+            clean_path_checkbox(ui, "Y", &mut self.controls.clean_paths, 2);
+            clean_path_checkbox(ui, "Loops", &mut self.controls.clean_paths, 6);
+        });
+        ui.label("V-bit");
+        ui.horizontal_wrapped(|ui| {
+            clean_path_checkbox(ui, "Profile", &mut self.controls.clean_paths, 3);
+            clean_path_checkbox(ui, "X", &mut self.controls.clean_paths, 5);
+            clean_path_checkbox(ui, "Y", &mut self.controls.clean_paths, 4);
+            clean_path_checkbox(ui, "Loops", &mut self.controls.clean_paths, 7);
+        });
+    }
+
+    fn show_output_controls(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Output");
+        if ui.button("Use default dir").clicked() {
+            self.reset_output_paths_to_default_dir();
+        }
+        let gcode_path_action = path_row(ui, "G-code", &mut self.gcode_path);
+        if gcode_path_action.browse_clicked {
+            self.choose_path(FileBrowserTarget::GcodeOutput, ui.ctx().clone());
+        }
+        if gcode_path_action.value_changed {
+            self.save_preferences();
+        }
+        if ui
+            .add_enabled(!self.gcode.is_empty(), egui::Button::new("Export G-code"))
+            .clicked()
+        {
+            self.export_current(ExportKind::Gcode);
+        }
+        if self.tool_view.uses_vcarve() {
+            ui.label(format!("Cleanup files: {}", self.secondary_gcode.len()));
+            if ui
+                .add_enabled(
+                    !self.secondary_gcode.is_empty(),
+                    egui::Button::new("Export cleanup files"),
+                )
+                .clicked()
+            {
+                self.export_secondary_outputs();
+            }
+        }
+        let svg_path_action = path_row(ui, "SVG", &mut self.svg_path);
+        if svg_path_action.browse_clicked {
+            self.choose_path(FileBrowserTarget::SvgOutput, ui.ctx().clone());
+        }
+        if svg_path_action.value_changed {
+            self.save_preferences();
+        }
+        if ui
+            .add_enabled(self.svg.is_some(), egui::Button::new("Export SVG"))
+            .clicked()
+        {
+            self.export_current(ExportKind::Svg);
+        }
+        let dxf_path_action = path_row(ui, "DXF", &mut self.dxf_path);
+        if dxf_path_action.browse_clicked {
+            self.choose_path(FileBrowserTarget::DxfOutput, ui.ctx().clone());
+        }
+        if dxf_path_action.value_changed {
+            self.save_preferences();
+        }
+        if ui
+            .add_enabled(self.dxf.is_some(), egui::Button::new("Export DXF"))
+            .clicked()
+        {
+            self.export_current(ExportKind::Dxf);
+        }
+        ui.horizontal_wrapped(|ui| {
+            if ui
+                .add_enabled(!self.gcode.is_empty(), egui::Button::new("Copy G-code"))
+                .clicked()
+            {
+                self.copy_gcode(ui.ctx());
+            }
+            if ui
+                .add_enabled(
+                    self.any_export_available(),
+                    egui::Button::new("Export all available"),
+                )
+                .clicked()
+            {
+                self.export_all_available();
+            }
+        });
+    }
+
+    fn show_preview_controls(&mut self, ui: &mut egui::Ui) {
+        egui::CollapsingHeader::new("Preview Layers")
+            .default_open(false)
+            .show(ui, |ui| {
+                ui.checkbox(&mut self.show_toolpath, "Toolpath");
+                if ui.checkbox(&mut self.show_rapids, "Rapids").changed() {
+                    self.save_preferences();
+                }
+                if ui
+                    .add_enabled(
+                        !self.preview_cleanup_segments.is_empty(),
+                        egui::Checkbox::new(&mut self.show_cleanup, "Cleanup"),
+                    )
+                    .changed()
+                {
+                    self.save_preferences();
+                }
+                ui.checkbox(&mut self.show_bounds, "Bounds");
+                ui.checkbox(&mut self.show_axes, "Axes");
+                if ui.checkbox(&mut self.show_grid, "Grid").changed() {
+                    self.save_preferences();
+                }
+                ui.label(format!("G-code lines: {}", self.gcode_lines));
+                ui.label(format!("Cut moves: {}", self.preview_segments.len()));
+                ui.label(format!("Rapid moves: {}", self.preview_rapids.len()));
+                if self.tool_view.uses_vcarve() {
+                    ui.label(format!(
+                        "Cleanup moves: {}",
+                        self.preview_cleanup_segments.len()
+                    ));
+                }
+                ui.label(preview_length_readout("Cut length", &self.preview_segments));
+                ui.label(preview_length_readout("Rapid length", &self.preview_rapids));
+                if self.tool_view.uses_vcarve() {
+                    ui.label(preview_length_readout(
+                        "Cleanup length",
+                        &self.preview_cleanup_segments,
+                    ));
+                }
+                if let Some((size, range)) = preview_bounds_readout(self.preview_bounds) {
+                    ui.label(size);
+                    ui.monospace(range);
+                } else {
+                    ui.label("Extents: none");
+                }
+            });
+    }
+
+    fn show_advanced_settings(&mut self, ui: &mut egui::Ui) {
+        egui::CollapsingHeader::new("Advanced")
+            .default_open(false)
+            .show(ui, |ui| {
+                if self.tool_view.uses_text() {
+                    combo_row(ui, "Height calc", self.controls.height_calc.label(), |ui| {
+                        ui.selectable_value(
+                            &mut self.controls.height_calc,
+                            HeightCalcChoice::MaxUse,
+                            HeightCalcChoice::MaxUse.label(),
+                        );
+                        ui.selectable_value(
+                            &mut self.controls.height_calc,
+                            HeightCalcChoice::MaxAll,
+                            HeightCalcChoice::MaxAll.label(),
+                        );
+                    });
+                }
+                number_row(ui, "Arc segments", &mut self.controls.segarc, 0.5);
+                text_row(ui, "Preamble", &mut self.controls.gpre);
+                text_row(ui, "Postamble", &mut self.controls.gpost);
+                ui.horizontal_wrapped(|ui| {
+                    ui.checkbox(&mut self.controls.recovery_comments, "Recovery comments");
+                    ui.checkbox(&mut self.controls.var_dis, "Disable variables");
+                    if self.tool_view.uses_text() {
+                        ui.checkbox(&mut self.controls.ext_char, "Extended chars");
+                    }
+                    ui.checkbox(&mut self.controls.show_thick, "Show thickness");
+                    if self.tool_view.uses_vcarve() {
+                        ui.checkbox(&mut self.controls.show_v_area, "Show V area");
+                        ui.checkbox(&mut self.controls.v_pplot, "Plot during V-carve");
+                    }
+                });
+            });
     }
 
     fn save_preferences(&mut self) {
@@ -691,6 +1288,8 @@ impl eframe::App for RengraveApp {
             .show_inside(ui, |ui| {
                 self.show_menu_bar(ui);
                 ui.horizontal(|ui| {
+                    self.show_tool_view_tabs(ui);
+                    ui.separator();
                     if ui.button("Load").clicked() {
                         self.reload_document(ui.ctx().clone());
                     }
@@ -747,214 +1346,7 @@ impl eframe::App for RengraveApp {
             .resizable(false)
             .show_inside(ui, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| {
-                    ui.heading("Input");
-                    let settings_path_action = path_row(ui, "Settings", &mut self.settings_path);
-                    if settings_path_action.browse_clicked {
-                        self.choose_path(FileBrowserTarget::Settings, ui.ctx().clone());
-                    }
-                    let input_path_action = path_row(ui, "Input", &mut self.input_path);
-                    if input_path_action.browse_clicked {
-                        self.choose_path(FileBrowserTarget::Input, ui.ctx().clone());
-                    }
-                    let default_dir_action =
-                        path_row(ui, "Default dir", &mut self.default_dir_path);
-                    if default_dir_action.browse_clicked {
-                        self.choose_path(FileBrowserTarget::DefaultDir, ui.ctx().clone());
-                    }
-                    if settings_path_action.value_changed
-                        || input_path_action.value_changed
-                        || default_dir_action.value_changed
-                    {
-                        self.save_preferences();
-                    }
-                    ui.horizontal(|ui| {
-                        if ui.button("Load").clicked() {
-                            self.reload_document(ui.ctx().clone());
-                        }
-                        if ui
-                            .add_enabled(
-                                !self.settings_path.trim().is_empty(),
-                                egui::Button::new("Save Settings"),
-                            )
-                            .clicked()
-                        {
-                            self.save_current_settings();
-                        }
-                        if ui.button("Save As").clicked() {
-                            self.choose_path(FileBrowserTarget::SettingsOutput, ui.ctx().clone());
-                        }
-                        if ui.button("Calculate").clicked() {
-                            self.start_calculation(ui.ctx().clone());
-                        }
-                    });
-                    ui.separator();
-                    ui.heading("Input Catalog");
-                    ui.horizontal(|ui| {
-                        if ui.button("Scan").clicked() {
-                            self.refresh_input_catalog();
-                        }
-                        if let Some(dir) = &self.input_catalog.dir {
-                            ui.monospace(dir.display().to_string());
-                        }
-                    });
-                    if let Some(error) = &self.input_catalog.error {
-                        ui.colored_label(egui::Color32::from_rgb(225, 176, 84), error);
-                    }
-                    if self.input_catalog.entries.is_empty() {
-                        ui.label("No supported files found");
-                    } else {
-                        let counts = input_catalog_counts(&self.input_catalog.entries);
-                        ui.horizontal_wrapped(|ui| {
-                            input_catalog_filter_checkbox(
-                                ui,
-                                &mut self.input_catalog_filter.cxf,
-                                "CXF",
-                                counts.cxf,
-                            );
-                            input_catalog_filter_checkbox(
-                                ui,
-                                &mut self.input_catalog_filter.ttf,
-                                "TTF",
-                                counts.ttf,
-                            );
-                            input_catalog_filter_checkbox(
-                                ui,
-                                &mut self.input_catalog_filter.dxf,
-                                "DXF",
-                                counts.dxf,
-                            );
-                            input_catalog_filter_checkbox(
-                                ui,
-                                &mut self.input_catalog_filter.bitmap,
-                                "Bitmap",
-                                counts.bitmap,
-                            );
-                        });
-                        let visible_entries = visible_input_catalog_entries(
-                            &self.input_catalog.entries,
-                            self.input_catalog_filter,
-                        );
-                        if visible_entries.is_empty() {
-                            ui.label("No files match enabled filters");
-                        }
-                        egui::ScrollArea::vertical()
-                            .max_height(150.0)
-                            .show(ui, |ui| {
-                                for entry in visible_entries {
-                                    let selected = path_from_text(&self.input_path).as_ref()
-                                        == Some(&entry.path);
-                                    let label = format!(
-                                        "{}  {}  {}",
-                                        entry.kind.label(),
-                                        entry.name,
-                                        format_bytes(entry.size_bytes)
-                                    );
-                                    if ui.selectable_label(selected, label).clicked() {
-                                        self.select_input_catalog_entry(
-                                            entry.path,
-                                            ui.ctx().clone(),
-                                        );
-                                    }
-                                }
-                            });
-                    }
-                    ui.separator();
-                    ui.horizontal(|ui| {
-                        ui.heading("Input Preview");
-                        if ui.button("Refresh").clicked() {
-                            self.reload_input_preview();
-                        }
-                    });
-                    if input_preview_accepts_sample(path_from_text(&self.input_path).as_deref()) {
-                        let sample_action = text_row(ui, "Sample", &mut self.preview_sample_text);
-                        if sample_action.value_changed {
-                            self.save_preferences();
-                        }
-                        if ui.button("Use engraving text").clicked() {
-                            self.preview_sample_text.clear();
-                            self.save_preferences();
-                        }
-                    }
-                    self.ensure_input_preview();
-                    draw_input_preview(ui, &mut self.input_preview);
-                    ui.separator();
-                    ui.label("Text");
-                    ui.add_sized(
-                        [ui.available_width(), 120.0],
-                        egui::TextEdit::multiline(&mut self.text),
-                    );
-
-                    ui.separator();
-                    ui.horizontal(|ui| {
-                        ui.heading("Layout");
-                        if ui.button("Defaults").clicked() {
-                            self.reset_controls_to_defaults();
-                        }
-                    });
-                    combo_row(ui, "Mode", self.controls.cut_type.label(), |ui| {
-                        ui.selectable_value(
-                            &mut self.controls.cut_type,
-                            CutTypeChoice::Engrave,
-                            CutTypeChoice::Engrave.label(),
-                        );
-                        ui.selectable_value(
-                            &mut self.controls.cut_type,
-                            CutTypeChoice::VCarve,
-                            CutTypeChoice::VCarve.label(),
-                        );
-                    });
-                    let mut selected_units = self.controls.units;
-                    combo_row(ui, "Units", self.controls.units.label(), |ui| {
-                        ui.selectable_value(
-                            &mut selected_units,
-                            UnitsChoice::Inch,
-                            UnitsChoice::Inch.label(),
-                        );
-                        ui.selectable_value(
-                            &mut selected_units,
-                            UnitsChoice::Mm,
-                            UnitsChoice::Mm.label(),
-                        );
-                    });
-                    self.controls.convert_units(selected_units);
-                    combo_row(ui, "Justify", self.controls.justify.label(), |ui| {
-                        for value in JustifyChoice::ALL {
-                            ui.selectable_value(&mut self.controls.justify, value, value.label());
-                        }
-                    });
-                    combo_row(ui, "Origin", self.controls.origin.label(), |ui| {
-                        for value in OriginChoice::ALL {
-                            ui.selectable_value(&mut self.controls.origin, value, value.label());
-                        }
-                    });
-                    number_row(ui, "Height", &mut self.controls.yscale, 0.05);
-                    number_row(ui, "Width %", &mut self.controls.xscale_percent, 1.0);
-                    number_row(ui, "Line space", &mut self.controls.line_space, 0.05);
-                    number_row(
-                        ui,
-                        "Character space %",
-                        &mut self.controls.char_space_percent,
-                        1.0,
-                    );
-                    number_row(
-                        ui,
-                        "Word space %",
-                        &mut self.controls.word_space_percent,
-                        1.0,
-                    );
-                    number_row(ui, "Text angle", &mut self.controls.angle_degrees, 1.0);
-                    number_row(ui, "Text radius", &mut self.controls.text_radius, 0.05);
-                    number_row(ui, "X origin", &mut self.controls.xorigin, 0.01);
-                    number_row(ui, "Y origin", &mut self.controls.yorigin, 0.01);
-                    ui.horizontal_wrapped(|ui| {
-                        ui.checkbox(&mut self.controls.flip, "Flip");
-                        ui.checkbox(&mut self.controls.mirror, "Mirror");
-                        ui.checkbox(&mut self.controls.outer, "Outer");
-                        ui.checkbox(&mut self.controls.upper, "Upper");
-                        ui.checkbox(&mut self.controls.plotbox, "Box");
-                    });
-                    number_row(ui, "Box gap", &mut self.controls.boxgap, 0.01);
-                    ui.label(format!("Legacy keys: {}", self.settings_count));
+                    self.show_workflow_input_panel(ui);
                 });
             });
 
@@ -963,309 +1355,7 @@ impl eframe::App for RengraveApp {
             .resizable(false)
             .show_inside(ui, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| {
-                    ui.heading("Tool");
-                    combo_row(ui, "Bit", self.controls.bit_shape.label(), |ui| {
-                        ui.selectable_value(
-                            &mut self.controls.bit_shape,
-                            BitShapeChoice::VBit,
-                            BitShapeChoice::VBit.label(),
-                        );
-                        ui.selectable_value(
-                            &mut self.controls.bit_shape,
-                            BitShapeChoice::Ball,
-                            BitShapeChoice::Ball.label(),
-                        );
-                        ui.selectable_value(
-                            &mut self.controls.bit_shape,
-                            BitShapeChoice::Flat,
-                            BitShapeChoice::Flat.label(),
-                        );
-                    });
-                    combo_row(ui, "Arc fit", self.controls.arc_fit.label(), |ui| {
-                        ui.selectable_value(
-                            &mut self.controls.arc_fit,
-                            ArcFitChoice::NoFit,
-                            ArcFitChoice::NoFit.label(),
-                        );
-                        ui.selectable_value(
-                            &mut self.controls.arc_fit,
-                            ArcFitChoice::Center,
-                            ArcFitChoice::Center.label(),
-                        );
-                        ui.selectable_value(
-                            &mut self.controls.arc_fit,
-                            ArcFitChoice::Radius,
-                            ArcFitChoice::Radius.label(),
-                        );
-                    });
-                    number_row(ui, "Safe Z", &mut self.controls.safe_z, 0.01);
-                    number_row(ui, "Cut Z", &mut self.controls.depth_z, 0.001);
-                    number_row(ui, "Stroke", &mut self.controls.stroke_thickness, 0.001);
-                    number_row(ui, "Feed", &mut self.controls.feed, 0.5);
-                    number_row(ui, "Plunge", &mut self.controls.plunge, 0.5);
-                    number_row(ui, "Accuracy", &mut self.controls.accuracy, 0.0005);
-                    number_row(ui, "Arc segments", &mut self.controls.segarc, 0.5);
-
-                    ui.separator();
-                    ui.heading("V-carve");
-                    number_row(ui, "V angle", &mut self.controls.v_bit_angle, 1.0);
-                    number_row(ui, "V diameter", &mut self.controls.v_bit_dia, 0.01);
-                    number_row(ui, "V step", &mut self.controls.v_step_len, 0.001);
-                    number_row(ui, "Allowance", &mut self.controls.allowance, 0.001);
-                    number_row(ui, "Depth limit", &mut self.controls.v_depth_lim, 0.01);
-                    number_row(ui, "Drive corner", &mut self.controls.v_drv_crner, 1.0);
-                    number_row(ui, "Step corner", &mut self.controls.v_stp_crner, 1.0);
-                    combo_row(ui, "Check scope", self.controls.v_check_all.label(), |ui| {
-                        for value in VCheckScopeChoice::ALL {
-                            ui.selectable_value(
-                                &mut self.controls.v_check_all,
-                                value,
-                                value.label(),
-                            );
-                        }
-                    });
-                    ui.horizontal_wrapped(|ui| {
-                        ui.checkbox(&mut self.controls.inlay, "Inlay");
-                    });
-
-                    ui.separator();
-                    ui.heading("Multipass");
-                    number_row(ui, "Finish stock", &mut self.controls.v_rough_stk, 0.01);
-                    let multipass_enabled = vcarve_multipass_enabled(self.controls.v_rough_stk);
-                    ui.add_enabled_ui(multipass_enabled, |ui| {
-                        number_row(ui, "Max depth/pass", &mut self.controls.v_max_cut, 0.01);
-                    });
-                    let color = if multipass_enabled {
-                        egui::Color32::from_rgb(94, 176, 132)
-                    } else {
-                        egui::Color32::from_rgb(160, 168, 172)
-                    };
-                    ui.colored_label(
-                        color,
-                        vcarve_multipass_summary(
-                            self.controls.v_rough_stk,
-                            self.controls.v_max_cut,
-                        ),
-                    );
-
-                    ui.separator();
-                    ui.heading("Bitmap");
-                    ui.horizontal_wrapped(|ui| {
-                        let color = if self.potrace_status.available {
-                            egui::Color32::from_rgb(94, 176, 132)
-                        } else {
-                            egui::Color32::from_rgb(225, 176, 84)
-                        };
-                        ui.colored_label(color, &self.potrace_status.message);
-                        if ui.button("Refresh").clicked() {
-                            self.refresh_potrace_status();
-                        }
-                    });
-                    if input_path_requires_potrace(&self.input_path) {
-                        if self.potrace_status.available {
-                            ui.label("Selected bitmap input will be traced with Potrace");
-                        } else {
-                            ui.colored_label(
-                                egui::Color32::from_rgb(225, 176, 84),
-                                "Bitmap tracing needs Potrace in PATH",
-                            );
-                        }
-                    } else {
-                        ui.label("Select a bitmap input to trace through Potrace");
-                    }
-                    combo_row(
-                        ui,
-                        "Turn policy",
-                        self.controls.bmp_turn_policy.label(),
-                        |ui| {
-                            for value in BitmapTurnPolicy::ALL {
-                                ui.selectable_value(
-                                    &mut self.controls.bmp_turn_policy,
-                                    value,
-                                    value.label(),
-                                );
-                            }
-                        },
-                    );
-                    number_row(ui, "Turd size", &mut self.controls.bmp_turds, 1.0);
-                    number_row(ui, "Alpha max", &mut self.controls.bmp_alpha, 0.05);
-                    number_row(ui, "Opt tolerance", &mut self.controls.bmp_optto, 0.01);
-                    ui.horizontal_wrapped(|ui| {
-                        let mut use_image_size = self.controls.use_image_size;
-                        if ui.checkbox(&mut use_image_size, "Image size").changed() {
-                            let input_path = path_from_text(&self.input_path);
-                            let image_height = image_preview_model_height(
-                                input_path.as_deref(),
-                                &self.input_preview.data,
-                            );
-                            if let Some(converted_yscale) = convert_image_size_yscale(
-                                self.controls.yscale,
-                                use_image_size,
-                                image_height,
-                            ) {
-                                self.controls.yscale = converted_yscale;
-                                self.status = "Image size scale converted".to_owned();
-                            }
-                            self.controls.use_image_size = use_image_size;
-                        }
-                        ui.checkbox(&mut self.controls.bmp_long, "Long curves");
-                    });
-
-                    ui.separator();
-                    ui.heading("Cleanup");
-                    number_row(ui, "Clean dia", &mut self.controls.clean_dia, 0.01);
-                    number_row(ui, "Clean step %", &mut self.controls.clean_step, 1.0);
-                    number_row(ui, "Clean V", &mut self.controls.clean_v, 0.01);
-                    ui.label("Straight");
-                    ui.horizontal_wrapped(|ui| {
-                        clean_path_checkbox(ui, "Profile", &mut self.controls.clean_paths, 0);
-                        clean_path_checkbox(ui, "X", &mut self.controls.clean_paths, 1);
-                        clean_path_checkbox(ui, "Y", &mut self.controls.clean_paths, 2);
-                        clean_path_checkbox(ui, "Loops", &mut self.controls.clean_paths, 6);
-                    });
-                    ui.label("V-bit");
-                    ui.horizontal_wrapped(|ui| {
-                        clean_path_checkbox(ui, "Profile", &mut self.controls.clean_paths, 3);
-                        clean_path_checkbox(ui, "X", &mut self.controls.clean_paths, 5);
-                        clean_path_checkbox(ui, "Y", &mut self.controls.clean_paths, 4);
-                        clean_path_checkbox(ui, "Loops", &mut self.controls.clean_paths, 7);
-                    });
-                    ui.checkbox(&mut self.controls.v_flop, "Flip normals");
-
-                    ui.separator();
-                    ui.heading("Advanced");
-                    combo_row(ui, "Height calc", self.controls.height_calc.label(), |ui| {
-                        ui.selectable_value(
-                            &mut self.controls.height_calc,
-                            HeightCalcChoice::MaxUse,
-                            HeightCalcChoice::MaxUse.label(),
-                        );
-                        ui.selectable_value(
-                            &mut self.controls.height_calc,
-                            HeightCalcChoice::MaxAll,
-                            HeightCalcChoice::MaxAll.label(),
-                        );
-                    });
-                    text_row(ui, "Preamble", &mut self.controls.gpre);
-                    text_row(ui, "Postamble", &mut self.controls.gpost);
-                    ui.horizontal_wrapped(|ui| {
-                        ui.checkbox(&mut self.controls.recovery_comments, "Recovery comments");
-                        ui.checkbox(&mut self.controls.var_dis, "Disable variables");
-                        ui.checkbox(&mut self.controls.ext_char, "Extended chars");
-                        ui.checkbox(&mut self.controls.show_thick, "Show thickness");
-                        ui.checkbox(&mut self.controls.show_v_area, "Show V area");
-                        ui.checkbox(&mut self.controls.v_pplot, "Plot during V-carve");
-                    });
-
-                    ui.separator();
-                    ui.heading("Output");
-                    if ui.button("Use default dir").clicked() {
-                        self.reset_output_paths_to_default_dir();
-                    }
-                    let gcode_path_action = path_row(ui, "G-code", &mut self.gcode_path);
-                    if gcode_path_action.browse_clicked {
-                        self.choose_path(FileBrowserTarget::GcodeOutput, ui.ctx().clone());
-                    }
-                    if gcode_path_action.value_changed {
-                        self.save_preferences();
-                    }
-                    if ui
-                        .add_enabled(!self.gcode.is_empty(), egui::Button::new("Export G-code"))
-                        .clicked()
-                    {
-                        self.export_current(ExportKind::Gcode);
-                    }
-                    ui.label(format!("Cleanup files: {}", self.secondary_gcode.len()));
-                    if ui
-                        .add_enabled(
-                            !self.secondary_gcode.is_empty(),
-                            egui::Button::new("Export cleanup files"),
-                        )
-                        .clicked()
-                    {
-                        self.export_secondary_outputs();
-                    }
-                    let svg_path_action = path_row(ui, "SVG", &mut self.svg_path);
-                    if svg_path_action.browse_clicked {
-                        self.choose_path(FileBrowserTarget::SvgOutput, ui.ctx().clone());
-                    }
-                    if svg_path_action.value_changed {
-                        self.save_preferences();
-                    }
-                    if ui
-                        .add_enabled(self.svg.is_some(), egui::Button::new("Export SVG"))
-                        .clicked()
-                    {
-                        self.export_current(ExportKind::Svg);
-                    }
-                    let dxf_path_action = path_row(ui, "DXF", &mut self.dxf_path);
-                    if dxf_path_action.browse_clicked {
-                        self.choose_path(FileBrowserTarget::DxfOutput, ui.ctx().clone());
-                    }
-                    if dxf_path_action.value_changed {
-                        self.save_preferences();
-                    }
-                    if ui
-                        .add_enabled(self.dxf.is_some(), egui::Button::new("Export DXF"))
-                        .clicked()
-                    {
-                        self.export_current(ExportKind::Dxf);
-                    }
-                    if ui
-                        .add_enabled(!self.gcode.is_empty(), egui::Button::new("Copy G-code"))
-                        .clicked()
-                    {
-                        self.copy_gcode(ui.ctx());
-                    }
-                    if ui
-                        .add_enabled(
-                            self.any_export_available(),
-                            egui::Button::new("Export all available"),
-                        )
-                        .clicked()
-                    {
-                        self.export_all_available();
-                    }
-
-                    ui.separator();
-                    ui.heading("Preview");
-                    ui.checkbox(&mut self.show_toolpath, "Toolpath");
-                    if ui.checkbox(&mut self.show_rapids, "Rapids").changed() {
-                        self.save_preferences();
-                    }
-                    if ui
-                        .add_enabled(
-                            !self.preview_cleanup_segments.is_empty(),
-                            egui::Checkbox::new(&mut self.show_cleanup, "Cleanup"),
-                        )
-                        .changed()
-                    {
-                        self.save_preferences();
-                    }
-                    ui.checkbox(&mut self.show_bounds, "Bounds");
-                    ui.checkbox(&mut self.show_axes, "Axes");
-                    if ui.checkbox(&mut self.show_grid, "Grid").changed() {
-                        self.save_preferences();
-                    }
-                    ui.label(format!("G-code lines: {}", self.gcode_lines));
-                    ui.label(format!("Cut moves: {}", self.preview_segments.len()));
-                    ui.label(format!("Rapid moves: {}", self.preview_rapids.len()));
-                    ui.label(format!(
-                        "Cleanup moves: {}",
-                        self.preview_cleanup_segments.len()
-                    ));
-                    ui.label(preview_length_readout("Cut length", &self.preview_segments));
-                    ui.label(preview_length_readout("Rapid length", &self.preview_rapids));
-                    ui.label(preview_length_readout(
-                        "Cleanup length",
-                        &self.preview_cleanup_segments,
-                    ));
-                    if let Some((size, range)) = preview_bounds_readout(self.preview_bounds) {
-                        ui.label(size);
-                        ui.monospace(range);
-                    } else {
-                        ui.label("Extents: none");
-                    }
+                    self.show_workflow_settings_panel(ui);
                 });
             });
 
@@ -1722,6 +1812,101 @@ struct UiControls {
     v_pplot: bool,
     show_thick: bool,
     show_v_area: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ToolView {
+    TextEngrave,
+    ImageEngrave,
+    TextVCarve,
+    ImageVCarve,
+}
+
+impl ToolView {
+    const ALL: [Self; 4] = [
+        Self::TextEngrave,
+        Self::ImageEngrave,
+        Self::TextVCarve,
+        Self::ImageVCarve,
+    ];
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::TextEngrave => "Text Engrave",
+            Self::ImageEngrave => "Image Engrave",
+            Self::TextVCarve => "Text V-carve",
+            Self::ImageVCarve => "Image V-carve",
+        }
+    }
+
+    fn settings_heading(self) -> &'static str {
+        match self {
+            Self::TextEngrave => "Text Engraving",
+            Self::ImageEngrave => "Image Engraving",
+            Self::TextVCarve => "Text V-carving",
+            Self::ImageVCarve => "Image V-carving",
+        }
+    }
+
+    fn uses_text(self) -> bool {
+        matches!(self, Self::TextEngrave | Self::TextVCarve)
+    }
+
+    fn uses_image(self) -> bool {
+        matches!(self, Self::ImageEngrave | Self::ImageVCarve)
+    }
+
+    fn uses_vcarve(self) -> bool {
+        matches!(self, Self::TextVCarve | Self::ImageVCarve)
+    }
+
+    fn cut_type(self) -> CutTypeChoice {
+        if self.uses_vcarve() {
+            CutTypeChoice::VCarve
+        } else {
+            CutTypeChoice::Engrave
+        }
+    }
+
+    fn accepts_kind(self, kind: InputCatalogKind) -> bool {
+        match kind {
+            InputCatalogKind::CxfFont | InputCatalogKind::TtfFont => self.uses_text(),
+            InputCatalogKind::Dxf | InputCatalogKind::Bitmap => self.uses_image(),
+        }
+    }
+
+    fn with_input_kind(self, kind: InputCatalogKind) -> Self {
+        let vcarve = self.uses_vcarve();
+        match kind {
+            InputCatalogKind::CxfFont | InputCatalogKind::TtfFont => {
+                if vcarve {
+                    Self::TextVCarve
+                } else {
+                    Self::TextEngrave
+                }
+            }
+            InputCatalogKind::Dxf | InputCatalogKind::Bitmap => {
+                if vcarve {
+                    Self::ImageVCarve
+                } else {
+                    Self::ImageEngrave
+                }
+            }
+        }
+    }
+
+    fn from_settings_and_path(settings: &LegacySettings, path: Option<&Path>) -> Self {
+        let cut_type = CutTypeChoice::parse(settings.get_last("cut_type").unwrap_or("engrave"));
+        let image_input = path
+            .and_then(InputCatalogKind::from_path)
+            .is_some_and(|kind| matches!(kind, InputCatalogKind::Dxf | InputCatalogKind::Bitmap));
+        match (cut_type, image_input) {
+            (CutTypeChoice::VCarve, true) => Self::ImageVCarve,
+            (CutTypeChoice::VCarve, false) => Self::TextVCarve,
+            (CutTypeChoice::Engrave, true) => Self::ImageEngrave,
+            (CutTypeChoice::Engrave, false) => Self::TextEngrave,
+        }
+    }
 }
 
 impl UiControls {
@@ -2754,14 +2939,6 @@ impl InputCatalogFilter {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-struct InputCatalogCounts {
-    cxf: usize,
-    ttf: usize,
-    dxf: usize,
-    bitmap: usize,
-}
-
 struct InputPreview {
     path: Option<PathBuf>,
     sample_text: Option<String>,
@@ -3214,10 +3391,6 @@ fn path_row(ui: &mut egui::Ui, label: &str, value: &mut String) -> PathRowAction
     action
 }
 
-fn input_catalog_filter_checkbox(ui: &mut egui::Ui, enabled: &mut bool, label: &str, count: usize) {
-    ui.checkbox(enabled, format!("{label} ({count})"));
-}
-
 fn number_row(ui: &mut egui::Ui, label: &str, value: &mut f64, speed: f64) {
     ui.horizontal(|ui| {
         ui.add_sized([124.0, 20.0], egui::Label::new(label));
@@ -3516,26 +3689,14 @@ fn read_input_catalog_entries(dir: &Path) -> Result<Vec<InputCatalogEntry>, Stri
     Ok(entries)
 }
 
-fn input_catalog_counts(entries: &[InputCatalogEntry]) -> InputCatalogCounts {
-    let mut counts = InputCatalogCounts::default();
-    for entry in entries {
-        match entry.kind {
-            InputCatalogKind::CxfFont => counts.cxf += 1,
-            InputCatalogKind::TtfFont => counts.ttf += 1,
-            InputCatalogKind::Dxf => counts.dxf += 1,
-            InputCatalogKind::Bitmap => counts.bitmap += 1,
-        }
-    }
-    counts
-}
-
-fn visible_input_catalog_entries(
+fn visible_input_catalog_entries_for_tool(
     entries: &[InputCatalogEntry],
     filter: InputCatalogFilter,
+    tool_view: ToolView,
 ) -> Vec<InputCatalogEntry> {
     entries
         .iter()
-        .filter(|entry| filter.accepts(entry.kind))
+        .filter(|entry| filter.accepts(entry.kind) && tool_view.accepts_kind(entry.kind))
         .cloned()
         .collect()
 }
@@ -6001,6 +6162,48 @@ mod tests {
     }
 
     #[test]
+    fn tool_views_map_to_cut_types_and_input_families() {
+        assert_eq!(ToolView::TextEngrave.cut_type(), CutTypeChoice::Engrave);
+        assert_eq!(ToolView::ImageEngrave.cut_type(), CutTypeChoice::Engrave);
+        assert_eq!(ToolView::TextVCarve.cut_type(), CutTypeChoice::VCarve);
+        assert_eq!(ToolView::ImageVCarve.cut_type(), CutTypeChoice::VCarve);
+        assert!(ToolView::TextVCarve.accepts_kind(InputCatalogKind::CxfFont));
+        assert!(!ToolView::TextVCarve.accepts_kind(InputCatalogKind::Bitmap));
+        assert!(ToolView::ImageVCarve.accepts_kind(InputCatalogKind::Dxf));
+        assert!(ToolView::ImageVCarve.accepts_kind(InputCatalogKind::Bitmap));
+        assert_eq!(
+            ToolView::TextVCarve.with_input_kind(InputCatalogKind::Bitmap),
+            ToolView::ImageVCarve
+        );
+        assert_eq!(
+            ToolView::ImageEngrave.with_input_kind(InputCatalogKind::TtfFont),
+            ToolView::TextEngrave
+        );
+    }
+
+    #[test]
+    fn tool_view_infers_from_settings_and_input_path() {
+        let mut settings = LegacySettings::default();
+        assert_eq!(
+            ToolView::from_settings_and_path(&settings, Some(Path::new("/tmp/font.cxf"))),
+            ToolView::TextEngrave
+        );
+        assert_eq!(
+            ToolView::from_settings_and_path(&settings, Some(Path::new("/tmp/image.png"))),
+            ToolView::ImageEngrave
+        );
+        settings.set_or_push("cut_type", "v-carve", false);
+        assert_eq!(
+            ToolView::from_settings_and_path(&settings, Some(Path::new("/tmp/font.ttf"))),
+            ToolView::TextVCarve
+        );
+        assert_eq!(
+            ToolView::from_settings_and_path(&settings, Some(Path::new("/tmp/shape.dxf"))),
+            ToolView::ImageVCarve
+        );
+    }
+
+    #[test]
     fn artifact_and_runtime_summaries_track_export_readiness() {
         assert_eq!(
             artifact_summary("G90\n", Some("<svg/>"), Some("0\nEOF\n"), 2),
@@ -6184,7 +6387,7 @@ mod tests {
     }
 
     #[test]
-    fn input_catalog_filters_entries_by_enabled_kind() {
+    fn input_catalog_filters_entries_by_workflow() {
         let entries = vec![
             InputCatalogEntry {
                 path: PathBuf::from("/tmp/a.cxf"),
@@ -6212,33 +6415,44 @@ mod tests {
             },
         ];
 
-        assert_eq!(
-            input_catalog_counts(&entries),
-            InputCatalogCounts {
-                cxf: 1,
-                ttf: 1,
-                dxf: 1,
-                bitmap: 1
-            }
-        );
         let filter = InputCatalogFilter {
             cxf: false,
             ttf: true,
             dxf: false,
             bitmap: true,
         };
-        let visible = visible_input_catalog_entries(&entries, filter);
-
+        let text_view_entries = visible_input_catalog_entries_for_tool(
+            &entries,
+            InputCatalogFilter::default(),
+            ToolView::TextVCarve,
+        );
         assert_eq!(
-            visible
+            text_view_entries
                 .iter()
                 .map(|entry| entry.name.as_str())
                 .collect::<Vec<_>>(),
-            vec!["b.ttf", "d.png"]
+            vec!["a.cxf", "b.ttf"]
+        );
+        let image_view_entries = visible_input_catalog_entries_for_tool(
+            &entries,
+            InputCatalogFilter::default(),
+            ToolView::ImageVCarve,
         );
         assert_eq!(
-            visible_input_catalog_entries(&entries, InputCatalogFilter::default()).len(),
-            4
+            image_view_entries
+                .iter()
+                .map(|entry| entry.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["c.dxf", "d.png"]
+        );
+        let filtered_entries =
+            visible_input_catalog_entries_for_tool(&entries, filter, ToolView::ImageVCarve);
+        assert_eq!(
+            filtered_entries
+                .iter()
+                .map(|entry| entry.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["d.png"]
         );
     }
 
