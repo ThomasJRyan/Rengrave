@@ -37,7 +37,10 @@ const INPUT_PREVIEW_THUMBNAIL_HEIGHT: u32 = 180;
 const DEFAULT_WINDOW_SIZE: [f32; 2] = [1280.0, 800.0];
 const TOOLBAR_HEIGHT: f32 = 104.0;
 const INPUT_PANEL_WIDTH: f32 = 380.0;
+const INPUT_PANEL_CONTENT_WIDTH: f32 = INPUT_PANEL_WIDTH - 16.0;
 const STATUS_PANEL_HEIGHT: f32 = 150.0;
+const FORM_CONTROL_WIDTH: f32 = 170.0;
+const PATH_CONTROL_WIDTH: f32 = 244.0;
 
 #[derive(Debug, Clone, Default)]
 pub struct UiLaunchOptions {
@@ -103,6 +106,8 @@ struct RengraveApp {
     fit_preview_requested: bool,
     last_output_request: Option<BatchRequest>,
     bottom_tab: BottomTab,
+    #[cfg(debug_assertions)]
+    debug_layout_overlay: bool,
 }
 
 impl RengraveApp {
@@ -213,6 +218,8 @@ impl RengraveApp {
             fit_preview_requested: false,
             last_output_request: None,
             bottom_tab: BottomTab::Status,
+            #[cfg(debug_assertions)]
+            debug_layout_overlay: false,
         };
         app.start_calculation(cc.egui_ctx.clone());
         app
@@ -1295,205 +1302,262 @@ impl RengraveApp {
 impl eframe::App for RengraveApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.poll_calculation();
-        egui::Panel::top("toolbar")
-            .exact_size(TOOLBAR_HEIGHT)
-            .show_inside(ui, |ui| {
-                self.show_menu_bar(ui);
-                ui.horizontal(|ui| {
-                    self.show_workbench_selector(ui);
-                    ui.separator();
-                    if ui.button("Load").clicked() {
-                        self.reload_document(ui.ctx().clone());
-                    }
-                    if ui.button("Calculate").clicked() {
-                        self.start_calculation(ui.ctx().clone());
-                    }
-                    if ui.button("Fit").clicked() {
-                        self.fit_preview_requested = true;
-                    }
-                    if self.calculation.is_some() {
-                        ui.spinner();
-                        ui.label("Calculating");
-                        if let Some(stale_summary) = self.active_calculation_stale_summary() {
-                            ui.colored_label(egui::Color32::from_rgb(225, 176, 84), stale_summary);
-                        }
-                        if ui.button("Cancel").clicked() {
-                            self.cancel_calculation("Calculation canceled");
-                        }
-                    } else if let Some(stale_summary) = self.output_stale_summary() {
-                        ui.colored_label(egui::Color32::from_rgb(225, 176, 84), stale_summary);
-                        if ui.button("Recalculate").clicked() {
-                            self.start_calculation(ui.ctx().clone());
-                        }
-                    }
-                    ui.separator();
-                    ui.add_sized(
-                        [120.0, 20.0],
-                        egui::Slider::new(&mut self.transform.zoom, 1.0..=500.0)
-                            .text("Zoom")
-                            .clamping(egui::SliderClamping::Always),
-                    );
-                    if ui
-                        .add_sized(
-                            [120.0, 20.0],
-                            egui::Slider::new(
-                                &mut self.transform.viewport_rotation_degrees,
-                                -180.0..=180.0,
-                            )
-                            .text("View")
-                            .clamping(egui::SliderClamping::Always),
-                        )
-                        .changed()
-                    {
-                        self.save_preferences();
-                    }
-                });
-                ui.horizontal(|ui| {
-                    ui.label("Status");
-                    ui.monospace(&self.status);
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        self.show_top_output_controls(ui);
-                    });
-                });
-                ui.add_space(4.0);
-                self.show_job_summary(ui);
-            });
+        let root_rect = ui.max_rect();
+        let top_rect = egui::Rect::from_min_max(
+            root_rect.left_top(),
+            egui::pos2(
+                root_rect.right(),
+                (root_rect.top() + TOOLBAR_HEIGHT).min(root_rect.bottom()),
+            ),
+        );
+        let content_rect = egui::Rect::from_min_max(
+            egui::pos2(root_rect.left(), top_rect.bottom()),
+            root_rect.right_bottom(),
+        );
+        let left_rect = egui::Rect::from_min_max(
+            content_rect.left_top(),
+            egui::pos2(
+                (content_rect.left() + INPUT_PANEL_WIDTH).min(content_rect.right()),
+                content_rect.bottom(),
+            ),
+        );
+        let work_rect = egui::Rect::from_min_max(
+            egui::pos2(left_rect.right(), content_rect.top()),
+            content_rect.right_bottom(),
+        );
+        let bottom_rect = egui::Rect::from_min_max(
+            egui::pos2(
+                work_rect.left(),
+                (work_rect.bottom() - STATUS_PANEL_HEIGHT).max(work_rect.top()),
+            ),
+            work_rect.right_bottom(),
+        );
+        let preview_rect = egui::Rect::from_min_max(
+            work_rect.left_top(),
+            egui::pos2(work_rect.right(), bottom_rect.top()),
+        );
 
-        egui::Panel::left("input_settings")
-            .exact_size(INPUT_PANEL_WIDTH)
-            .resizable(false)
-            .show_inside(ui, |ui| {
-                egui::ScrollArea::vertical().show(ui, |ui| {
+        paint_panel_background(ui, top_rect);
+        paint_panel_background(ui, left_rect);
+        paint_panel_background(ui, bottom_rect);
+
+        {
+            let mut top_ui = panel_child_ui(ui, "toolbar", top_rect.shrink2(egui::vec2(6.0, 2.0)));
+            self.show_toolbar_contents(&mut top_ui);
+        }
+
+        {
+            let mut left_ui = panel_child_ui(
+                ui,
+                "input_settings",
+                left_rect.shrink2(egui::vec2(6.0, 2.0)),
+            );
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .show(&mut left_ui, |ui| {
+                    ui.set_width(left_panel_content_width(ui));
                     self.show_workflow_input_panel(ui);
                     ui.separator();
                     self.show_workflow_settings_panel(ui);
                 });
-            });
+        }
 
-        egui::Panel::bottom("status_log")
-            .exact_size(STATUS_PANEL_HEIGHT)
-            .show_inside(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.selectable_value(&mut self.bottom_tab, BottomTab::Status, "Status");
-                    ui.selectable_value(&mut self.bottom_tab, BottomTab::Gcode, "G-code");
-                    ui.selectable_value(&mut self.bottom_tab, BottomTab::Cleanup, "Cleanup");
-                    ui.selectable_value(&mut self.bottom_tab, BottomTab::Svg, "SVG");
-                    ui.selectable_value(&mut self.bottom_tab, BottomTab::Dxf, "DXF");
-                    ui.separator();
-                    ui.monospace(&self.status);
-                    if let Some(stale_summary) = self.output_stale_summary() {
-                        ui.separator();
-                        ui.colored_label(egui::Color32::from_rgb(225, 176, 84), stale_summary);
-                        if self.stale_recalculate_available() && ui.button("Recalculate").clicked()
-                        {
-                            self.start_calculation(ui.ctx().clone());
-                        }
-                    }
-                    ui.separator();
-                    if ui
-                        .add_enabled(
-                            self.current_bottom_tab_payload().is_some(),
-                            egui::Button::new("Copy tab"),
-                        )
-                        .clicked()
-                    {
-                        self.copy_current_bottom_tab(ui.ctx());
-                    }
-                    ui.separator();
-                    ui.monospace(format!(
-                        "{} lines, {} cut moves, {} rapid moves, {} cleanup moves",
-                        self.gcode_lines,
-                        self.preview_segments.len(),
-                        self.preview_rapids.len(),
-                        self.preview_cleanup_segments.len()
-                    ));
-                });
-                ui.separator();
-                match self.bottom_tab {
-                    BottomTab::Status => draw_status_log(ui, &self.warnings),
-                    BottomTab::Gcode => {
-                        draw_output_preview(ui, Some(&self.gcode), "No G-code generated")
-                    }
-                    BottomTab::Cleanup => {
-                        let preview = secondary_output_preview_text(&self.secondary_gcode);
-                        draw_output_preview(ui, preview.as_deref(), "No cleanup G-code generated")
-                    }
-                    BottomTab::Svg => {
-                        draw_output_preview(ui, self.svg.as_deref(), "No SVG generated")
-                    }
-                    BottomTab::Dxf => {
-                        draw_output_preview(ui, self.dxf.as_deref(), "No DXF generated")
-                    }
-                }
-            });
+        {
+            let mut bottom_ui =
+                panel_child_ui(ui, "status_log", bottom_rect.shrink2(egui::vec2(6.0, 2.0)));
+            self.show_bottom_panel_contents(&mut bottom_ui);
+        }
 
-        egui::CentralPanel::default().show_inside(ui, |ui| {
-            let rect = ui.available_rect_before_wrap();
-            if self.fit_preview_requested {
-                self.fit_preview_to_rect(rect);
-                self.fit_preview_requested = false;
-            }
-            let response = ui.allocate_rect(rect, egui::Sense::click_and_drag());
-            let hover_pos = response.hover_pos();
-            if response.double_clicked() && self.preview_bounds.is_some() {
-                self.fit_preview_requested = true;
-            }
-            if response.dragged() {
-                let delta = response.drag_delta();
-                self.transform.pan.x += f64::from(delta.x);
-                self.transform.pan.y += f64::from(delta.y);
-                ui.ctx().request_repaint();
-            }
-            if response.hovered() {
-                let (scroll_y, zoom_delta) =
-                    ui.input(|input| (input.smooth_scroll_delta().y, input.zoom_delta()));
-                let zoom_factor = if (zoom_delta - 1.0).abs() > f32::EPSILON {
-                    f64::from(zoom_delta)
-                } else if scroll_y.abs() > 0.0 {
-                    2.0_f64.powf(f64::from(scroll_y) / 240.0)
-                } else {
-                    1.0
-                };
-                if (zoom_factor - 1.0).abs() > f64::EPSILON {
-                    if let Some(anchor) = hover_pos {
-                        zoom_transform_at_screen_point(
-                            &mut self.transform,
-                            rect,
-                            anchor,
-                            zoom_factor,
-                        );
-                        ui.ctx().request_repaint();
-                    }
-                }
-            }
+        {
+            let mut preview_ui = panel_child_ui(ui, "preview", preview_rect);
+            self.show_preview_panel(&mut preview_ui, preview_rect);
+        }
 
-            draw_preview(
-                ui.painter(),
-                rect,
-                self.transform,
-                self.controls.units.value(),
-                &self.preview_segments,
-                &self.preview_rapids,
-                &self.preview_cleanup_segments,
-                self.preview_bounds,
-                self.show_toolpath,
-                self.show_rapids,
-                self.show_cleanup,
-                self.show_bounds,
-                self.show_axes,
-                self.show_grid,
+        #[cfg(debug_assertions)]
+        if self.debug_layout_overlay {
+            draw_debug_layout_overlay(
+                ui.ctx(),
+                DebugLayoutRects {
+                    root: root_rect,
+                    top: top_rect,
+                    left: left_rect,
+                    preview: preview_rect,
+                    bottom: bottom_rect,
+                },
             );
-            if let Some(pos) = hover_pos {
-                let cursor = screen_point_to_model(rect, self.transform, pos);
-                draw_preview_cursor_readout(ui.painter(), rect, cursor);
-            }
-        });
+        }
 
         self.show_browser(ui.ctx());
     }
 }
 
 impl RengraveApp {
+    fn show_toolbar_contents(&mut self, ui: &mut egui::Ui) {
+        self.show_menu_bar(ui);
+        ui.horizontal(|ui| {
+            self.show_workbench_selector(ui);
+            ui.separator();
+            if ui.button("Load").clicked() {
+                self.reload_document(ui.ctx().clone());
+            }
+            if ui.button("Calculate").clicked() {
+                self.start_calculation(ui.ctx().clone());
+            }
+            if ui.button("Fit").clicked() {
+                self.fit_preview_requested = true;
+            }
+            if self.calculation.is_some() {
+                ui.spinner();
+                ui.label("Calculating");
+                if let Some(stale_summary) = self.active_calculation_stale_summary() {
+                    ui.colored_label(egui::Color32::from_rgb(225, 176, 84), stale_summary);
+                }
+                if ui.button("Cancel").clicked() {
+                    self.cancel_calculation("Calculation canceled");
+                }
+            } else if let Some(stale_summary) = self.output_stale_summary() {
+                ui.colored_label(egui::Color32::from_rgb(225, 176, 84), stale_summary);
+                if ui.button("Recalculate").clicked() {
+                    self.start_calculation(ui.ctx().clone());
+                }
+            }
+            ui.separator();
+            ui.add_sized(
+                [120.0, 20.0],
+                egui::Slider::new(&mut self.transform.zoom, 1.0..=500.0)
+                    .text("Zoom")
+                    .clamping(egui::SliderClamping::Always),
+            );
+            if ui
+                .add_sized(
+                    [120.0, 20.0],
+                    egui::Slider::new(
+                        &mut self.transform.viewport_rotation_degrees,
+                        -180.0..=180.0,
+                    )
+                    .text("View")
+                    .clamping(egui::SliderClamping::Always),
+                )
+                .changed()
+            {
+                self.save_preferences();
+            }
+        });
+        ui.horizontal(|ui| {
+            ui.label("Status");
+            ui.monospace(&self.status);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                self.show_top_output_controls(ui);
+            });
+        });
+        ui.add_space(4.0);
+        self.show_job_summary(ui);
+    }
+
+    fn show_bottom_panel_contents(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.selectable_value(&mut self.bottom_tab, BottomTab::Status, "Status");
+            ui.selectable_value(&mut self.bottom_tab, BottomTab::Gcode, "G-code");
+            ui.selectable_value(&mut self.bottom_tab, BottomTab::Cleanup, "Cleanup");
+            ui.selectable_value(&mut self.bottom_tab, BottomTab::Svg, "SVG");
+            ui.selectable_value(&mut self.bottom_tab, BottomTab::Dxf, "DXF");
+            ui.separator();
+            ui.monospace(&self.status);
+            if let Some(stale_summary) = self.output_stale_summary() {
+                ui.separator();
+                ui.colored_label(egui::Color32::from_rgb(225, 176, 84), stale_summary);
+                if self.stale_recalculate_available() && ui.button("Recalculate").clicked() {
+                    self.start_calculation(ui.ctx().clone());
+                }
+            }
+            ui.separator();
+            if ui
+                .add_enabled(
+                    self.current_bottom_tab_payload().is_some(),
+                    egui::Button::new("Copy tab"),
+                )
+                .clicked()
+            {
+                self.copy_current_bottom_tab(ui.ctx());
+            }
+            ui.separator();
+            ui.monospace(format!(
+                "{} lines, {} cut moves, {} rapid moves, {} cleanup moves",
+                self.gcode_lines,
+                self.preview_segments.len(),
+                self.preview_rapids.len(),
+                self.preview_cleanup_segments.len()
+            ));
+        });
+        ui.separator();
+        match self.bottom_tab {
+            BottomTab::Status => draw_status_log(ui, &self.warnings),
+            BottomTab::Gcode => draw_output_preview(ui, Some(&self.gcode), "No G-code generated"),
+            BottomTab::Cleanup => {
+                let preview = secondary_output_preview_text(&self.secondary_gcode);
+                draw_output_preview(ui, preview.as_deref(), "No cleanup G-code generated")
+            }
+            BottomTab::Svg => draw_output_preview(ui, self.svg.as_deref(), "No SVG generated"),
+            BottomTab::Dxf => draw_output_preview(ui, self.dxf.as_deref(), "No DXF generated"),
+        }
+    }
+
+    fn show_preview_panel(&mut self, ui: &mut egui::Ui, rect: egui::Rect) {
+        if self.fit_preview_requested {
+            self.fit_preview_to_rect(rect);
+            self.fit_preview_requested = false;
+        }
+        let response = ui.allocate_rect(rect, egui::Sense::click_and_drag());
+        let hover_pos = response.hover_pos();
+        if response.double_clicked() && self.preview_bounds.is_some() {
+            self.fit_preview_requested = true;
+        }
+        if response.dragged() {
+            let delta = response.drag_delta();
+            self.transform.pan.x += f64::from(delta.x);
+            self.transform.pan.y += f64::from(delta.y);
+            ui.ctx().request_repaint();
+        }
+        if response.hovered() {
+            let (scroll_y, zoom_delta) =
+                ui.input(|input| (input.smooth_scroll_delta().y, input.zoom_delta()));
+            let zoom_factor = if (zoom_delta - 1.0).abs() > f32::EPSILON {
+                f64::from(zoom_delta)
+            } else if scroll_y.abs() > 0.0 {
+                2.0_f64.powf(f64::from(scroll_y) / 240.0)
+            } else {
+                1.0
+            };
+            if (zoom_factor - 1.0).abs() > f64::EPSILON
+                && let Some(anchor) = hover_pos
+            {
+                zoom_transform_at_screen_point(&mut self.transform, rect, anchor, zoom_factor);
+                ui.ctx().request_repaint();
+            }
+        }
+
+        draw_preview(
+            ui.painter(),
+            rect,
+            self.transform,
+            self.controls.units.value(),
+            &self.preview_segments,
+            &self.preview_rapids,
+            &self.preview_cleanup_segments,
+            self.preview_bounds,
+            self.show_toolpath,
+            self.show_rapids,
+            self.show_cleanup,
+            self.show_bounds,
+            self.show_axes,
+            self.show_grid,
+        );
+        if let Some(pos) = hover_pos {
+            let cursor = screen_point_to_model(rect, self.transform, pos);
+            draw_preview_cursor_readout(ui.painter(), rect, cursor);
+        }
+    }
+
     fn show_menu_bar(&mut self, ui: &mut egui::Ui) {
         egui::MenuBar::new().ui(ui, |ui| {
             ui.menu_button("File", |ui| {
@@ -1611,6 +1675,31 @@ impl RengraveApp {
                     self.save_preferences();
                 }
             });
+
+            #[cfg(debug_assertions)]
+            self.show_debug_menu(ui);
+        });
+    }
+
+    #[cfg(debug_assertions)]
+    fn show_debug_menu(&mut self, ui: &mut egui::Ui) {
+        ui.menu_button("Debug", |ui| {
+            ui.label("Hover debug is active in debug builds only.");
+            ui.label("Enable widget info, then hover the suspicious region.");
+            ui.separator();
+            ui.checkbox(
+                &mut self.debug_layout_overlay,
+                "Show R-Engrave layout rectangles",
+            );
+            ui.separator();
+
+            let mut debug_options = ui.style().debug;
+            let previous_options = debug_options;
+            debug_options.ui(ui);
+            if debug_options != previous_options {
+                ui.ctx().all_styles_mut(|style| style.debug = debug_options);
+                ui.ctx().request_repaint();
+            }
         });
     }
 
@@ -3413,6 +3502,122 @@ fn summary_separator(ui: &mut egui::Ui) {
     ui.label(egui::RichText::new("/").color(egui::Color32::from_rgb(120, 130, 136)));
 }
 
+fn paint_panel_background(ui: &egui::Ui, rect: egui::Rect) {
+    ui.painter_at(rect)
+        .rect_filled(rect, 0.0, ui.visuals().panel_fill);
+}
+
+fn panel_child_ui(parent: &mut egui::Ui, id: &'static str, rect: egui::Rect) -> egui::Ui {
+    let mut child = parent.new_child(
+        egui::UiBuilder::new()
+            .id_salt(id)
+            .max_rect(rect)
+            .layout(egui::Layout::top_down(egui::Align::Min)),
+    );
+    child.set_clip_rect(rect);
+    child.expand_to_include_rect(rect);
+    child
+}
+
+#[cfg(debug_assertions)]
+#[derive(Debug, Clone, Copy)]
+struct DebugLayoutRects {
+    root: egui::Rect,
+    top: egui::Rect,
+    left: egui::Rect,
+    preview: egui::Rect,
+    bottom: egui::Rect,
+}
+
+#[cfg(debug_assertions)]
+fn draw_debug_layout_overlay(ctx: &egui::Context, rects: DebugLayoutRects) {
+    let painter = ctx.debug_painter();
+    debug_layout_rect(
+        &painter,
+        "root",
+        rects.root,
+        egui::Color32::from_rgb(220, 220, 220),
+    );
+    debug_layout_rect(
+        &painter,
+        "top",
+        rects.top,
+        egui::Color32::from_rgb(225, 176, 84),
+    );
+    debug_layout_rect(
+        &painter,
+        "left",
+        rects.left,
+        egui::Color32::from_rgb(104, 166, 200),
+    );
+    debug_layout_rect(
+        &painter,
+        "preview",
+        rects.preview,
+        egui::Color32::from_rgb(94, 176, 132),
+    );
+    debug_layout_rect(
+        &painter,
+        "bottom",
+        rects.bottom,
+        egui::Color32::from_rgb(190, 142, 72),
+    );
+
+    if let Some(pointer) = ctx.pointer_hover_pos() {
+        painter.circle_filled(pointer, 4.0, egui::Color32::from_rgb(240, 96, 96));
+        let mut hits = Vec::new();
+        for (name, rect) in [
+            ("root", rects.root),
+            ("top", rects.top),
+            ("left", rects.left),
+            ("preview", rects.preview),
+            ("bottom", rects.bottom),
+        ] {
+            if rect.contains(pointer) {
+                hits.push(name);
+            }
+        }
+        let hit_text = if hits.is_empty() {
+            "none".to_owned()
+        } else {
+            hits.join(", ")
+        };
+        painter.text(
+            rects.root.left_top() + egui::vec2(10.0, 10.0),
+            egui::Align2::LEFT_TOP,
+            format!("pointer {:.1},{:.1} in: {}", pointer.x, pointer.y, hit_text),
+            egui::FontId::monospace(13.0),
+            egui::Color32::WHITE,
+        );
+    }
+}
+
+#[cfg(debug_assertions)]
+fn debug_layout_rect(painter: &egui::Painter, name: &str, rect: egui::Rect, color: egui::Color32) {
+    painter.rect_stroke(
+        rect,
+        0.0,
+        egui::Stroke::new(2.0, color),
+        egui::StrokeKind::Inside,
+    );
+    painter.text(
+        rect.left_top() + egui::vec2(6.0, 6.0),
+        egui::Align2::LEFT_TOP,
+        format!(
+            "{} x {:.1}-{:.1} y {:.1}-{:.1} {:.1}x{:.1}",
+            name,
+            rect.left(),
+            rect.right(),
+            rect.top(),
+            rect.bottom(),
+            rect.width(),
+            rect.height()
+        ),
+        egui::FontId::monospace(12.0),
+        color,
+    );
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct PathRowAction {
     browse_clicked: bool,
@@ -3423,11 +3628,16 @@ fn path_row(ui: &mut egui::Ui, label: &str, value: &mut String) -> PathRowAction
     let mut action = PathRowAction::default();
     ui.horizontal(|ui| {
         row_label(ui, label, 88.0);
-        let text_width = (ui.available_width() - 74.0).max(80.0);
-        action.value_changed = ui
-            .add_sized([text_width, 22.0], egui::TextEdit::singleline(value))
-            .changed();
-        action.browse_clicked = ui.button("Browse").clicked();
+        right_aligned_group(ui, PATH_CONTROL_WIDTH, |ui| {
+            let text_width = (ui.available_width() - 74.0).max(80.0);
+            action.value_changed = ui
+                .add_sized(
+                    [text_width, 22.0],
+                    egui::TextEdit::singleline(value).horizontal_align(egui::Align::RIGHT),
+                )
+                .changed();
+            action.browse_clicked = ui.button("Browse").clicked();
+        });
     });
     action
 }
@@ -3435,10 +3645,14 @@ fn path_row(ui: &mut egui::Ui, label: &str, value: &mut String) -> PathRowAction
 fn number_row(ui: &mut egui::Ui, label: &str, value: &mut f64, speed: f64) {
     ui.horizontal(|ui| {
         row_label(ui, label, 124.0);
-        ui.add_sized(
-            [ui.available_width().max(80.0), 22.0],
-            egui::DragValue::new(value).speed(speed).max_decimals(4),
-        );
+        right_aligned_group(ui, FORM_CONTROL_WIDTH, |ui| {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.add_sized(
+                    [FORM_CONTROL_WIDTH, 22.0],
+                    egui::DragValue::new(value).speed(speed).max_decimals(4),
+                );
+            });
+        });
     });
 }
 
@@ -3446,12 +3660,14 @@ fn text_row(ui: &mut egui::Ui, label: &str, value: &mut String) -> PathRowAction
     let mut action = PathRowAction::default();
     ui.horizontal(|ui| {
         row_label(ui, label, 124.0);
-        action.value_changed = ui
-            .add_sized(
-                [ui.available_width().max(80.0), 22.0],
-                egui::TextEdit::singleline(value),
-            )
-            .changed();
+        right_aligned_group(ui, FORM_CONTROL_WIDTH, |ui| {
+            action.value_changed = ui
+                .add_sized(
+                    [FORM_CONTROL_WIDTH, 22.0],
+                    egui::TextEdit::singleline(value).horizontal_align(egui::Align::RIGHT),
+                )
+                .changed();
+        });
     });
     action
 }
@@ -3492,11 +3708,24 @@ fn combo_row(
 ) {
     ui.horizontal(|ui| {
         row_label(ui, label, 124.0);
-        egui::ComboBox::from_id_salt(label)
-            .selected_text(selected_text)
-            .width(ui.available_width().max(80.0))
-            .show_ui(ui, body);
+        right_aligned_group(ui, FORM_CONTROL_WIDTH, |ui| {
+            egui::ComboBox::from_id_salt(label)
+                .selected_text(selected_text)
+                .width(FORM_CONTROL_WIDTH)
+                .show_ui(ui, body);
+        });
     });
+}
+
+fn right_aligned_group(ui: &mut egui::Ui, width: f32, body: impl FnOnce(&mut egui::Ui)) {
+    let spacing = ui.spacing().item_spacing.x;
+    let spacer = (ui.available_width() - width - spacing).max(0.0);
+    ui.add_space(spacer);
+    ui.allocate_ui_with_layout(
+        egui::vec2(width, 22.0),
+        egui::Layout::left_to_right(egui::Align::Center),
+        body,
+    );
 }
 
 fn row_label(ui: &mut egui::Ui, label: &str, width: f32) {
@@ -4219,12 +4448,18 @@ fn export_payloads_available(
         || !secondary_gcode.is_empty()
 }
 
+fn left_panel_content_width(ui: &egui::Ui) -> f32 {
+    ui.available_width()
+        .min(INPUT_PANEL_CONTENT_WIDTH)
+        .max(80.0)
+}
+
 fn draw_vector_input_preview(
     ui: &mut egui::Ui,
     segments: &[PreviewSegment],
     bounds: Option<PreviewBounds>,
 ) {
-    let desired = egui::vec2(ui.available_width().max(80.0), INPUT_PREVIEW_VECTOR_HEIGHT);
+    let desired = egui::vec2(left_panel_content_width(ui), INPUT_PREVIEW_VECTOR_HEIGHT);
     let (rect, _) = ui.allocate_exact_size(desired, egui::Sense::hover());
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, 0.0, egui::Color32::from_rgb(28, 30, 32));
@@ -4966,7 +5201,10 @@ fn draw_preview(
     show_axes: bool,
     show_grid: bool,
 ) {
-    painter.rect_filled(rect, 0.0, egui::Color32::from_rgb(28, 30, 32));
+    painter.rect_filled(rect, 0.0, preview_background_color());
+    if show_grid {
+        draw_preview_base_grid(painter, rect);
+    }
 
     let center = rect.center();
     let rot = egui::emath::Rot2::from_angle(transform.total_rotation_radians() as f32);
@@ -5084,6 +5322,40 @@ fn draw_preview(
         ),
     );
     draw_preview_scale_bar(painter, rect, transform.zoom, unit_label);
+}
+
+fn preview_background_color() -> egui::Color32 {
+    egui::Color32::from_rgb(28, 30, 32)
+}
+
+fn draw_preview_base_grid(painter: &egui::Painter, rect: egui::Rect) {
+    let minor = egui::Stroke::new(0.5, egui::Color32::from_rgb(36, 40, 43));
+    let major = egui::Stroke::new(0.7, egui::Color32::from_rgb(45, 51, 55));
+    let step = 64.0;
+
+    let mut index = 0;
+    let mut x = rect.left();
+    while x <= rect.right() {
+        let stroke = if index % 4 == 0 { major } else { minor };
+        painter.line_segment(
+            [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
+            stroke,
+        );
+        x += step;
+        index += 1;
+    }
+
+    index = 0;
+    let mut y = rect.top();
+    while y <= rect.bottom() {
+        let stroke = if index % 4 == 0 { major } else { minor };
+        painter.line_segment(
+            [egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)],
+            stroke,
+        );
+        y += step;
+        index += 1;
+    }
 }
 
 fn draw_preview_grid(
