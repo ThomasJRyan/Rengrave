@@ -15,9 +15,9 @@ use rengrave_core::batch::{
     BatchOutput, BatchProgress, BatchRequest, SecondaryGcode,
     prepare_batch_output_with_cancel_and_progress,
 };
-use rengrave_core::bitmap::{BitmapTraceStats, bitmap_trace_mask_and_stats};
+use rengrave_core::bitmap::{BitmapBackend, BitmapTraceStats, bitmap_trace_mask_and_stats};
 use rengrave_core::dxf::read_dxf_font;
-use rengrave_core::external::{PotraceStatus, detect_potrace, requires_potrace};
+use rengrave_core::external::{PotraceStatus, detect_potrace, is_bitmap_input};
 use rengrave_core::font::{Font, Stroke, read_cxf, read_ttf};
 use rengrave_core::geometry::{Point, ViewTransform};
 use rengrave_core::project::{DocumentRequest, RengraveDocument, load_document};
@@ -154,6 +154,7 @@ impl RengraveApp {
             controls.convert_units(UnitsChoice::default_ui());
         }
         controls.cut_type = tool_view.cut_type();
+        let potrace_status = initial_potrace_status(controls.bitmap_backend);
         let (default_gcode_path, default_svg_path, default_dxf_path) =
             default_output_paths(&default_dir);
         let mut app = Self {
@@ -209,7 +210,7 @@ impl RengraveApp {
             calculation: None,
             next_calculation_id: 1,
             warnings: document.warnings,
-            potrace_status: detect_potrace(),
+            potrace_status,
             fit_preview_requested: false,
             last_output_request: None,
             bottom_tab: BottomTab::Status,
@@ -845,7 +846,7 @@ impl RengraveApp {
         ui.separator();
         self.show_machine_settings(ui);
 
-        if self.tool_view.uses_image() && input_path_requires_potrace(&self.input_path) {
+        if self.tool_view.uses_image() && input_path_is_bitmap(&self.input_path) {
             ui.separator();
             self.show_bitmap_settings(ui);
         }
@@ -985,31 +986,65 @@ impl RengraveApp {
 
     fn show_bitmap_settings(&mut self, ui: &mut egui::Ui) {
         ui.heading("Bitmap Trace");
-        ui.horizontal_wrapped(|ui| {
-            let color = if self.potrace_status.available {
-                egui::Color32::from_rgb(94, 176, 132)
-            } else {
-                egui::Color32::from_rgb(225, 176, 84)
-            };
-            ui.colored_label(color, &self.potrace_status.message);
-            if ui.button("Refresh").clicked() {
-                self.refresh_potrace_status();
+        combo_row(ui, "Backend", self.controls.bitmap_backend.label(), |ui| {
+            for backend in BitmapBackend::ALL {
+                ui.selectable_value(&mut self.controls.bitmap_backend, backend, backend.label());
             }
         });
-        combo_row(
-            ui,
-            "Turn policy",
-            self.controls.bmp_turn_policy.label(),
-            |ui| {
-                for value in BitmapTurnPolicy::ALL {
-                    ui.selectable_value(&mut self.controls.bmp_turn_policy, value, value.label());
-                }
-            },
-        );
-        number_row(ui, "Turd size", &mut self.controls.bmp_turds, 1.0);
-        number_row(ui, "Alpha max", &mut self.controls.bmp_alpha, 0.05);
-        number_row(ui, "Opt tolerance", &mut self.controls.bmp_optto, 0.01);
-        ui.checkbox(&mut self.controls.bmp_long, "Long curves");
+
+        match self.controls.bitmap_backend {
+            BitmapBackend::NativePotrace => {
+                combo_row(
+                    ui,
+                    "Turn policy",
+                    self.controls.bmp_turn_policy.label(),
+                    |ui| {
+                        for value in BitmapTurnPolicy::ALL {
+                            ui.selectable_value(
+                                &mut self.controls.bmp_turn_policy,
+                                value,
+                                value.label(),
+                            );
+                        }
+                    },
+                );
+                number_row(ui, "Turd size", &mut self.controls.bmp_turds, 1.0);
+                number_row(ui, "Alpha max", &mut self.controls.bmp_alpha, 0.05);
+                number_row(ui, "Opt tolerance", &mut self.controls.bmp_optto, 0.01);
+                ui.checkbox(&mut self.controls.bmp_long, "Long curves");
+            }
+            BitmapBackend::PotraceSidecar => {
+                ui.horizontal_wrapped(|ui| {
+                    let color = if self.potrace_status.available {
+                        egui::Color32::from_rgb(94, 176, 132)
+                    } else {
+                        egui::Color32::from_rgb(225, 176, 84)
+                    };
+                    ui.colored_label(color, &self.potrace_status.message);
+                    if ui.button("Refresh").clicked() {
+                        self.refresh_potrace_status();
+                    }
+                });
+                combo_row(
+                    ui,
+                    "Turn policy",
+                    self.controls.bmp_turn_policy.label(),
+                    |ui| {
+                        for value in BitmapTurnPolicy::ALL {
+                            ui.selectable_value(
+                                &mut self.controls.bmp_turn_policy,
+                                value,
+                                value.label(),
+                            );
+                        }
+                    },
+                );
+                number_row(ui, "Turd size", &mut self.controls.bmp_turds, 1.0);
+                number_row(ui, "Alpha max", &mut self.controls.bmp_alpha, 0.05);
+                number_row(ui, "Opt tolerance", &mut self.controls.bmp_optto, 0.01);
+                ui.checkbox(&mut self.controls.bmp_long, "Long curves");
+            }
+        }
     }
 
     fn show_vcarve_settings(&mut self, ui: &mut egui::Ui) {
@@ -1560,7 +1595,11 @@ impl RengraveApp {
                     ui.colored_label(egui::Color32::from_rgb(225, 176, 84), stale_summary);
                 }
                 ui.separator();
-                if menu_action(ui, "Refresh Potrace", true) {
+                if menu_action(
+                    ui,
+                    "Refresh Potrace",
+                    self.controls.bitmap_backend == BitmapBackend::PotraceSidecar,
+                ) {
                     self.refresh_potrace_status();
                 }
             });
@@ -1634,17 +1673,20 @@ impl RengraveApp {
                 summary_separator(ui);
                 summary_label(ui, &warnings, egui::Color32::from_rgb(225, 176, 84));
             }
-            if let Some(potrace) = potrace_requirement_summary(
-                input_path_requires_potrace(&self.input_path),
+            if let Some(vectorizer) = bitmap_vectorizer_summary(
+                input_path_is_bitmap(&self.input_path),
+                self.controls.bitmap_backend,
                 self.potrace_status.available,
             ) {
                 summary_separator(ui);
-                let color = if self.potrace_status.available {
-                    egui::Color32::from_rgb(94, 176, 132)
-                } else {
-                    egui::Color32::from_rgb(225, 176, 84)
+                let color = match self.controls.bitmap_backend {
+                    BitmapBackend::NativePotrace => egui::Color32::from_rgb(94, 176, 132),
+                    BitmapBackend::PotraceSidecar if self.potrace_status.available => {
+                        egui::Color32::from_rgb(94, 176, 132)
+                    }
+                    BitmapBackend::PotraceSidecar => egui::Color32::from_rgb(225, 176, 84),
                 };
-                summary_label(ui, potrace, color);
+                summary_label(ui, vectorizer, color);
             }
         });
     }
@@ -1795,6 +1837,7 @@ struct UiControls {
     bmp_turds: f64,
     bmp_alpha: f64,
     bmp_optto: f64,
+    bitmap_backend: BitmapBackend,
     gpre: String,
     gpost: String,
     flip: bool,
@@ -1965,6 +2008,7 @@ impl UiControls {
             bmp_turds: setting_f64(settings, "bmp_turds", 2.0),
             bmp_alpha: setting_f64(settings, "bmp_alpha", 1.0),
             bmp_optto: setting_f64(settings, "bmp_optto", 0.2),
+            bitmap_backend: BitmapBackend::from_settings(settings),
             gpre: settings
                 .get_last("gpre")
                 .unwrap_or(DEFAULT_GCODE_PREAMBLE)
@@ -2231,6 +2275,12 @@ impl UiControls {
             &mut entries,
             "bmp_optto",
             format_setting_number(self.bmp_optto),
+            false,
+        );
+        push_setting(
+            &mut entries,
+            "bitmap_backend",
+            self.bitmap_backend.value(),
             false,
         );
         push_setting(&mut entries, "gpre", self.gpre.trim(), false);
@@ -3235,10 +3285,17 @@ fn path_from_text(text: &str) -> Option<PathBuf> {
     (!trimmed.is_empty()).then(|| PathBuf::from(trimmed))
 }
 
-fn input_path_requires_potrace(path_text: &str) -> bool {
+fn initial_potrace_status(backend: BitmapBackend) -> PotraceStatus {
+    match backend {
+        BitmapBackend::NativePotrace => PotraceStatus::missing("Potrace status not checked"),
+        BitmapBackend::PotraceSidecar => detect_potrace(),
+    }
+}
+
+fn input_path_is_bitmap(path_text: &str) -> bool {
     path_from_text(path_text)
         .as_deref()
-        .map(requires_potrace)
+        .map(is_bitmap_input)
         .unwrap_or(false)
 }
 
@@ -3354,13 +3411,21 @@ fn warning_count_summary(warnings: &[String]) -> Option<String> {
     }
 }
 
-fn potrace_requirement_summary(required: bool, available: bool) -> Option<&'static str> {
-    if !required {
-        None
-    } else if available {
-        Some("Potrace: ready")
-    } else {
-        Some("Potrace: missing")
+fn bitmap_vectorizer_summary(
+    is_bitmap: bool,
+    backend: BitmapBackend,
+    potrace_available: bool,
+) -> Option<&'static str> {
+    if !is_bitmap {
+        return None;
+    }
+
+    match backend {
+        BitmapBackend::NativePotrace => Some("Vectorizer: Native Potrace"),
+        BitmapBackend::PotraceSidecar if potrace_available => {
+            Some("Vectorizer: Potrace sidecar ready")
+        }
+        BitmapBackend::PotraceSidecar => Some("Vectorizer: Potrace sidecar missing"),
     }
 }
 
@@ -6109,11 +6174,19 @@ mod tests {
     }
 
     #[test]
-    fn input_path_requires_potrace_only_for_bitmap_files() {
-        assert!(input_path_requires_potrace(" /tmp/image.png "));
-        assert!(input_path_requires_potrace("/tmp/image.PBM"));
-        assert!(!input_path_requires_potrace("/tmp/shape.dxf"));
-        assert!(!input_path_requires_potrace("  "));
+    fn input_path_is_bitmap_only_for_bitmap_files() {
+        assert!(input_path_is_bitmap(" /tmp/image.png "));
+        assert!(input_path_is_bitmap("/tmp/image.PBM"));
+        assert!(!input_path_is_bitmap("/tmp/shape.dxf"));
+        assert!(!input_path_is_bitmap("  "));
+    }
+
+    #[test]
+    fn native_potrace_startup_does_not_require_sidecar_probe() {
+        let status = initial_potrace_status(BitmapBackend::NativePotrace);
+
+        assert!(!status.available);
+        assert_eq!(status.message, "Potrace status not checked");
     }
 
     #[test]
@@ -6215,14 +6288,21 @@ mod tests {
             warning_count_summary(&["missing potrace".to_owned()]),
             Some("Warnings: 1".to_owned())
         );
-        assert_eq!(potrace_requirement_summary(false, false), None);
         assert_eq!(
-            potrace_requirement_summary(true, false),
-            Some("Potrace: missing")
+            bitmap_vectorizer_summary(false, BitmapBackend::NativePotrace, false),
+            None
         );
         assert_eq!(
-            potrace_requirement_summary(true, true),
-            Some("Potrace: ready")
+            bitmap_vectorizer_summary(true, BitmapBackend::NativePotrace, false),
+            Some("Vectorizer: Native Potrace")
+        );
+        assert_eq!(
+            bitmap_vectorizer_summary(true, BitmapBackend::PotraceSidecar, false),
+            Some("Vectorizer: Potrace sidecar missing")
+        );
+        assert_eq!(
+            bitmap_vectorizer_summary(true, BitmapBackend::PotraceSidecar, true),
+            Some("Vectorizer: Potrace sidecar ready")
         );
     }
 
@@ -7115,12 +7195,14 @@ mod tests {
     }
 
     #[test]
-    fn ui_controls_emit_bitmap_potrace_overrides() {
+    fn ui_controls_emit_bitmap_trace_overrides() {
         let mut controls = UiControls::from_settings(&LegacySettings::default());
+        assert_eq!(controls.bitmap_backend, BitmapBackend::NativePotrace);
         controls.bmp_turn_policy = BitmapTurnPolicy::Black;
         controls.bmp_turds = 7.0;
         controls.bmp_alpha = 0.75;
         controls.bmp_optto = 0.125;
+        controls.bitmap_backend = BitmapBackend::PotraceSidecar;
         controls.bmp_long = false;
         controls.use_image_size = true;
 
@@ -7136,6 +7218,7 @@ mod tests {
         assert_eq!(value_for("bmp_turds"), Some("7"));
         assert_eq!(value_for("bmp_alpha"), Some("0.75"));
         assert_eq!(value_for("bmp_optto"), Some("0.125"));
+        assert_eq!(value_for("bitmap_backend"), Some("potrace-sidecar"));
         assert_eq!(value_for("bmp_long"), Some("0"));
         assert_eq!(value_for("useIMGsize"), Some("1"));
     }

@@ -4,7 +4,7 @@ use crate::bitmap::{BitmapError, vectorize_bitmap_to_dxf_with_cancel};
 use crate::cleanup::{CleanupBit, CleanupOptions, generate_cleanup_points_with_cancel};
 use crate::dxf::{DxfError, dxf_font_from_str_with_cancel, read_dxf_font_with_cancel};
 use crate::export::{ExportOptions, write_dxf, write_svg_with_circle};
-use crate::external::requires_potrace;
+use crate::external::is_bitmap_input;
 use crate::font::{FontError, read_cxf_with_cancel, read_ttf_with_cancel};
 use crate::gcode::{
     GcodeOptions, write_cleanup_gcode, write_engrave_gcode, write_engrave_gcode_with_circle,
@@ -319,7 +319,7 @@ fn generate_dxf_engrave_gcode(
                 return Ok(None);
             }
         }
-    } else if requires_potrace(&path) {
+    } else if is_bitmap_input(&path) {
         progress(BatchProgress::VectorizingBitmap);
         match vectorize_bitmap_to_dxf_with_cancel(&path, settings, cancel) {
             Ok(dxf) => match dxf_font_from_str_with_cancel(&dxf, segarc, cancel) {

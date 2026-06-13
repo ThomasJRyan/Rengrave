@@ -2476,9 +2476,18 @@ dependencies = [
  "clipper2",
  "image",
  "rayon",
+ "rengrave-potrace",
  "serde",
  "thiserror 2.0.18",
  "ttf-parser",
+]
+
+[[package]]
+name = "rengrave-potrace"
+version = "0.1.0"
+dependencies = [
+ "image",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

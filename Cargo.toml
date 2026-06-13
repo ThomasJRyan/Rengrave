@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "crates/rengrave-potrace",
     "crates/rengrave-core",
     "crates/rengrave-cli",
     "crates/rengrave-ui",
@@ -24,3 +25,4 @@ rfd = { version = "0.15.4", default-features = false, features = ["xdg-portal", 
 serde = { version = "1.0", features = ["derive"] }
 thiserror = "2.0"
 ttf-parser = "0.25.1"
+rengrave-potrace = { path = "crates/rengrave-potrace" }

@@ -159,6 +159,7 @@ pub fn default_legacy_settings() -> LegacySettings {
         ("bmp_turds", "2"),
         ("bmp_alpha", "1"),
         ("bmp_optto", "0.2"),
+        ("bitmap_backend", "native-potrace"),
         ("gpre", DEFAULT_GCODE_PREAMBLE),
         ("gpost", DEFAULT_GCODE_POSTAMBLE),
         ("input_type", "text"),

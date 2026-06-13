@@ -46,7 +46,7 @@ pub fn detect_potrace() -> PotraceStatus {
             ))
         }
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => PotraceStatus::missing(
-            "Potrace is required for bitmap vectorization but was not found in PATH",
+            "Potrace sidecar backend selected but potrace was not found in PATH",
         ),
         Err(err) => PotraceStatus::missing(format!("Unable to run Potrace version check: {err}")),
     }
@@ -60,7 +60,7 @@ pub fn parse_potrace_version(output: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
-pub fn requires_potrace(path: &Path) -> bool {
+pub fn is_bitmap_input(path: &Path) -> bool {
     matches!(
         path.extension()
             .and_then(|ext| ext.to_str())
@@ -86,12 +86,12 @@ mod tests {
     }
 
     #[test]
-    fn recognizes_bitmap_inputs_that_need_potrace() {
-        assert!(requires_potrace(Path::new("input.png")));
-        assert!(requires_potrace(Path::new("input.gif")));
-        assert!(requires_potrace(Path::new("input.jpeg")));
-        assert!(requires_potrace(Path::new("input.PBM")));
-        assert!(!requires_potrace(Path::new("input.dxf")));
-        assert!(!requires_potrace(Path::new("input.cxf")));
+    fn recognizes_bitmap_inputs() {
+        assert!(is_bitmap_input(Path::new("input.png")));
+        assert!(is_bitmap_input(Path::new("input.gif")));
+        assert!(is_bitmap_input(Path::new("input.jpeg")));
+        assert!(is_bitmap_input(Path::new("input.PBM")));
+        assert!(!is_bitmap_input(Path::new("input.dxf")));
+        assert!(!is_bitmap_input(Path::new("input.cxf")));
     }
 }

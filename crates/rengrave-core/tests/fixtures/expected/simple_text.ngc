@@ -59,6 +59,7 @@
 (fengrave_set bmp_turds   2 )
 (fengrave_set bmp_alpha   1 )
 (fengrave_set bmp_optto   0.2 )
+(fengrave_set bitmap_backend native-potrace )
 (fengrave_set gpre        G17 M3 S3000 )
 (fengrave_set gpost       M5|M2 )
 (fengrave_set input_type  text )

@@ -6,6 +6,7 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use image::DynamicImage;
+use rengrave_potrace::{Bitmap, Options as NativePotraceOptions, TurnPolicy};
 
 use crate::settings::{LegacySettings, get_legacy_bool};
 
@@ -27,6 +28,8 @@ pub enum BitmapError {
     RunPotrace { source: std::io::Error },
     #[error("Potrace failed: {stderr}")]
     PotraceFailed { stderr: String },
+    #[error("native Potrace failed: {source}")]
+    NativePotraceFailed { source: rengrave_potrace::Error },
     #[error("bitmap vectorization canceled")]
     Canceled,
 }
@@ -35,6 +38,48 @@ pub enum BitmapError {
 pub struct BitmapTraceStats {
     pub black_pixels: usize,
     pub white_pixels: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BitmapBackend {
+    NativePotrace,
+    PotraceSidecar,
+}
+
+impl BitmapBackend {
+    pub const ALL: [Self; 2] = [Self::NativePotrace, Self::PotraceSidecar];
+
+    pub fn parse(value: &str) -> Self {
+        match value.to_ascii_lowercase().as_str() {
+            "potrace-sidecar" | "external-potrace" | "sidecar" => Self::PotraceSidecar,
+            _ => Self::NativePotrace,
+        }
+    }
+
+    pub fn from_settings(settings: &LegacySettings) -> Self {
+        settings
+            .get_last("bitmap_backend")
+            .map(Self::parse)
+            .unwrap_or(Self::NativePotrace)
+    }
+
+    pub fn value(self) -> &'static str {
+        match self {
+            Self::NativePotrace => "native-potrace",
+            Self::PotraceSidecar => "potrace-sidecar",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::NativePotrace => "Native Potrace",
+            Self::PotraceSidecar => "Potrace sidecar",
+        }
+    }
+
+    pub fn requires_potrace(self) -> bool {
+        self == Self::PotraceSidecar
+    }
 }
 
 pub fn bitmap_trace_mask_and_stats(image: &DynamicImage) -> (image::RgbaImage, BitmapTraceStats) {
@@ -65,6 +110,37 @@ pub fn vectorize_bitmap_to_dxf(
 }
 
 pub fn vectorize_bitmap_to_dxf_with_cancel(
+    path: &Path,
+    settings: &LegacySettings,
+    cancel: &dyn Fn() -> bool,
+) -> Result<String, BitmapError> {
+    match BitmapBackend::from_settings(settings) {
+        BitmapBackend::NativePotrace => {
+            vectorize_bitmap_with_native_potrace_to_dxf(path, settings, cancel)
+        }
+        BitmapBackend::PotraceSidecar => {
+            vectorize_bitmap_with_potrace_sidecar_to_dxf(path, settings, cancel)
+        }
+    }
+}
+
+fn vectorize_bitmap_with_native_potrace_to_dxf(
+    path: &Path,
+    settings: &LegacySettings,
+    cancel: &dyn Fn() -> bool,
+) -> Result<String, BitmapError> {
+    check_canceled(cancel)?;
+    let image = image::open(path).map_err(|source| BitmapError::Decode {
+        path: path.to_owned(),
+        source,
+    })?;
+    let bitmap = image_to_native_potrace_bitmap(image, cancel)?;
+    let options = NativePotraceSettings::from_settings(settings).options();
+    rengrave_potrace::trace_bitmap_to_dxf(&bitmap, options)
+        .map_err(|source| BitmapError::NativePotraceFailed { source })
+}
+
+fn vectorize_bitmap_with_potrace_sidecar_to_dxf(
     path: &Path,
     settings: &LegacySettings,
     cancel: &dyn Fn() -> bool,
@@ -212,6 +288,26 @@ fn image_to_pbm_bytes_with_cancel(
     Ok(output)
 }
 
+fn image_to_native_potrace_bitmap(
+    image: DynamicImage,
+    cancel: &dyn Fn() -> bool,
+) -> Result<Bitmap, BitmapError> {
+    let rgba = image.to_rgba8();
+    let (width, height) = rgba.dimensions();
+    let mut bits = Vec::with_capacity((width * height) as usize);
+
+    for y in (0..height).rev() {
+        check_canceled(cancel)?;
+        for x in 0..width {
+            let pixel = rgba.get_pixel(x, y).0;
+            bits.push(bitmap_pixel_is_black(pixel));
+        }
+    }
+
+    Bitmap::from_bits(width as i32, height as i32, bits)
+        .map_err(|source| BitmapError::NativePotraceFailed { source })
+}
+
 fn bitmap_pixel_is_black(pixel: [u8; 4]) -> bool {
     let alpha = pixel[3] as u32;
     let red = composite_over_white(pixel[0] as u32, alpha);
@@ -243,6 +339,40 @@ fn needs_image_conversion(path: &Path) -> bool {
     )
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct NativePotraceSettings {
+    turn_policy: TurnPolicy,
+    turd_size: i32,
+    alpha_max: f64,
+    opti_curve: bool,
+    opt_tolerance: f64,
+}
+
+impl NativePotraceSettings {
+    fn from_settings(settings: &LegacySettings) -> Self {
+        Self {
+            turn_policy: TurnPolicy::parse(settings.get_last("bmp_turnp").unwrap_or("minority")),
+            turd_size: settings
+                .get_last("bmp_turds")
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(2),
+            alpha_max: get_f64(settings, "bmp_alpha", 1.0),
+            opti_curve: get_legacy_bool(settings, "bmp_long", true),
+            opt_tolerance: get_f64(settings, "bmp_optto", 0.2),
+        }
+    }
+
+    fn options(self) -> NativePotraceOptions {
+        NativePotraceOptions {
+            turd_size: self.turd_size,
+            turn_policy: self.turn_policy,
+            alpha_max: self.alpha_max,
+            opti_curve: self.opti_curve,
+            opt_tolerance: self.opt_tolerance,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PotraceOptions {
     turn_policy: String,
@@ -250,6 +380,13 @@ struct PotraceOptions {
     alpha_max: String,
     opt_tolerance: String,
     long_curve: bool,
+}
+
+fn get_f64(settings: &LegacySettings, key: &str, default: f64) -> f64 {
+    settings
+        .get_last(key)
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(default)
 }
 
 impl PotraceOptions {
@@ -373,6 +510,50 @@ mod tests {
         assert_eq!(&bytes[..7], b"P4\n1 1\n");
         assert_eq!(bytes[7], 0b1000_0000);
         assert!(needs_image_conversion(Path::new("input.gif")));
+    }
+
+    #[test]
+    fn bitmap_backend_defaults_to_native_potrace_and_accepts_sidecar() {
+        let settings = crate::settings::default_legacy_settings();
+        assert_eq!(
+            BitmapBackend::from_settings(&settings),
+            BitmapBackend::NativePotrace
+        );
+
+        let mut settings = settings;
+        settings.set_or_push("bitmap_backend", "potrace-sidecar", false);
+        assert_eq!(
+            BitmapBackend::from_settings(&settings),
+            BitmapBackend::PotraceSidecar
+        );
+    }
+
+    #[test]
+    fn native_potrace_backend_vectorizes_bitmap_without_sidecar() {
+        let mut image = RgbaImage::from_pixel(32, 32, Rgba([255, 255, 255, 255]));
+        for y in 8..24 {
+            for x in 8..24 {
+                image.put_pixel(x, y, Rgba([0, 0, 0, 255]));
+            }
+        }
+
+        let path = std::env::temp_dir().join(format!(
+            "rengrave-native-potrace-test-{}-{}.png",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or_default()
+        ));
+        DynamicImage::ImageRgba8(image).save(&path).unwrap();
+
+        let dxf = vectorize_bitmap_to_dxf(&path, &crate::settings::default_legacy_settings())
+            .expect("native Potrace bitmap vectorization should produce DXF");
+
+        let _ = std::fs::remove_file(&path);
+        assert!(dxf.contains("POLYLINE"));
+        assert!(dxf.contains("VERTEX"));
+        assert!(dxf.ends_with("  0\nEOF\n"));
     }
 
     #[test]

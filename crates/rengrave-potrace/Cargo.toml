@@ -1,0 +1,13 @@
+[package]
+name = "rengrave-potrace"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "GPL-2.0-only"
+repository.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+
+[dev-dependencies]
+image.workspace = true

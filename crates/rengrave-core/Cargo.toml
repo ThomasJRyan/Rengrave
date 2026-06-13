@@ -12,4 +12,4 @@ rayon.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 ttf-parser.workspace = true
-
+rengrave-potrace.workspace = true
