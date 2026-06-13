@@ -35,9 +35,8 @@ const INPUT_PREVIEW_VECTOR_HEIGHT: f32 = 180.0;
 const INPUT_PREVIEW_THUMBNAIL_WIDTH: u32 = 300;
 const INPUT_PREVIEW_THUMBNAIL_HEIGHT: u32 = 180;
 const DEFAULT_WINDOW_SIZE: [f32; 2] = [1280.0, 800.0];
-const TOOLBAR_HEIGHT: f32 = 92.0;
-const INPUT_PANEL_WIDTH: f32 = 340.0;
-const OUTPUT_PANEL_WIDTH: f32 = 310.0;
+const TOOLBAR_HEIGHT: f32 = 104.0;
+const INPUT_PANEL_WIDTH: f32 = 380.0;
 const STATUS_PANEL_HEIGHT: f32 = 150.0;
 
 #[derive(Debug, Clone, Default)]
@@ -682,18 +681,17 @@ impl RengraveApp {
         self.set_tool_view(next);
     }
 
-    fn show_tool_view_tabs(&mut self, ui: &mut egui::Ui) {
+    fn show_workbench_selector(&mut self, ui: &mut egui::Ui) {
         let mut selected = self.tool_view;
-        ui.horizontal_wrapped(|ui| {
-            for tool_view in ToolView::ALL {
-                if ui
-                    .selectable_label(selected == tool_view, tool_view.label())
-                    .clicked()
-                {
-                    selected = tool_view;
+        egui::ComboBox::from_id_salt("workbench_selector")
+            .selected_text(selected.label())
+            .width(160.0)
+            .show_ui(ui, |ui| {
+                ui.label("Workbench");
+                for tool_view in ToolView::ALL {
+                    ui.selectable_value(&mut selected, tool_view, tool_view.label());
                 }
-            }
-        });
+            });
         if selected != self.tool_view {
             self.set_tool_view(selected);
         }
@@ -859,9 +857,6 @@ impl RengraveApp {
             ui.separator();
             self.show_cleanup_settings(ui);
         }
-
-        ui.separator();
-        self.show_output_controls(ui);
 
         ui.separator();
         self.show_preview_controls(ui);
@@ -1123,17 +1118,13 @@ impl RengraveApp {
         });
     }
 
-    fn show_output_controls(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Output");
-        if ui.button("Use default dir").clicked() {
+    fn show_top_output_controls(&mut self, ui: &mut egui::Ui) {
+        ui.label("Output");
+        if ui.small_button("Default dir").clicked() {
             self.reset_output_paths_to_default_dir();
         }
-        let gcode_path_action = path_row(ui, "G-code", &mut self.gcode_path);
-        if gcode_path_action.browse_clicked {
+        if ui.small_button("G-code path").clicked() {
             self.choose_path(FileBrowserTarget::GcodeOutput, ui.ctx().clone());
-        }
-        if gcode_path_action.value_changed {
-            self.save_preferences();
         }
         if ui
             .add_enabled(!self.gcode.is_empty(), egui::Button::new("Export G-code"))
@@ -1142,23 +1133,18 @@ impl RengraveApp {
             self.export_current(ExportKind::Gcode);
         }
         if self.tool_view.uses_vcarve() {
-            ui.label(format!("Cleanup files: {}", self.secondary_gcode.len()));
             if ui
                 .add_enabled(
                     !self.secondary_gcode.is_empty(),
-                    egui::Button::new("Export cleanup files"),
+                    egui::Button::new("Export cleanup"),
                 )
                 .clicked()
             {
                 self.export_secondary_outputs();
             }
         }
-        let svg_path_action = path_row(ui, "SVG", &mut self.svg_path);
-        if svg_path_action.browse_clicked {
+        if ui.small_button("SVG path").clicked() {
             self.choose_path(FileBrowserTarget::SvgOutput, ui.ctx().clone());
-        }
-        if svg_path_action.value_changed {
-            self.save_preferences();
         }
         if ui
             .add_enabled(self.svg.is_some(), egui::Button::new("Export SVG"))
@@ -1166,12 +1152,8 @@ impl RengraveApp {
         {
             self.export_current(ExportKind::Svg);
         }
-        let dxf_path_action = path_row(ui, "DXF", &mut self.dxf_path);
-        if dxf_path_action.browse_clicked {
+        if ui.small_button("DXF path").clicked() {
             self.choose_path(FileBrowserTarget::DxfOutput, ui.ctx().clone());
-        }
-        if dxf_path_action.value_changed {
-            self.save_preferences();
         }
         if ui
             .add_enabled(self.dxf.is_some(), egui::Button::new("Export DXF"))
@@ -1179,23 +1161,18 @@ impl RengraveApp {
         {
             self.export_current(ExportKind::Dxf);
         }
-        ui.horizontal_wrapped(|ui| {
-            if ui
-                .add_enabled(!self.gcode.is_empty(), egui::Button::new("Copy G-code"))
-                .clicked()
-            {
-                self.copy_gcode(ui.ctx());
-            }
-            if ui
-                .add_enabled(
-                    self.any_export_available(),
-                    egui::Button::new("Export all available"),
-                )
-                .clicked()
-            {
-                self.export_all_available();
-            }
-        });
+        if ui
+            .add_enabled(!self.gcode.is_empty(), egui::Button::new("Copy G-code"))
+            .clicked()
+        {
+            self.copy_gcode(ui.ctx());
+        }
+        if ui
+            .add_enabled(self.any_export_available(), egui::Button::new("Export all"))
+            .clicked()
+        {
+            self.export_all_available();
+        }
     }
 
     fn show_preview_controls(&mut self, ui: &mut egui::Ui) {
@@ -1323,7 +1300,7 @@ impl eframe::App for RengraveApp {
             .show_inside(ui, |ui| {
                 self.show_menu_bar(ui);
                 ui.horizontal(|ui| {
-                    self.show_tool_view_tabs(ui);
+                    self.show_workbench_selector(ui);
                     ui.separator();
                     if ui.button("Load").clicked() {
                         self.reload_document(ui.ctx().clone());
@@ -1350,13 +1327,15 @@ impl eframe::App for RengraveApp {
                         }
                     }
                     ui.separator();
-                    ui.add(
+                    ui.add_sized(
+                        [120.0, 20.0],
                         egui::Slider::new(&mut self.transform.zoom, 1.0..=500.0)
                             .text("Zoom")
                             .clamping(egui::SliderClamping::Always),
                     );
                     if ui
-                        .add(
+                        .add_sized(
+                            [120.0, 20.0],
                             egui::Slider::new(
                                 &mut self.transform.viewport_rotation_degrees,
                                 -180.0..=180.0,
@@ -1368,9 +1347,13 @@ impl eframe::App for RengraveApp {
                     {
                         self.save_preferences();
                     }
-                    ui.separator();
+                });
+                ui.horizontal(|ui| {
                     ui.label("Status");
                     ui.monospace(&self.status);
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        self.show_top_output_controls(ui);
+                    });
                 });
                 ui.add_space(4.0);
                 self.show_job_summary(ui);
@@ -1382,14 +1365,7 @@ impl eframe::App for RengraveApp {
             .show_inside(ui, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     self.show_workflow_input_panel(ui);
-                });
-            });
-
-        egui::Panel::right("output_tools")
-            .exact_size(OUTPUT_PANEL_WIDTH)
-            .resizable(false)
-            .show_inside(ui, |ui| {
-                egui::ScrollArea::vertical().show(ui, |ui| {
+                    ui.separator();
                     self.show_workflow_settings_panel(ui);
                 });
             });
@@ -3446,7 +3422,7 @@ struct PathRowAction {
 fn path_row(ui: &mut egui::Ui, label: &str, value: &mut String) -> PathRowAction {
     let mut action = PathRowAction::default();
     ui.horizontal(|ui| {
-        ui.add_sized([88.0, 20.0], egui::Label::new(label));
+        row_label(ui, label, 88.0);
         let text_width = (ui.available_width() - 74.0).max(80.0);
         action.value_changed = ui
             .add_sized([text_width, 22.0], egui::TextEdit::singleline(value))
@@ -3458,15 +3434,18 @@ fn path_row(ui: &mut egui::Ui, label: &str, value: &mut String) -> PathRowAction
 
 fn number_row(ui: &mut egui::Ui, label: &str, value: &mut f64, speed: f64) {
     ui.horizontal(|ui| {
-        ui.add_sized([124.0, 20.0], egui::Label::new(label));
-        ui.add(egui::DragValue::new(value).speed(speed).max_decimals(4));
+        row_label(ui, label, 124.0);
+        ui.add_sized(
+            [ui.available_width().max(80.0), 22.0],
+            egui::DragValue::new(value).speed(speed).max_decimals(4),
+        );
     });
 }
 
 fn text_row(ui: &mut egui::Ui, label: &str, value: &mut String) -> PathRowAction {
     let mut action = PathRowAction::default();
     ui.horizontal(|ui| {
-        ui.add_sized([124.0, 20.0], egui::Label::new(label));
+        row_label(ui, label, 124.0);
         action.value_changed = ui
             .add_sized(
                 [ui.available_width().max(80.0), 22.0],
@@ -3512,11 +3491,22 @@ fn combo_row(
     body: impl FnOnce(&mut egui::Ui),
 ) {
     ui.horizontal(|ui| {
-        ui.add_sized([124.0, 20.0], egui::Label::new(label));
+        row_label(ui, label, 124.0);
         egui::ComboBox::from_id_salt(label)
             .selected_text(selected_text)
+            .width(ui.available_width().max(80.0))
             .show_ui(ui, body);
     });
+}
+
+fn row_label(ui: &mut egui::Ui, label: &str, width: f32) {
+    ui.allocate_ui_with_layout(
+        egui::vec2(width, 20.0),
+        egui::Layout::left_to_right(egui::Align::Center),
+        |ui| {
+            ui.label(label);
+        },
+    );
 }
 
 fn menu_action(ui: &mut egui::Ui, label: &str, enabled: bool) -> bool {
@@ -7323,7 +7313,6 @@ mod tests {
     struct SmokeLayout {
         top: egui::Rect,
         left: egui::Rect,
-        right: egui::Rect,
         bottom: egui::Rect,
         preview: egui::Rect,
     }
@@ -7340,12 +7329,8 @@ mod tests {
             content.left_top(),
             egui::pos2(content.left() + INPUT_PANEL_WIDTH, content.bottom()),
         );
-        let right = egui::Rect::from_min_max(
-            egui::pos2(content.right() - OUTPUT_PANEL_WIDTH, content.top()),
-            content.right_bottom(),
-        );
         let center_min_x = left.right();
-        let center_max_x = right.left();
+        let center_max_x = content.right();
         let bottom = egui::Rect::from_min_max(
             egui::pos2(center_min_x, content.bottom() - STATUS_PANEL_HEIGHT),
             egui::pos2(center_max_x, content.bottom()),
@@ -7358,30 +7343,17 @@ mod tests {
         SmokeLayout {
             top,
             left,
-            right,
             bottom,
             preview,
         }
     }
 
     fn assert_smoke_layout_valid(layout: SmokeLayout) {
-        for rect in [
-            layout.top,
-            layout.left,
-            layout.right,
-            layout.bottom,
-            layout.preview,
-        ] {
+        for rect in [layout.top, layout.left, layout.bottom, layout.preview] {
             assert!(rect.width() > 0.0, "non-positive width: {rect:?}");
             assert!(rect.height() > 0.0, "non-positive height: {rect:?}");
         }
-        let rects = [
-            layout.top,
-            layout.left,
-            layout.right,
-            layout.bottom,
-            layout.preview,
-        ];
+        let rects = [layout.top, layout.left, layout.bottom, layout.preview];
         for (index, left) in rects.iter().enumerate() {
             for right in rects.iter().skip(index + 1) {
                 assert!(
