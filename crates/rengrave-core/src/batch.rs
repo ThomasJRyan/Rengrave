@@ -10,7 +10,7 @@ use crate::gcode::{
     GcodeOptions, write_cleanup_gcode, write_engrave_gcode, write_engrave_gcode_with_circle,
     write_vcarve_gcode,
 };
-use crate::layout::{EngraveCircle, LayoutSettings, layout_text};
+use crate::layout::{Bounds, EngraveCircle, EngraveSegment, LayoutSettings, layout_text};
 use crate::project::{DocumentError, DocumentRequest, load_document};
 use crate::project::{InputKind, resolve_input_kind};
 use crate::settings::{LegacySetting, LegacySettings, get_legacy_bool};
@@ -176,6 +176,66 @@ pub fn prepare_batch_output_with_cancel_and_progress(
         svg: None,
         dxf: None,
     })
+}
+
+/// The laid-out input text outline in final engraving coordinates (real
+/// mm/inch units), matching the coordinate space of the generated toolpath.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TextOutlinePreview {
+    pub segments: Vec<EngraveSegment>,
+    pub bounds: Option<Bounds>,
+}
+
+/// Lays out the request's text with the same font and settings the toolpath
+/// uses, returning the outline in final engraving coordinates. Returns
+/// `Ok(None)` for image inputs or when no text font/segments can be produced.
+///
+/// This reuses the exact document-load and layout path of the batch pipeline,
+/// so the returned segments align with the generated toolpath and can be
+/// overlaid directly on a toolpath preview.
+pub fn layout_text_outline(
+    request: &BatchRequest,
+) -> Result<Option<TextOutlinePreview>, BatchError> {
+    let document = load_document(&DocumentRequest {
+        gcode_file: request.gcode_file.clone(),
+        font_or_image: request.font_or_image.clone(),
+        default_dir: request.default_dir.clone(),
+        text: request.text.clone(),
+        settings_overrides: request.settings_overrides.clone(),
+    })?;
+    let settings = &document.settings;
+    if settings.get_last("input_type") == Some("image") {
+        return Ok(None);
+    }
+
+    let segarc = settings
+        .get_last("segarc")
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(5.0);
+    let font = match resolve_input_kind(settings) {
+        InputKind::CxfFont(path) => match read_cxf_with_cancel(&path, segarc, &|| false) {
+            Ok(font) => font,
+            Err(_) => return Ok(None),
+        },
+        InputKind::TtfFont(path) => {
+            let extended_chars = get_legacy_bool(settings, "ext_char", false);
+            match read_ttf_with_cancel(&path, segarc, extended_chars, &|| false) {
+                Ok(font) => font,
+                Err(_) => return Ok(None),
+            }
+        }
+        _ => return Ok(None),
+    };
+
+    let layout_settings = LayoutSettings::from_legacy(settings);
+    let layout = layout_text(&font, &document.text, &layout_settings);
+    if layout.segments.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(TextOutlinePreview {
+        segments: layout.segments,
+        bounds: layout.bounds,
+    }))
 }
 
 fn generate_engrave_gcode(
