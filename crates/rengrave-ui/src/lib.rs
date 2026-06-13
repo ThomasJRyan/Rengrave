@@ -37,7 +37,6 @@ const INPUT_PREVIEW_THUMBNAIL_HEIGHT: u32 = 180;
 const DEFAULT_WINDOW_SIZE: [f32; 2] = [1280.0, 800.0];
 const TOOLBAR_HEIGHT: f32 = 104.0;
 const INPUT_PANEL_WIDTH: f32 = 380.0;
-const INPUT_PANEL_CONTENT_WIDTH: f32 = INPUT_PANEL_WIDTH - 16.0;
 const STATUS_PANEL_HEIGHT: f32 = 150.0;
 const FORM_CONTROL_WIDTH: f32 = 170.0;
 const PATH_CONTROL_WIDTH: f32 = 244.0;
@@ -1303,75 +1302,52 @@ impl eframe::App for RengraveApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.poll_calculation();
         let root_rect = ui.max_rect();
-        let top_rect = egui::Rect::from_min_max(
-            root_rect.left_top(),
-            egui::pos2(
-                root_rect.right(),
-                (root_rect.top() + TOOLBAR_HEIGHT).min(root_rect.bottom()),
-            ),
-        );
-        let content_rect = egui::Rect::from_min_max(
-            egui::pos2(root_rect.left(), top_rect.bottom()),
-            root_rect.right_bottom(),
-        );
-        let left_rect = egui::Rect::from_min_max(
-            content_rect.left_top(),
-            egui::pos2(
-                (content_rect.left() + INPUT_PANEL_WIDTH).min(content_rect.right()),
-                content_rect.bottom(),
-            ),
-        );
-        let work_rect = egui::Rect::from_min_max(
-            egui::pos2(left_rect.right(), content_rect.top()),
-            content_rect.right_bottom(),
-        );
-        let bottom_rect = egui::Rect::from_min_max(
-            egui::pos2(
-                work_rect.left(),
-                (work_rect.bottom() - STATUS_PANEL_HEIGHT).max(work_rect.top()),
-            ),
-            work_rect.right_bottom(),
-        );
-        let preview_rect = egui::Rect::from_min_max(
-            work_rect.left_top(),
-            egui::pos2(work_rect.right(), bottom_rect.top()),
-        );
 
-        paint_panel_background(ui, top_rect);
-        paint_panel_background(ui, left_rect);
-        paint_panel_background(ui, bottom_rect);
+        let top_rect = egui::Panel::top("toolbar")
+            .resizable(false)
+            .exact_size(TOOLBAR_HEIGHT)
+            .show_inside(ui, |ui| {
+                self.show_toolbar_contents(ui);
+            })
+            .response
+            .rect;
 
-        {
-            let mut top_ui = panel_child_ui(ui, "toolbar", top_rect.shrink2(egui::vec2(6.0, 2.0)));
-            self.show_toolbar_contents(&mut top_ui);
-        }
+        // The side panel is added before the bottom panel so it spans the full
+        // height below the toolbar, leaving the status panel docked under the
+        // preview only (matching the original layout).
+        let left_rect = egui::Panel::left("input_settings")
+            .resizable(true)
+            .default_size(INPUT_PANEL_WIDTH)
+            .size_range(450.0..=640.0)
+            .show_inside(ui, |ui| {
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        self.show_workflow_input_panel(ui);
+                        ui.separator();
+                        self.show_workflow_settings_panel(ui);
+                    });
+            })
+            .response
+            .rect;
 
-        {
-            let mut left_ui = panel_child_ui(
-                ui,
-                "input_settings",
-                left_rect.shrink2(egui::vec2(6.0, 2.0)),
-            );
-            egui::ScrollArea::vertical()
-                .auto_shrink([false, false])
-                .show(&mut left_ui, |ui| {
-                    ui.set_width(left_panel_content_width(ui));
-                    self.show_workflow_input_panel(ui);
-                    ui.separator();
-                    self.show_workflow_settings_panel(ui);
-                });
-        }
+        let bottom_rect = egui::Panel::bottom("status_log")
+            .resizable(true)
+            .default_size(STATUS_PANEL_HEIGHT)
+            .show_inside(ui, |ui| {
+                self.show_bottom_panel_contents(ui);
+            })
+            .response
+            .rect;
 
-        {
-            let mut bottom_ui =
-                panel_child_ui(ui, "status_log", bottom_rect.shrink2(egui::vec2(6.0, 2.0)));
-            self.show_bottom_panel_contents(&mut bottom_ui);
-        }
-
-        {
-            let mut preview_ui = panel_child_ui(ui, "preview", preview_rect);
-            self.show_preview_panel(&mut preview_ui, preview_rect);
-        }
+        let preview_rect = egui::CentralPanel::default()
+            .frame(egui::Frame::NONE)
+            .show_inside(ui, |ui| {
+                let rect = ui.max_rect();
+                self.show_preview_panel(ui, rect);
+                rect
+            })
+            .inner;
 
         #[cfg(debug_assertions)]
         if self.debug_layout_overlay {
@@ -3502,23 +3478,6 @@ fn summary_separator(ui: &mut egui::Ui) {
     ui.label(egui::RichText::new("/").color(egui::Color32::from_rgb(120, 130, 136)));
 }
 
-fn paint_panel_background(ui: &egui::Ui, rect: egui::Rect) {
-    ui.painter_at(rect)
-        .rect_filled(rect, 0.0, ui.visuals().panel_fill);
-}
-
-fn panel_child_ui(parent: &mut egui::Ui, id: &'static str, rect: egui::Rect) -> egui::Ui {
-    let mut child = parent.new_child(
-        egui::UiBuilder::new()
-            .id_salt(id)
-            .max_rect(rect)
-            .layout(egui::Layout::top_down(egui::Align::Min)),
-    );
-    child.set_clip_rect(rect);
-    child.expand_to_include_rect(rect);
-    child
-}
-
 #[cfg(debug_assertions)]
 #[derive(Debug, Clone, Copy)]
 struct DebugLayoutRects {
@@ -4449,9 +4408,7 @@ fn export_payloads_available(
 }
 
 fn left_panel_content_width(ui: &egui::Ui) -> f32 {
-    ui.available_width()
-        .min(INPUT_PANEL_CONTENT_WIDTH)
-        .max(80.0)
+    ui.available_width().max(80.0)
 }
 
 fn draw_vector_input_preview(
