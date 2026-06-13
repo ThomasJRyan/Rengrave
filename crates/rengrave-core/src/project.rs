@@ -26,7 +26,7 @@ pub struct RengraveDocument {
 
 impl Default for RengraveDocument {
     fn default() -> Self {
-        let text = "F-Engrave".to_owned();
+        let text = "R-Engrave".to_owned();
         let mut settings = default_legacy_settings();
         settings.entries.extend(tcode_settings(&text));
 
@@ -198,7 +198,7 @@ fn load_document_with_potrace_probe(
         .as_deref()
         .map(normalize_cli_text)
         .or(text_from_settings)
-        .unwrap_or_else(|| "F-Engrave".to_owned());
+        .unwrap_or_else(|| "R-Engrave".to_owned());
 
     settings.entries.retain(|entry| entry.key != "TCODE");
     settings.entries.extend(tcode_settings(&text));

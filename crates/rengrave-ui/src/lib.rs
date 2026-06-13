@@ -794,7 +794,12 @@ impl RengraveApp {
         });
         ui.horizontal(|ui| {
             ui.label("Source");
-            ui.monospace(self.input_catalog.source_label());
+            let source = self.input_catalog.source_label();
+            let compact = compact_text_middle(&source, 72);
+            let response = ui.monospace(compact.as_str());
+            if compact != source {
+                response.on_hover_text(source);
+            }
         });
         if let Some(error) = &self.input_catalog.error {
             ui.colored_label(egui::Color32::from_rgb(225, 176, 84), error);
@@ -3746,6 +3751,29 @@ fn stat_row(ui: &mut egui::Ui, label: &str, value: &str) {
             ui.monospace(value);
         });
     });
+}
+
+/// Shortens long labels while preserving both start and end context.
+fn compact_text_middle(value: &str, max_chars: usize) -> String {
+    if max_chars <= 1 {
+        return "…".to_owned();
+    }
+    let char_count = value.chars().count();
+    if char_count <= max_chars {
+        return value.to_owned();
+    }
+    let head_len = max_chars / 2;
+    let tail_len = max_chars.saturating_sub(head_len + 1);
+    let head: String = value.chars().take(head_len).collect();
+    let tail: String = value
+        .chars()
+        .rev()
+        .take(tail_len)
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect();
+    format!("{head}…{tail}")
 }
 
 fn full_width_button(ui: &mut egui::Ui, label: &str, enabled: bool) -> bool {
