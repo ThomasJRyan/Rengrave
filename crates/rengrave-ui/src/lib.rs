@@ -5202,9 +5202,6 @@ fn draw_preview(
     show_grid: bool,
 ) {
     painter.rect_filled(rect, 0.0, preview_background_color());
-    if show_grid {
-        draw_preview_base_grid(painter, rect);
-    }
 
     let center = rect.center();
     let rot = egui::emath::Rot2::from_angle(transform.total_rotation_radians() as f32);
@@ -5326,36 +5323,6 @@ fn draw_preview(
 
 fn preview_background_color() -> egui::Color32 {
     egui::Color32::from_rgb(28, 30, 32)
-}
-
-fn draw_preview_base_grid(painter: &egui::Painter, rect: egui::Rect) {
-    let minor = egui::Stroke::new(0.5, egui::Color32::from_rgb(36, 40, 43));
-    let major = egui::Stroke::new(0.7, egui::Color32::from_rgb(45, 51, 55));
-    let step = 64.0;
-
-    let mut index = 0;
-    let mut x = rect.left();
-    while x <= rect.right() {
-        let stroke = if index % 4 == 0 { major } else { minor };
-        painter.line_segment(
-            [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
-            stroke,
-        );
-        x += step;
-        index += 1;
-    }
-
-    index = 0;
-    let mut y = rect.top();
-    while y <= rect.bottom() {
-        let stroke = if index % 4 == 0 { major } else { minor };
-        painter.line_segment(
-            [egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)],
-            stroke,
-        );
-        y += step;
-        index += 1;
-    }
 }
 
 fn draw_preview_grid(
