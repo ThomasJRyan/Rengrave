@@ -2,8 +2,11 @@
 *.ngc
 *.tap
 *.dxf
+*.png
+*.jpeg
+*.jpg
 *.svg
 !crates/rengrave-core/tests/fixtures/**/*.dxf
 !crates/rengrave-core/tests/fixtures/**/*.svg
 
-f-engrave_source/
+*_source/
