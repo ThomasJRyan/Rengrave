@@ -458,9 +458,10 @@ fn point_distance(a: Point, b: Point) -> f64 {
     (dx * dx + dy * dy).sqrt()
 }
 
-/// Lays out the input text outline in the same engraving coordinate space as
-/// the toolpath, so it can be overlaid directly on the toolpath preview.
-/// Returns an empty vector for image inputs or when no outline is available.
+/// Lays out the input outline in the same engraving coordinate space as the
+/// toolpath, so it can be overlaid directly on the toolpath preview. Works for
+/// both text and image (bitmap/DXF) inputs. Returns an empty vector when no
+/// outline is available.
 pub(crate) fn input_outline_segments(request: &BatchRequest) -> Vec<PreviewSegment> {
     match layout_text_outline(request) {
         Ok(Some(outline)) => outline

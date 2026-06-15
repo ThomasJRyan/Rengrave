@@ -186,9 +186,14 @@ pub struct TextOutlinePreview {
     pub bounds: Option<Bounds>,
 }
 
-/// Lays out the request's text with the same font and settings the toolpath
-/// uses, returning the outline in final engraving coordinates. Returns
-/// `Ok(None)` for image inputs or when no text font/segments can be produced.
+/// Lays out the request's input with the same font/vectorization and settings
+/// the toolpath uses, returning the outline in final engraving coordinates.
+/// Returns `Ok(None)` when no input font/segments can be produced.
+///
+/// For text inputs this lays out the document text; for image inputs (bitmaps
+/// or DXF artwork) it vectorizes the same way the toolpath does and lays out
+/// the resulting artwork, so the overlay aligns with the generated toolpath in
+/// both cases.
 ///
 /// This reuses the exact document-load and layout path of the batch pipeline,
 /// so the returned segments align with the generated toolpath and can be
@@ -204,31 +209,58 @@ pub fn layout_text_outline(
         settings_overrides: request.settings_overrides.clone(),
     })?;
     let settings = &document.settings;
-    if settings.get_last("input_type") == Some("image") {
-        return Ok(None);
-    }
 
     let segarc = settings
         .get_last("segarc")
         .and_then(|value| value.parse().ok())
         .unwrap_or(5.0);
-    let font = match resolve_input_kind(settings) {
-        InputKind::CxfFont(path) => match read_cxf_with_cancel(&path, segarc, &|| false) {
-            Ok(font) => font,
-            Err(_) => return Ok(None),
-        },
-        InputKind::TtfFont(path) => {
-            let extended_chars = get_legacy_bool(settings, "ext_char", false);
-            match read_ttf_with_cancel(&path, segarc, extended_chars, &|| false) {
+
+    let (font, layout_input) = if settings.get_last("input_type") == Some("image") {
+        let InputKind::Image(path) = resolve_input_kind(settings) else {
+            return Ok(None);
+        };
+        let is_dxf = path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| ext.eq_ignore_ascii_case("dxf"))
+            .unwrap_or(false);
+        let font = if is_dxf {
+            match read_dxf_font_with_cancel(&path, segarc, &|| false) {
                 Ok(font) => font,
                 Err(_) => return Ok(None),
             }
-        }
-        _ => return Ok(None),
+        } else if is_bitmap_input(&path) {
+            match vectorize_bitmap_to_dxf_with_cancel(&path, settings, &|| false) {
+                Ok(dxf) => match dxf_font_from_str_with_cancel(&dxf, segarc, &|| false) {
+                    Ok(font) => font,
+                    Err(_) => return Ok(None),
+                },
+                Err(_) => return Ok(None),
+            }
+        } else {
+            return Ok(None);
+        };
+        (font, "F".to_owned())
+    } else {
+        let font = match resolve_input_kind(settings) {
+            InputKind::CxfFont(path) => match read_cxf_with_cancel(&path, segarc, &|| false) {
+                Ok(font) => font,
+                Err(_) => return Ok(None),
+            },
+            InputKind::TtfFont(path) => {
+                let extended_chars = get_legacy_bool(settings, "ext_char", false);
+                match read_ttf_with_cancel(&path, segarc, extended_chars, &|| false) {
+                    Ok(font) => font,
+                    Err(_) => return Ok(None),
+                }
+            }
+            _ => return Ok(None),
+        };
+        (font, document.text.clone())
     };
 
     let layout_settings = LayoutSettings::from_legacy(settings);
-    let layout = layout_text(&font, &document.text, &layout_settings);
+    let layout = layout_text(&font, &layout_input, &layout_settings);
     if layout.segments.is_empty() {
         return Ok(None);
     }
