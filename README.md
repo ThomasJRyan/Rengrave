@@ -37,6 +37,16 @@ cargo run -p rengrave-cli
 
 Use F-Engrave-generated fixtures as the compatibility baseline when changing toolpath or export behavior.
 
+## Agent Debugging
+
+Agents can run the calculation/export path without opening the GUI:
+
+```sh
+cargo run -p rengrave-cli -- --agent-debug-dir /tmp/rengrave-debug -f assets/fonts/rengrave_demo.cxf -t "R-Engrave"
+```
+
+This writes `debug.json`, `output.ngc`, `output.svg`, `output.dxf`, and any cleanup companion G-code. The SVG is the deterministic visual review artifact; native window screenshots still depend on the host windowing system.
+
 ## Credits
 
 R-Engrave is based on the behavior and workflows of F-Engrave by Scorch Works. F-Engrave remains the primary reference for compatibility and expected CNC output.

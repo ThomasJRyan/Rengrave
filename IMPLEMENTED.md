@@ -20,6 +20,7 @@ This document records what has actually been implemented in the Rust port and wh
 - The central preview now draws a compact overlay summarizing visible cut/rapid/cleanup layer counts and the current model X/Y ranges, making generated output easier to inspect without switching panels.
 - The rapid layer toggle and independent viewport rotation now persist in UI preferences, so inspection state survives relaunches alongside cleanup/grid layer preferences.
 - Cleanup companion G-code is now parsed back into preview geometry and shown as a separate Cleanup layer in the central canvas, with move/length readouts and a persisted layer toggle.
+- The CLI now has `--agent-debug-dir`, which runs calculate/export automation and writes `debug.json`, G-code, SVG, DXF, and cleanup companion artifacts for local agent inspection without driving the native GUI.
 - Vector input previews now draw the fitted geometry bounds and origin axes behind the source strokes, making CXF/TTF/DXF source previews easier to read at first glance.
 - The golden/regression harness now includes end-to-end Rust batch coverage for multiline text, text-on-circle with Add Circle SVG/G-code output, transform/settings comment round trips, and DXF image input with SVG/DXF export payloads.
 - A simple DXF fixture was added under `crates/rengrave-core/tests/fixtures/inputs/` so DXF import is represented in the integration fixture set instead of only lower-level unit tests.

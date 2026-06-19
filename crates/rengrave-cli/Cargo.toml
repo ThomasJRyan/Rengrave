@@ -14,3 +14,4 @@ anyhow.workspace = true
 clap.workspace = true
 rengrave-core = { path = "../rengrave-core" }
 rengrave-ui = { path = "../rengrave-ui" }
+serde_json.workspace = true

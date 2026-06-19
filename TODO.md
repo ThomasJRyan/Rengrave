@@ -22,9 +22,9 @@
 - [x] When attempting to open a font or image file, a system dialog appears to allow the user to browse the file system and select a file. This is correct. However, if the user selects "cancel" then Rengrave opens up a modal looking into the working directory. Remove this modal as it actually makes things more confusing.
 
 # Debugging
-- [ ] If possible, add in functionality that allows an AI agent to debug the application on my behalf. This include:
-    - [ ] Being able to take and review screenshots of the application
-    - [ ] Being able to input button presses and simulate actually using the application
-    - [ ] Being able to read debug information about the application
-    - [ ] Being able to successfully generate G-Code wit the application
-    - [ ] Whatever else would make it easier for an agent to debug
+- [x] If possible, add in functionality that allows an AI agent to debug the application on my behalf. This include:
+    - [x] Being able to take and review screenshots of the application
+    - [x] Being able to input button presses and simulate actually using the application
+    - [x] Being able to read debug information about the application
+    - [x] Being able to successfully generate G-Code wit the application
+    - [x] Whatever else would make it easier for an agent to debug

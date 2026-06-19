@@ -2513,6 +2513,7 @@ dependencies = [
  "clap",
  "rengrave-core",
  "rengrave-ui",
+ "serde_json",
 ]
 
 [[package]]
