@@ -1622,14 +1622,6 @@ impl RengraveApp {
                 if let Some(stale_summary) = self.active_calculation_stale_summary() {
                     ui.colored_label(egui::Color32::from_rgb(225, 176, 84), stale_summary);
                 }
-                ui.separator();
-                if menu_action(
-                    ui,
-                    "Refresh Potrace",
-                    self.controls.bitmap_backend == BitmapBackend::PotraceSidecar,
-                ) {
-                    self.refresh_potrace_status();
-                }
             });
 
             ui.menu_button("View", |ui| {

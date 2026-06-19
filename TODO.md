@@ -8,7 +8,7 @@
 - [x] If possible, render the fonts catalog in their own font.
 - [x] Create an SVG of the letter R in a square box, make it green, and replace the "R-Engrave CNC G-code generator" title at the top left with it.
 - [x] Under the File dropdown in the menu there are a number of options to choode from. Remove them all except for the aformentioned New, Open, Save and Save As.
-- [ ] Under the Run dropdown in the menu remove the "Refresh Potrace" option
+- [x] Under the Run dropdown in the menu remove the "Refresh Potrace" option
 - [ ] In the status bar, remove the Artifacts and Vectorizer statuses
 
 # Functionality
