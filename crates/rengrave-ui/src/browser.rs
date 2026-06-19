@@ -260,12 +260,12 @@ impl InputDialogFilter {
         match self {
             Self::Fonts => &["cxf", "ttf"],
             Self::Images => &[
-                "dxf", "bmp", "gif", "jpg", "jpeg", "png", "tif", "tiff", "pbm", "ppm", "pgm",
-                "pnm",
+                "dxf", "svg", "bmp", "gif", "jpg", "jpeg", "png", "tif", "tiff", "pbm", "ppm",
+                "pgm", "pnm",
             ],
             Self::All => &[
-                "cxf", "ttf", "dxf", "bmp", "gif", "jpg", "jpeg", "png", "tif", "tiff", "pbm",
-                "ppm", "pgm", "pnm",
+                "cxf", "ttf", "dxf", "svg", "bmp", "gif", "jpg", "jpeg", "png", "tif", "tiff",
+                "pbm", "ppm", "pgm", "pnm",
             ],
         }
     }

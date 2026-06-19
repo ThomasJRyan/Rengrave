@@ -15,6 +15,7 @@ use crate::layout::{Bounds, EngraveCircle, EngraveSegment, LayoutSettings, layou
 use crate::project::{DocumentError, DocumentRequest, load_document};
 use crate::project::{InputKind, resolve_input_kind};
 use crate::settings::{LegacySetting, LegacySettings, get_legacy_bool};
+use crate::svg::{is_svg_input, read_svg_font_with_cancel};
 use crate::vcarve::{
     VCarveCheckMode, VCarveOptions, generate_vcarve_points_with_cancel,
     sort_image_segments_for_vcarve,
@@ -55,6 +56,7 @@ pub enum BatchProgress {
     LoadingDocument,
     LoadingTextFont,
     LoadingDxf,
+    LoadingSvg,
     VectorizingBitmap,
     LayingOutText,
     LayingOutImage,
@@ -76,6 +78,7 @@ impl BatchProgress {
             Self::LoadingDocument => "Loading document",
             Self::LoadingTextFont => "Loading text font",
             Self::LoadingDxf => "Loading DXF input",
+            Self::LoadingSvg => "Loading SVG input",
             Self::VectorizingBitmap => "Vectorizing bitmap",
             Self::LayingOutText => "Laying out text",
             Self::LayingOutImage => "Laying out image",
@@ -227,6 +230,11 @@ pub fn layout_text_outline(
             .unwrap_or(false);
         let font = if is_dxf {
             match read_dxf_font_with_cancel(&path, segarc, &|| false) {
+                Ok(font) => font,
+                Err(_) => return Ok(None),
+            }
+        } else if is_svg_input(&path) {
+            match read_svg_font_with_cancel(&path, &|| false) {
                 Ok(font) => font,
                 Err(_) => return Ok(None),
             }
@@ -407,6 +415,16 @@ fn generate_dxf_engrave_gcode(
         match read_dxf_font_with_cancel(&path, segarc, cancel) {
             Ok(font) => font,
             Err(DxfError::Canceled) => return Err(BatchError::Canceled),
+            Err(err) => {
+                warnings.push(err.to_string());
+                return Ok(None);
+            }
+        }
+    } else if is_svg_input(&path) {
+        progress(BatchProgress::LoadingSvg);
+        match read_svg_font_with_cancel(&path, cancel) {
+            Ok(font) => font,
+            Err(crate::svg::SvgError::Canceled) => return Err(BatchError::Canceled),
             Err(err) => {
                 warnings.push(err.to_string());
                 return Ok(None);
@@ -1150,6 +1168,33 @@ mod tests {
     }
 
     #[test]
+    fn batch_generates_basic_gcode_for_svg_image() {
+        let path = std::env::temp_dir().join(format!(
+            "rengrave-basic-{}-{}.svg",
+            std::process::id(),
+            "batch"
+        ));
+        fs::write(
+            &path,
+            r#"<svg viewBox="0 0 100 100"><path d="M 50 20 L 50 30 L 60 30 Z"/></svg>"#,
+        )
+        .unwrap();
+
+        let output = prepare_batch_output(&BatchRequest {
+            batch: true,
+            font_or_image: Some(path.clone()),
+            ..BatchRequest::default()
+        })
+        .unwrap();
+
+        let _ = fs::remove_file(path);
+        assert!(output.warnings.is_empty());
+        assert!(output.gcode.contains("(fengrave_set input_type  image )"));
+        assert!(!output.gcode.contains("(Engrave Text:"));
+        assert!(output.gcode.contains("G1 X"));
+    }
+
+    #[test]
     fn bitmap_dxf_font_normalizes_residual_trace_offset() {
         let dxf = "0\nSECTION\n0\nLINE\n10\n100\n20\n50\n11\n120\n21\n80\n0\nENDSEC\n";
 
@@ -1195,6 +1240,40 @@ mod tests {
         assert!(
             bounds.min.y.abs() < 1.0e-9,
             "expected bitmap content min Y at origin, got {}",
+            bounds.min.y
+        );
+    }
+
+    #[test]
+    fn svg_layout_uses_content_origin() {
+        let path = std::env::temp_dir().join(format!(
+            "rengrave-svg-origin-{}-{}.svg",
+            std::process::id(),
+            "batch"
+        ));
+        fs::write(
+            &path,
+            r#"<svg viewBox="0 0 100 100"><path d="M 50 20 L 60 20 L 60 35 Z"/></svg>"#,
+        )
+        .unwrap();
+
+        let outline = layout_text_outline(&BatchRequest {
+            font_or_image: Some(path.clone()),
+            ..BatchRequest::default()
+        })
+        .unwrap()
+        .unwrap();
+
+        let _ = fs::remove_file(path);
+        let bounds = outline.bounds.unwrap();
+        assert!(
+            bounds.min.x.abs() < 1.0e-2,
+            "expected SVG content min X at origin, got {}",
+            bounds.min.x
+        );
+        assert!(
+            bounds.min.y.abs() < 1.0e-2,
+            "expected SVG content min Y at origin, got {}",
             bounds.min.y
         );
     }

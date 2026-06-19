@@ -13,7 +13,7 @@
 
 # Functionality
 - [x] Add the ability to save a project to a .rgrv file and be able to open it up again later. The format can be JSON under the hood if that is easiest. It should be able to be versioned and allow us to open older versions in newer versions of Rengrave.
-- [ ] Allow importing an SVG directly into the program instead of requiring an image
+- [x] Allow importing an SVG directly into the program instead of requiring an image
 - [ ] Scan the system fonts automatically on starup. It shouldn't be necessary to click a button to view system fonts
 - [ ] Remove functionality for the Potrace renderer. We will only use our native Rust renderer going forward. 
 

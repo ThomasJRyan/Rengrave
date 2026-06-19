@@ -10,6 +10,7 @@ pub mod geometry;
 pub mod layout;
 pub mod project;
 pub mod settings;
+pub mod svg;
 pub mod vcarve;
 
 pub const FENGRAVE_VERSION: &str = "1.78";

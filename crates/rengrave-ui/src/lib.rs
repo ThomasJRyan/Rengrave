@@ -30,6 +30,7 @@ use rengrave_core::settings::{
     DEFAULT_GCODE_POSTAMBLE, DEFAULT_GCODE_PREAMBLE, LegacySetting, LegacySettings,
     default_legacy_settings, get_legacy_bool, legacy_bool_value,
 };
+use rengrave_core::svg::read_svg_font;
 use rfd::FileDialog;
 
 mod browser;
@@ -3330,6 +3331,10 @@ mod tests {
             input_source_summary("/tmp/artwork.dxf"),
             "Source: DXF artwork.dxf"
         );
+        assert_eq!(
+            input_source_summary("/tmp/artwork.svg"),
+            "Source: SVG artwork.svg"
+        );
         assert_eq!(input_source_summary("  "), "Source: none");
         assert_eq!(tool_summary(&controls), "Job: V-carve, Ball, mm");
         assert_eq!(
@@ -3359,6 +3364,7 @@ mod tests {
         assert!(ToolView::TextVCarve.accepts_kind(InputCatalogKind::CxfFont));
         assert!(!ToolView::TextVCarve.accepts_kind(InputCatalogKind::Bitmap));
         assert!(ToolView::ImageVCarve.accepts_kind(InputCatalogKind::Dxf));
+        assert!(ToolView::ImageVCarve.accepts_kind(InputCatalogKind::Svg));
         assert!(ToolView::ImageVCarve.accepts_kind(InputCatalogKind::Bitmap));
         assert_eq!(ToolView::TextEngrave.category_label(), "Text generation");
         assert_eq!(ToolView::ImageVCarve.category_label(), "Image generation");
@@ -3371,6 +3377,10 @@ mod tests {
         assert_eq!(
             ToolView::TextVCarve.with_input_kind(InputCatalogKind::Bitmap),
             ToolView::ImageVCarve
+        );
+        assert_eq!(
+            ToolView::TextEngrave.with_input_kind(InputCatalogKind::Svg),
+            ToolView::ImageEngrave
         );
         assert_eq!(
             ToolView::ImageEngrave.with_input_kind(InputCatalogKind::TtfFont),
@@ -3396,6 +3406,10 @@ mod tests {
         );
         assert_eq!(
             ToolView::from_settings_and_path(&settings, Some(Path::new("/tmp/shape.dxf"))),
+            ToolView::ImageVCarve
+        );
+        assert_eq!(
+            ToolView::from_settings_and_path(&settings, Some(Path::new("/tmp/shape.svg"))),
             ToolView::ImageVCarve
         );
     }
@@ -3552,16 +3566,18 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join("romanc.cxf"), "[A] 1\nL 0,0,1,1\n").unwrap();
         fs::write(dir.join("shape.dxf"), "0\nSECTION\n").unwrap();
+        fs::write(dir.join("vector.svg"), "<svg/>").unwrap();
         fs::write(dir.join("image.PNG"), b"not really png").unwrap();
         fs::write(dir.join("notes.txt"), "ignored").unwrap();
 
         let entries = read_input_catalog_entries(&dir).unwrap();
 
         let _ = fs::remove_dir_all(dir);
-        assert_eq!(entries.len(), 3);
+        assert_eq!(entries.len(), 4);
         assert_eq!(entries[0].kind, InputCatalogKind::CxfFont);
         assert_eq!(entries[1].kind, InputCatalogKind::Dxf);
-        assert_eq!(entries[2].kind, InputCatalogKind::Bitmap);
+        assert_eq!(entries[2].kind, InputCatalogKind::Svg);
+        assert_eq!(entries[3].kind, InputCatalogKind::Bitmap);
         assert!(entries.iter().all(|entry| entry.name != "notes.txt"));
     }
 
@@ -3592,12 +3608,19 @@ mod tests {
                 kind: InputCatalogKind::Bitmap,
                 size_bytes: 40,
             },
+            InputCatalogEntry {
+                path: PathBuf::from("/tmp/e.svg"),
+                name: "e.svg".to_owned(),
+                kind: InputCatalogKind::Svg,
+                size_bytes: 50,
+            },
         ];
 
         let filter = InputCatalogFilter {
             cxf: false,
             ttf: true,
             dxf: false,
+            svg: false,
             bitmap: true,
         };
         let text_view_entries = visible_input_catalog_entries_for_tool(
@@ -3622,7 +3645,7 @@ mod tests {
                 .iter()
                 .map(|entry| entry.name.as_str())
                 .collect::<Vec<_>>(),
-            vec!["c.dxf", "d.png"]
+            vec!["c.dxf", "d.png", "e.svg"]
         );
         let filtered_entries =
             visible_input_catalog_entries_for_tool(&entries, filter, ToolView::ImageVCarve);
@@ -3707,6 +3730,10 @@ mod tests {
             None
         );
         assert_eq!(
+            input_preview_sample_for_path(Some(Path::new("/tmp/artwork.svg")), "Generated"),
+            None
+        );
+        assert_eq!(
             input_preview_sample_for_path(Some(Path::new("/tmp/image.png")), "Generated"),
             None
         );
@@ -3767,6 +3794,32 @@ mod tests {
             } => {
                 assert_eq!(label, "DXF artwork");
                 assert_eq!(segment_count, 1);
+            }
+            other => panic!("unexpected preview: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn input_preview_loads_svg_vector_segments() {
+        let dir =
+            std::env::temp_dir().join(format!("rengrave-ui-svg-preview-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("shape.svg");
+        fs::write(&path, r#"<svg><path d="M 10 20 L 14 20 L 14 24 Z"/></svg>"#).unwrap();
+
+        let preview = load_input_preview_data(&path, None);
+
+        let _ = fs::remove_dir_all(dir);
+        match preview {
+            InputPreviewData::Vector {
+                label,
+                segment_count,
+                bounds,
+                ..
+            } => {
+                assert_eq!(label, "SVG artwork");
+                assert_eq!(segment_count, 3);
+                assert_eq!(bounds.unwrap().min, Point::new(0.0, 0.0));
             }
             other => panic!("unexpected preview: {other:?}"),
         }
@@ -3924,7 +3977,7 @@ mod tests {
     }
 
     #[test]
-    fn image_size_height_uses_dxf_preview_bounds_only() {
+    fn image_size_height_uses_vector_image_preview_bounds_only() {
         let preview = InputPreviewData::Vector {
             label: "DXF artwork".to_owned(),
             segments: Vec::new(),
@@ -3938,6 +3991,10 @@ mod tests {
 
         assert_eq!(
             image_preview_model_height(Some(Path::new("part.dxf")), &preview),
+            Some(10.0)
+        );
+        assert_eq!(
+            image_preview_model_height(Some(Path::new("part.svg")), &preview),
             Some(10.0)
         );
         assert_eq!(

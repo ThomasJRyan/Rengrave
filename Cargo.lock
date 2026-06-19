@@ -2521,6 +2521,8 @@ version = "0.1.0"
 dependencies = [
  "clipper2",
  "image",
+ "kurbo",
+ "quick-xml",
  "rayon",
  "rengrave-potrace",
  "serde",

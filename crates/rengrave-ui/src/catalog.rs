@@ -67,6 +67,7 @@ pub(crate) enum InputCatalogKind {
     CxfFont,
     TtfFont,
     Dxf,
+    Svg,
     Bitmap,
 }
 
@@ -81,6 +82,7 @@ impl InputCatalogKind {
             Some("cxf") => Some(Self::CxfFont),
             Some("ttf") => Some(Self::TtfFont),
             Some("dxf") => Some(Self::Dxf),
+            Some("svg") => Some(Self::Svg),
             Some(
                 "bmp" | "gif" | "jpg" | "jpeg" | "png" | "tif" | "tiff" | "pbm" | "ppm" | "pgm"
                 | "pnm",
@@ -94,6 +96,7 @@ impl InputCatalogKind {
             Self::CxfFont => "CXF",
             Self::TtfFont => "TTF",
             Self::Dxf => "DXF",
+            Self::Svg => "SVG",
             Self::Bitmap => "Bitmap",
         }
     }
@@ -103,7 +106,8 @@ impl InputCatalogKind {
             Self::CxfFont => 0,
             Self::TtfFont => 1,
             Self::Dxf => 2,
-            Self::Bitmap => 3,
+            Self::Svg => 3,
+            Self::Bitmap => 4,
         }
     }
 }
@@ -113,6 +117,7 @@ pub(crate) struct InputCatalogFilter {
     pub(crate) cxf: bool,
     pub(crate) ttf: bool,
     pub(crate) dxf: bool,
+    pub(crate) svg: bool,
     pub(crate) bitmap: bool,
 }
 
@@ -122,6 +127,7 @@ impl Default for InputCatalogFilter {
             cxf: true,
             ttf: true,
             dxf: true,
+            svg: true,
             bitmap: true,
         }
     }
@@ -133,6 +139,7 @@ impl InputCatalogFilter {
             InputCatalogKind::CxfFont => self.cxf,
             InputCatalogKind::TtfFont => self.ttf,
             InputCatalogKind::Dxf => self.dxf,
+            InputCatalogKind::Svg => self.svg,
             InputCatalogKind::Bitmap => self.bitmap,
         }
     }

@@ -144,7 +144,9 @@ impl ToolView {
     pub(crate) fn accepts_kind(self, kind: InputCatalogKind) -> bool {
         match kind {
             InputCatalogKind::CxfFont | InputCatalogKind::TtfFont => self.uses_text(),
-            InputCatalogKind::Dxf | InputCatalogKind::Bitmap => self.uses_image(),
+            InputCatalogKind::Dxf | InputCatalogKind::Svg | InputCatalogKind::Bitmap => {
+                self.uses_image()
+            }
         }
     }
 
@@ -158,7 +160,7 @@ impl ToolView {
                     Self::TextEngrave
                 }
             }
-            InputCatalogKind::Dxf | InputCatalogKind::Bitmap => {
+            InputCatalogKind::Dxf | InputCatalogKind::Svg | InputCatalogKind::Bitmap => {
                 if vcarve {
                     Self::ImageVCarve
                 } else {
@@ -172,7 +174,12 @@ impl ToolView {
         let cut_type = CutTypeChoice::parse(settings.get_last("cut_type").unwrap_or("engrave"));
         let image_input = path
             .and_then(InputCatalogKind::from_path)
-            .is_some_and(|kind| matches!(kind, InputCatalogKind::Dxf | InputCatalogKind::Bitmap));
+            .is_some_and(|kind| {
+                matches!(
+                    kind,
+                    InputCatalogKind::Dxf | InputCatalogKind::Svg | InputCatalogKind::Bitmap
+                )
+            });
         match (cut_type, image_input) {
             (CutTypeChoice::VCarve, true) => Self::ImageVCarve,
             (CutTypeChoice::VCarve, false) => Self::TextVCarve,

@@ -103,6 +103,13 @@ pub(crate) fn load_input_preview_data(path: &Path, sample_text: Option<&str>) ->
             }
             Err(err) => InputPreviewData::Error(err.to_string()),
         },
+        Some(InputCatalogKind::Svg) => match read_svg_font(path) {
+            Ok(font) => {
+                let preview = preview_segments_for_font(&font, None);
+                vector_input_preview("SVG artwork", preview.segments, Vec::new())
+            }
+            Err(err) => InputPreviewData::Error(err.to_string()),
+        },
         Some(InputCatalogKind::Bitmap) => load_bitmap_preview(path),
         None => InputPreviewData::Error("unsupported input type".to_owned()),
     }
@@ -263,7 +270,10 @@ pub(crate) fn image_preview_model_height(
     path: Option<&Path>,
     preview: &InputPreviewData,
 ) -> Option<f64> {
-    if InputCatalogKind::from_path(path?) != Some(InputCatalogKind::Dxf) {
+    if !matches!(
+        InputCatalogKind::from_path(path?),
+        Some(InputCatalogKind::Dxf | InputCatalogKind::Svg)
+    ) {
         return None;
     }
 
