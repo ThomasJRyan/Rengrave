@@ -86,6 +86,7 @@ pub(crate) struct FileBrowser {
 }
 
 impl FileBrowser {
+    #[allow(dead_code)] // retained for explicit in-app browser use, but native cancel no longer opens it implicitly
     pub(crate) fn new(target: FileBrowserTarget, current_dir: PathBuf) -> Self {
         let mut browser = Self {
             target,

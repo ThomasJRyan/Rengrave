@@ -648,15 +648,6 @@ impl RengraveApp {
         }
     }
 
-    fn open_browser(&mut self, target: FileBrowserTarget) {
-        let start_dir = browser_start_dir(
-            target,
-            self.browser_value(target),
-            path_from_text(&self.default_dir_path),
-        );
-        self.browser = Some(FileBrowser::new(target, start_dir));
-    }
-
     fn choose_path(&mut self, target: FileBrowserTarget, ctx: egui::Context) {
         if let Some(path) = choose_native_path(
             target,
@@ -666,8 +657,7 @@ impl RengraveApp {
         ) {
             self.apply_browser_selection(target, path, ctx);
         } else {
-            self.open_browser(target);
-            self.status = "Using in-app browser".to_owned();
+            self.status = canceled_selection_status(target);
         }
     }
 
@@ -2199,6 +2189,10 @@ fn project_path_with_extension(path: PathBuf) -> PathBuf {
     }
 }
 
+fn canceled_selection_status(target: FileBrowserTarget) -> String {
+    format!("{} selection canceled", target.label())
+}
+
 fn input_path_is_bitmap(path_text: &str) -> bool {
     path_from_text(path_text)
         .as_deref()
@@ -3472,6 +3466,14 @@ mod tests {
         assert_eq!(
             selection_followup(FileBrowserTarget::GcodeOutput),
             SelectionFollowup::None
+        );
+    }
+
+    #[test]
+    fn native_dialog_cancel_reports_canceled_selection() {
+        assert_eq!(
+            canceled_selection_status(FileBrowserTarget::Input),
+            "input selection canceled"
         );
     }
 

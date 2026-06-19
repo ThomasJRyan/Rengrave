@@ -19,7 +19,7 @@
 
 # Bugs
 - [x] Trying to switch from image engrave/v-carve to text engrave/v-carve does not work. Hopefully with the workflow listed under `UI` this will be resolved. 
-- [ ] When attempting to open a font or image file, a system dialog appears to allow the user to browse the file system and select a file. This is correct. However, if the user selects "cancel" then Rengrave opens up a modal looking into the working directory. Remove this modal as it actually makes things more confusing.
+- [x] When attempting to open a font or image file, a system dialog appears to allow the user to browse the file system and select a file. This is correct. However, if the user selects "cancel" then Rengrave opens up a modal looking into the working directory. Remove this modal as it actually makes things more confusing.
 
 # Debugging
 - [ ] If possible, add in functionality that allows an AI agent to debug the application on my behalf. This include:
