@@ -182,8 +182,11 @@ impl RengraveApp {
         let display_input_path = document_input_path_for_display(&font_or_image, &document);
         let tool_view =
             ToolView::from_settings_and_path(&document.settings, display_input_path.as_deref());
-        let input_catalog =
-            InputCatalog::scan(input_catalog_start_dir(&display_input_path, &default_dir));
+        let input_catalog = default_input_catalog_for_tool_view(
+            tool_view,
+            display_input_path.as_ref(),
+            default_dir.as_ref(),
+        );
         let status = if document.warnings.is_empty() {
             "Ready".to_owned()
         } else {
@@ -488,6 +491,7 @@ impl RengraveApp {
         self.auto_recalc_signature = None;
         self.auto_recalc_changed_at = None;
         self.show_new_project_modal = false;
+        self.refresh_default_catalog_for_tool_view();
         self.status = format!("New {} project", tool_view.label());
         self.save_preferences();
     }
@@ -741,6 +745,20 @@ impl RengraveApp {
         self.input_catalog = InputCatalog::scan(start_dir);
     }
 
+    fn refresh_system_font_catalog(&mut self) {
+        self.input_catalog = InputCatalog::scan_system_fonts();
+        self.status = format!("Found {} system font(s)", self.input_catalog.entries.len());
+    }
+
+    fn refresh_default_catalog_for_tool_view(&mut self) {
+        if self.tool_view.uses_text() {
+            self.refresh_system_font_catalog();
+        } else {
+            self.refresh_input_catalog();
+        }
+        self.input_catalog_search.clear();
+    }
+
     fn select_input_catalog_entry(&mut self, path: PathBuf, ctx: egui::Context) {
         self.update_tool_view_for_input_path(&path);
         self.input_path = path.display().to_string();
@@ -816,8 +834,7 @@ impl RengraveApp {
                 self.refresh_input_catalog();
             }
             if self.tool_view.uses_text() && ui.button("System fonts").clicked() {
-                self.input_catalog = InputCatalog::scan_system_fonts();
-                self.status = format!("Found {} system font(s)", self.input_catalog.entries.len());
+                self.refresh_system_font_catalog();
             }
         });
         ui.horizontal(|ui| {
@@ -2085,6 +2102,25 @@ fn launch_font_or_image_path(
     })
 }
 
+fn default_input_catalog_for_tool_view(
+    tool_view: ToolView,
+    input: Option<&PathBuf>,
+    default_dir: Option<&PathBuf>,
+) -> InputCatalog {
+    if tool_view_uses_system_font_catalog_by_default(tool_view) {
+        InputCatalog::scan_system_fonts()
+    } else {
+        InputCatalog::scan(input_catalog_start_dir(
+            &input.cloned(),
+            &default_dir.cloned(),
+        ))
+    }
+}
+
+fn tool_view_uses_system_font_catalog_by_default(tool_view: ToolView) -> bool {
+    tool_view.uses_text()
+}
+
 fn bundled_demo_font_path() -> Option<PathBuf> {
     let path =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/fonts/rengrave_demo.cxf");
@@ -2958,9 +2994,29 @@ mod tests {
             "Calculating V-carve"
         );
         assert_eq!(
+            CalculationPhase::Batch(BatchProgress::LoadingSvg).status_text(),
+            "Loading SVG input"
+        );
+        assert_eq!(
             CalculationPhase::Finalizing.status_text(),
             "Finalizing output"
         );
+    }
+
+    #[test]
+    fn text_workbenches_use_system_font_catalog_by_default() {
+        assert!(tool_view_uses_system_font_catalog_by_default(
+            ToolView::TextEngrave
+        ));
+        assert!(tool_view_uses_system_font_catalog_by_default(
+            ToolView::TextVCarve
+        ));
+        assert!(!tool_view_uses_system_font_catalog_by_default(
+            ToolView::ImageEngrave
+        ));
+        assert!(!tool_view_uses_system_font_catalog_by_default(
+            ToolView::ImageVCarve
+        ));
     }
 
     #[test]
