@@ -533,114 +533,22 @@ impl RengraveApp {
         self.secondary_gcode = output.secondary_gcode;
     }
 
-    fn export_current(&mut self, kind: ExportKind) {
-        let (label, path, contents) = match kind {
-            ExportKind::Gcode => ("G-code", self.gcode_path.clone(), Some(self.gcode.clone())),
-            ExportKind::Svg => ("SVG", self.svg_path.clone(), self.svg.clone()),
-            ExportKind::Dxf => ("DXF", self.dxf_path.clone(), self.dxf.clone()),
-        };
-
-        let Some(contents) = contents else {
-            self.status = format!("{label} export unavailable");
+    fn export_gcode(&mut self) {
+        if self.gcode.is_empty() {
+            self.status = "G-code export unavailable".to_owned();
             return;
-        };
+        }
 
-        match write_text_file(&path, &contents) {
+        match write_text_file(&self.gcode_path, &self.gcode) {
             Ok(path) => {
-                self.status = format!("{label} exported: {}", path.display());
+                self.status = format!("G-code exported: {}", path.display());
                 self.save_preferences();
             }
             Err(err) => {
-                self.status = format!("{label} export failed");
+                self.status = "G-code export failed".to_owned();
                 self.warnings.push(err);
             }
         }
-    }
-
-    fn export_all_available(&mut self) {
-        if !self.any_export_available() {
-            self.status = "No generated output to export".to_owned();
-            return;
-        }
-
-        let mut written = 0usize;
-        for (label, path, contents) in [
-            ("G-code", self.gcode_path.clone(), Some(self.gcode.clone())),
-            ("SVG", self.svg_path.clone(), self.svg.clone()),
-            ("DXF", self.dxf_path.clone(), self.dxf.clone()),
-        ] {
-            let Some(contents) = contents.filter(|contents| !contents.is_empty()) else {
-                continue;
-            };
-            if let Err(err) = write_text_file(&path, &contents) {
-                self.status = format!("{label} export failed");
-                self.warnings.push(err);
-                return;
-            }
-            written += 1;
-        }
-
-        if !self.secondary_gcode.is_empty() {
-            let primary_path = PathBuf::from(self.gcode_path.trim());
-            if primary_path.as_os_str().is_empty() {
-                self.status = "Cleanup export failed".to_owned();
-                self.warnings.push("G-code output path is empty".to_owned());
-                return;
-            }
-            for output in &self.secondary_gcode {
-                let path = secondary_output_path(&primary_path, &output.suffix);
-                if let Err(err) = fs::write(&path, &output.gcode) {
-                    self.status = "Cleanup export failed".to_owned();
-                    self.warnings
-                        .push(format!("unable to write `{}`: {err}", path.display()));
-                    return;
-                }
-                written += 1;
-            }
-        }
-
-        self.status = format!("Exported {written} files");
-        self.save_preferences();
-    }
-
-    fn any_export_available(&self) -> bool {
-        export_payloads_available(
-            &self.gcode,
-            self.svg.as_deref(),
-            self.dxf.as_deref(),
-            &self.secondary_gcode,
-        )
-    }
-
-    fn export_secondary_outputs(&mut self) {
-        if self.secondary_gcode.is_empty() {
-            self.status = "Cleanup export unavailable".to_owned();
-            return;
-        }
-
-        let primary_path = PathBuf::from(self.gcode_path.trim());
-        if primary_path.as_os_str().is_empty() {
-            self.status = "Cleanup export failed".to_owned();
-            self.warnings.push("G-code output path is empty".to_owned());
-            return;
-        }
-
-        let mut written = 0usize;
-        for output in &self.secondary_gcode {
-            let path = secondary_output_path(&primary_path, &output.suffix);
-            match fs::write(&path, &output.gcode) {
-                Ok(_) => written += 1,
-                Err(err) => {
-                    self.status = "Cleanup export failed".to_owned();
-                    self.warnings
-                        .push(format!("unable to write `{}`: {err}", path.display()));
-                    return;
-                }
-            }
-        }
-
-        self.status = format!("Cleanup exported: {written} files");
-        self.save_preferences();
     }
 
     fn open_browser(&mut self, target: FileBrowserTarget) {
@@ -1290,39 +1198,8 @@ impl RengraveApp {
             self.copy_gcode(ui.ctx());
         }
         if full_width_button(ui, "Save to file", !self.gcode.is_empty()) {
-            self.export_current(ExportKind::Gcode);
+            self.export_gcode();
         }
-        ui.add_space(4.0);
-        ui.horizontal_wrapped(|ui| {
-            if self.tool_view.uses_vcarve()
-                && ui
-                    .add_enabled(
-                        !self.secondary_gcode.is_empty(),
-                        egui::Button::new("Cleanup"),
-                    )
-                    .clicked()
-            {
-                self.export_secondary_outputs();
-            }
-            if ui
-                .add_enabled(self.svg.is_some(), egui::Button::new("SVG"))
-                .clicked()
-            {
-                self.export_current(ExportKind::Svg);
-            }
-            if ui
-                .add_enabled(self.dxf.is_some(), egui::Button::new("DXF"))
-                .clicked()
-            {
-                self.export_current(ExportKind::Dxf);
-            }
-            if ui
-                .add_enabled(self.any_export_available(), egui::Button::new("Export all"))
-                .clicked()
-            {
-                self.export_all_available();
-            }
-        });
     }
 
     fn show_bottom_status_bar(&mut self, ui: &mut egui::Ui) {
@@ -1573,7 +1450,7 @@ impl RengraveApp {
                     .add_enabled(!self.gcode.is_empty(), egui::Button::new("Export G-code"))
                     .clicked()
                 {
-                    self.export_current(ExportKind::Gcode);
+                    self.export_gcode();
                 }
             });
         });
@@ -2086,13 +1963,6 @@ impl CalculationPhase {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ExportKind {
-    Gcode,
-    Svg,
-    Dxf,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BottomTab {
     Status,
     Gcode,
@@ -2159,20 +2029,6 @@ fn document_input_path_for_display(
         .input_path
         .clone()
         .or_else(|| requested_input.clone())
-}
-
-fn secondary_output_path(path: &Path, suffix: &str) -> PathBuf {
-    let stem = path
-        .file_stem()
-        .and_then(|value| value.to_str())
-        .unwrap_or("output");
-    let extension = path.extension().and_then(|value| value.to_str());
-    let mut file_name = format!("{stem}_{suffix}");
-    if let Some(extension) = extension {
-        file_name.push('.');
-        file_name.push_str(extension);
-    }
-    path.with_file_name(file_name)
 }
 
 fn calculation_request_is_stale(current: &BatchRequest, expected: &BatchRequest) -> bool {
@@ -2612,18 +2468,6 @@ fn bottom_tab_copy_payload(
 
 fn non_empty_payload(label: &'static str, payload: &str) -> Option<(&'static str, String)> {
     (!payload.trim().is_empty()).then(|| (label, payload.to_owned()))
-}
-
-fn export_payloads_available(
-    gcode: &str,
-    svg: Option<&str>,
-    dxf: Option<&str>,
-    secondary_gcode: &[SecondaryGcode],
-) -> bool {
-    !gcode.is_empty()
-        || svg.is_some_and(|svg| !svg.is_empty())
-        || dxf.is_some_and(|dxf| !dxf.is_empty())
-        || !secondary_gcode.is_empty()
 }
 
 fn left_panel_content_width(ui: &egui::Ui) -> f32 {
@@ -3160,18 +3004,6 @@ mod tests {
         assert_eq!(
             document_input_path_for_display(&requested, &document),
             requested
-        );
-    }
-
-    #[test]
-    fn secondary_output_paths_append_suffix_before_extension() {
-        assert_eq!(
-            secondary_output_path(Path::new("/tmp/job.ngc"), "clean"),
-            PathBuf::from("/tmp/job_clean.ngc")
-        );
-        assert_eq!(
-            secondary_output_path(Path::new("/tmp/job"), "v_clean"),
-            PathBuf::from("/tmp/job_v_clean")
         );
     }
 
@@ -4151,23 +3983,6 @@ mod tests {
             bottom_tab_copy_payload(BottomTab::Gcode, &[], "  ", &[], None, None),
             None
         );
-    }
-
-    #[test]
-    fn export_payload_availability_tracks_all_output_kinds() {
-        assert!(!export_payloads_available("", None, None, &[]));
-        assert!(export_payloads_available("G90\n", None, None, &[]));
-        assert!(export_payloads_available("", Some("<svg/>"), None, &[]));
-        assert!(export_payloads_available("", None, Some("0\nEOF\n"), &[]));
-        assert!(export_payloads_available(
-            "",
-            None,
-            None,
-            &[SecondaryGcode {
-                suffix: "clean".to_owned(),
-                gcode: "G90\n".to_owned()
-            }]
-        ));
     }
 
     #[test]
