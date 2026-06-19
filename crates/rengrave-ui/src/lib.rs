@@ -63,6 +63,7 @@ const STATUS_PANEL_HEIGHT: f32 = 150.0;
 const STATUS_STRIP_HEIGHT: f32 = 26.0;
 const FORM_CONTROL_WIDTH: f32 = 170.0;
 const PATH_CONTROL_WIDTH: f32 = 244.0;
+const LOGO_SIZE: f32 = 40.0;
 
 #[derive(Debug, Clone, Default)]
 pub struct UiLaunchOptions {
@@ -1433,14 +1434,7 @@ impl RengraveApp {
     fn show_toolbar_contents(&mut self, ui: &mut egui::Ui) {
         self.show_menu_bar(ui);
         ui.horizontal(|ui| {
-            ui.vertical(|ui| {
-                ui.heading("R-Engrave");
-                ui.label(
-                    egui::RichText::new("CNC G-code generator")
-                        .small()
-                        .color(egui::Color32::from_rgb(150, 158, 164)),
-                );
-            });
+            draw_rengrave_logo(ui);
             ui.separator();
             ui.label("Workbench");
             ui.strong(self.tool_view.label());
@@ -2318,6 +2312,27 @@ fn stat_row(ui: &mut egui::Ui, label: &str, value: &str) {
             ui.monospace(value);
         });
     });
+}
+
+fn draw_rengrave_logo(ui: &mut egui::Ui) -> egui::Response {
+    let (rect, response) =
+        ui.allocate_exact_size(egui::vec2(LOGO_SIZE, LOGO_SIZE), egui::Sense::hover());
+    let painter = ui.painter();
+    painter.rect_filled(rect, 6.0, egui::Color32::from_rgb(47, 158, 99));
+    painter.rect_stroke(
+        rect,
+        6.0,
+        egui::Stroke::new(1.5, egui::Color32::from_rgb(29, 95, 62)),
+        egui::StrokeKind::Inside,
+    );
+    painter.text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        "R",
+        egui::FontId::proportional(28.0),
+        egui::Color32::from_rgb(244, 251, 247),
+    );
+    response.on_hover_text("R-Engrave")
 }
 
 /// Shortens long labels while preserving both start and end context.
@@ -3286,6 +3301,15 @@ mod tests {
         assert_eq!(output_state_summary(false, true, true), "Output: stale");
         assert_eq!(output_state_summary(false, false, true), "Output: ready");
         assert_eq!(output_state_summary(false, false, false), "Output: none");
+    }
+
+    #[test]
+    fn logo_svg_asset_is_green_boxed_r() {
+        let svg = include_str!("../../../assets/logo/rengrave-r.svg");
+
+        assert!(svg.contains("<svg"));
+        assert!(svg.contains("#2f9e63"));
+        assert!(svg.contains("R-Engrave"));
     }
 
     #[test]

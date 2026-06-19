@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="R-Engrave">
+  <rect x="4" y="4" width="56" height="56" rx="6" fill="#2f9e63"/>
+  <path d="M20 50V14h18c8 0 13 5 13 12 0 5-3 9-8 11l10 13H41L32 38h-4v12H20zm8-20h9c4 0 6-2 6-5s-2-5-6-5h-9v10z" fill="#f4fbf7"/>
+  <path d="M4 4h56v56H4z" fill="none" stroke="#1d5f3e" stroke-width="3"/>
+</svg>

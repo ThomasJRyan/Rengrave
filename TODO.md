@@ -6,7 +6,7 @@
     - [x] The buttons, scrollbars, and inputs in this bar are aligned to the top of the panel. Let's align then to the center instead
 - [x] Remove the buttons for exporting Cleanup, SVG, DXF, and Export all under the Export section.
 - [x] If possible, render the fonts catalog in their own font.
-- [ ] Create an SVG of the letter R in a square box, make it green, and replace the "R-Engrave CNC G-code generator" title at the top left with it.
+- [x] Create an SVG of the letter R in a square box, make it green, and replace the "R-Engrave CNC G-code generator" title at the top left with it.
 - [x] Under the File dropdown in the menu there are a number of options to choode from. Remove them all except for the aformentioned New, Open, Save and Save As.
 - [ ] Under the Run dropdown in the menu remove the "Refresh Potrace" option
 - [ ] In the status bar, remove the Artifacts and Vectorizer statuses
