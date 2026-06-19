@@ -21,7 +21,7 @@ The workspace is split into focused Rust crates:
 - `crates/rengrave-core`: settings, geometry, parsers, toolpath generation, and exporters.
 - `crates/rengrave-ui`: the `eframe/egui` desktop interface.
 - `crates/rengrave-cli`: command-line entry point for batch and GUI launch workflows.
-- `crates/rengrave-potrace`: native Rust bitmap tracing work intended to replace or supplement external Potrace use.
+- `crates/rengrave-potrace`: native Rust bitmap tracing work that replaces external Potrace sidecar use.
 
 The UI and CLI call into the same core APIs so interactive and batch output can be tested against the same behavior.
 

@@ -5,13 +5,13 @@ This document records what has actually been implemented in the Rust port and wh
 ## Latest Checkpoint
 
 - A new `crates/rengrave-potrace` crate has been added for the native Rust port of the Potrace functionality R-Engrave needs for bitmap/image vectorization. It implements the packed bitmap model, turn-policy parsing, bitmap path decomposition, straight-subpath analysis, optimal polygon selection, vertex adjustment, smoothing/corner analysis, Bezier optimization, and Potrace-style DXF POLYLINE output.
-- Bitmap vectorization now defaults to `bitmap_backend native-potrace` instead of VTracer. The external `potrace` executable remains available only through the explicit `bitmap_backend potrace-sidecar` compatibility backend.
+- Bitmap vectorization now uses the native Rust tracer only. Legacy `bitmap_backend` values such as VTracer or Potrace sidecar are normalized back to `native-potrace`.
 - VTracer and `visioncortex` have been removed from the workspace dependencies.
-- The native Potrace flower smoke test is present in `rengrave-potrace` as an ignored parity test against the installed C Potrace reference. It now matches C Potrace POLYLINE and VERTEX counts for `Flower.jpg`; native and sidecar-generated flower G-code have byte-identical motion output, differing only in the backend settings comment.
+- The native Potrace flower smoke test is present in `rengrave-potrace` as an ignored parity test against the installed C Potrace reference. It now matches C Potrace POLYLINE and VERTEX counts for `Flower.jpg`.
 - V-carve point generation has been replaced with an F-Engrave-style maximum-circle walk over the outline: it builds nearby-segment partitions, honors V-carve corner thresholds/check scope/flop settings, records circle centers, and produces center-drive paths instead of the previous boxy outline-offset approximation. The supplied `F` comparison now regenerates as a centerline V-carve path.
 - V-carve G-code writing now buffers each loop and runs 3D Douglas-Peucker simplification over X/Y/Z samples before emission, matching F-Engrave's dense-sample reduction and greatly reducing noisy point-by-point output.
 - The UI Image size checkbox now mirrors F-Engrave's scale-preserving behavior for image-vector inputs with known preview bounds: toggling it converts `YSCALE` between absolute height and percent-of-image-height instead of silently changing output size.
-- Bitmap preview trace masks now use a shared `rengrave-core` helper that also feeds the Potrace PBM conversion path, removing duplicated threshold/alpha-compositing logic between core and UI.
+- Bitmap preview trace masks now use the same shared `rengrave-core` threshold and alpha-compositing helper as native bitmap tracing.
 - The central preview now draws a lower-right model-space scale bar using the active inch/mm units, making zoom level and drawing size easier to read at a glance.
 - Preview axes now label the positive X and Y directions, so model orientation remains readable while using pan/zoom/rotation.
 - The golden/regression harness now includes end-to-end batch coverage for flat-text Add Box output and `arc_fit` modes, including no-arc, center-offset `I/J`, and radius-format `R` G-code.
@@ -55,7 +55,7 @@ This document records what has actually been implemented in the Rust port and wh
 - Background calculation progress now comes from the core batch pipeline, with real stage labels for document load, font/DXF/bitmap input, layout, exports, V-carve, cleanup, and G-code rendering.
 - V-carve point generation now has an internal cancellation hook, so UI Cancel can stop during long V-carve sampling instead of waiting for the whole V-carve stage to finish.
 - Cleanup generation now has internal cancellation checks across closed-path collection, offset loops, X/Y scanlines, path ordering, and point emission, so UI Cancel can stop during long cleanup calculations.
-- Bitmap vectorization now has cancellation checks during image-to-PBM conversion and while Potrace is running; canceling kills and waits for the Potrace sidecar instead of blocking on process completion.
+- Bitmap vectorization now has cancellation checks during native image-to-bitmap conversion and tracing setup.
 - CXF and TTF font loading now have cancellable parser paths used by batch generation; CXF checks during line parsing and arc expansion, while TTF checks before parsing and during the glyph codepoint walk.
 - DXF import now has cancellable parser paths used by batch generation; checks cover code/value grouping, section and block discovery, entity walking, block insert recursion, arc/bulge/polyline expansion, ellipse/spline sampling, and bitmap-vectorized DXF parsing.
 - The central preview now renders a model-space precision grid that pans, zooms, and rotates with the toolpath, with a Grid layer toggle in the Preview panel and View menu.
@@ -90,8 +90,8 @@ This document records what has actually been implemented in the Rust port and wh
 - CXF font parsing with line and arc support.
 - TTF outline conversion through `ttf-parser`; the GPLv2-only F-Engrave helper is not copied.
 - DXF import for lines, arcs, circles, LWPOLYLINE bulges, leaders, solids, ellipses, splines, weighted splines, and block inserts, with cancellable batch parsing.
-- Bitmap vectorization via the new native `rengrave-potrace` backend for PBM/PNM/BMP and converted PNG/JPEG/TIFF/GIF inputs, with an explicit external `potrace` sidecar backend retained for reference/compatibility testing.
-- Shared bitmap trace-mask/stat generation using the same alpha-over-white luma threshold as PBM conversion for Potrace.
+- Bitmap vectorization via the native `rengrave-potrace` backend for PBM/PNM/BMP and converted PNG/JPEG/TIFF/GIF inputs.
+- Shared bitmap trace-mask/stat generation using the same alpha-over-white luma threshold as native bitmap tracing.
 - Text layout with scaling, line spacing, character/word spacing, justification, origin handling, flip, mirror, rotation, text-on-circle, outside/inside and upper/lower circle modes.
 - Add Box rectangular border support for engrave/v-carve cases.
 - Add Circle support for text-on-circle engrave output, including full-circle `G2 I... J...` G-code and SVG circle output.
@@ -118,7 +118,7 @@ This document records what has actually been implemented in the Rust port and wh
 - Current UI settings can be saved back out as reusable `fengrave_set` comments, including selected input/default directory, UI overrides, and TCODE text. Existing settings files are used as a base when present; new settings paths save from defaults, and Save As can choose that path without manually editing the Settings field.
 - UI path preferences are persisted under the platform config directory, updated from manual path edits as well as browse/export actions, and restored on the next launch when CLI arguments do not override them.
 - Common F-Engrave settings are exposed as working controls: mode, units, justification, origin, height/width/spacing, angle, text radius, flip/mirror, Add Box, safe/cut Z, stroke, feed/plunge, arc fitting, bit shape, V-bit/inlay/depth settings, V-carve corner/check-scope compatibility values, explicit V-carve multipass finish-stock/max-depth controls, cleanup diameter/step/V size/path checkboxes/normal flip, and bitmap image-size/long-curve toggles. For image-vector inputs with known preview bounds, toggling Image size converts the height value the way F-Engrave does. Controls and view layers can be reset back to the shared core defaults.
-- The right panel has a Bitmap section with a backend selector. Native Potrace is the default and exposes Potrace-style turn policy, turd size, alpha max, and optimization tolerance controls; Potrace sidecar status is shown only when the sidecar backend is selected.
+- The right panel has a Bitmap section for native Rust tracing settings: turn policy, turd size, alpha max, optimization tolerance, and long-curve mode.
 - The right panel has an Advanced section for settings that were previously hidden: height calculation mode, G-code preamble/postamble, recovery comments, variable output, extended TTF/CXF character conversion, and compatibility view/plot flags.
 - UI controls emit legacy `fengrave_set` overrides into `rengrave-core`; they do not write temporary settings files.
 - The app calculates through the same batch core path used by the CLI, now on a background worker so the preview and controls stay responsive.
@@ -140,7 +140,7 @@ The UI is now an MVP rather than only a shell, but it still lacks several expect
 
 ## Tests And Validation In Place
 
-- Core tests currently cover settings, CXF/TTF parsing, DXF entities, bitmap conversion, native Potrace vectorization smoke coverage, external Potrace sidecar argument parity, layout transforms, Add Box/Circle, G-code, SVG/DXF export, cleanup, v-carve options, batch generation, cancellation stage boundaries, CXF/TTF/DXF parser cancellation, V-carve sampling cancellation, cleanup scanline cancellation, bitmap conversion/vectorization cancellation, and settings-only fallback output.
+- Core tests currently cover settings, CXF/TTF parsing, DXF entities, bitmap conversion, native Potrace vectorization smoke coverage, layout transforms, Add Box/Circle, G-code, SVG/DXF export, cleanup, v-carve options, batch generation, cancellation stage boundaries, CXF/TTF/DXF parser cancellation, V-carve sampling cancellation, cleanup scanline cancellation, bitmap conversion/vectorization cancellation, and settings-only fallback output.
 - `rengrave-potrace` tests cover simple native DXF output, turn-policy parsing, and an ignored `Flower.jpg` parity smoke test against C Potrace. The ignored flower test passes when `Flower.jpg` and the C `potrace` executable are available.
 - A crate-level golden-output harness now exists under `crates/rengrave-core/tests/golden.rs` with minimal CXF, arc CXF, closed-square CXF, and DXF fixtures, checked G-code/SVG regression outputs, numeric-tolerant G-code comparison helpers, and end-to-end Rust batch cases for multiline text, text-on-circle Add Circle output, flat-text Add Box output, arc-fit formats, V-carve with secondary cleanup output, transform/settings round trips, and DXF SVG/DXF export generation. These tests pin current R-Engrave output; they are not yet F-Engrave-generated parity fixtures.
 - F-Engrave fixture generation was rechecked on 2026-06-10 with `python f-engrave_source/f-engrave.py -b -f crates/rengrave-core/tests/fixtures/inputs/simple.cxf -t AB`; it still fails before batch mode because `pyclipper` is missing.

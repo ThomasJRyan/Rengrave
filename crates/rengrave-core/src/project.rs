@@ -5,7 +5,6 @@ use std::path::{Path, PathBuf};
 
 use crate::RENGRAVE_VERSION;
 use crate::bitmap::BitmapBackend;
-use crate::external::{PotraceStatus, detect_potrace, is_bitmap_input};
 use crate::settings::{LegacySetting, LegacySettings, default_legacy_settings, tcode_settings};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -281,13 +280,6 @@ fn home_dir() -> Option<PathBuf> {
 }
 
 pub fn load_document(request: &DocumentRequest) -> Result<RengraveDocument, DocumentError> {
-    load_document_with_potrace_probe(request, detect_potrace)
-}
-
-fn load_document_with_potrace_probe(
-    request: &DocumentRequest,
-    potrace_probe: impl FnOnce() -> PotraceStatus,
-) -> Result<RengraveDocument, DocumentError> {
     let mut warnings = Vec::new();
     let mut settings = if let Some(path) = &request.gcode_file {
         let input = fs::read_to_string(path).map_err(|source| DocumentError::ReadSettings {
@@ -319,18 +311,6 @@ fn load_document_with_potrace_probe(
     }
 
     normalize_bitmap_backend_setting(&mut settings);
-
-    if request
-        .font_or_image
-        .as_deref()
-        .is_some_and(is_bitmap_input)
-        && BitmapBackend::from_settings(&settings).requires_potrace()
-    {
-        let status = potrace_probe();
-        if !status.available {
-            warnings.push(status.message);
-        }
-    }
 
     let text_from_settings = match settings.text_from_tcode() {
         Ok(text) => text,
@@ -535,14 +515,11 @@ mod tests {
     }
 
     #[test]
-    fn bitmap_input_defaults_to_native_potrace_without_sidecar_warning() {
-        let document = load_document_with_potrace_probe(
-            &DocumentRequest {
-                font_or_image: Some(PathBuf::from("/tmp/example.png")),
-                ..DocumentRequest::default()
-            },
-            || PotraceStatus::missing("missing potrace"),
-        )
+    fn bitmap_input_defaults_to_native_potrace_without_external_warning() {
+        let document = load_document(&DocumentRequest {
+            font_or_image: Some(PathBuf::from("/tmp/example.png")),
+            ..DocumentRequest::default()
+        })
         .unwrap();
 
         assert_eq!(document.settings.get_last("input_type"), Some("image"));
@@ -580,45 +557,23 @@ mod tests {
     }
 
     #[test]
-    fn bitmap_input_warns_when_potrace_sidecar_backend_is_missing() {
-        let document = load_document_with_potrace_probe(
-            &DocumentRequest {
-                font_or_image: Some(PathBuf::from("/tmp/example.bmp")),
-                settings_overrides: vec![LegacySetting::new(
-                    "bitmap_backend",
-                    "potrace-sidecar",
-                    false,
-                )],
-                ..DocumentRequest::default()
-            },
-            || PotraceStatus::missing("missing potrace"),
-        )
-        .unwrap();
-
-        assert_eq!(
-            document.settings.get_last("bitmap_backend"),
-            Some("potrace-sidecar")
-        );
-        assert_eq!(document.warnings, vec!["missing potrace"]);
-    }
-
-    #[test]
-    fn bitmap_input_potrace_sidecar_backend_continues_without_warning_when_potrace_exists() {
-        let document = load_document_with_potrace_probe(
-            &DocumentRequest {
-                font_or_image: Some(PathBuf::from("/tmp/example.bmp")),
-                settings_overrides: vec![LegacySetting::new(
-                    "bitmap_backend",
-                    "potrace-sidecar",
-                    false,
-                )],
-                ..DocumentRequest::default()
-            },
-            || PotraceStatus::found(Some("potrace 1.16".to_owned())),
-        )
+    fn legacy_potrace_sidecar_bitmap_backend_normalizes_to_native_potrace() {
+        let document = load_document(&DocumentRequest {
+            font_or_image: Some(PathBuf::from("/tmp/example.bmp")),
+            settings_overrides: vec![LegacySetting::new(
+                "bitmap_backend",
+                "potrace-sidecar",
+                false,
+            )],
+            ..DocumentRequest::default()
+        })
         .unwrap();
 
         assert!(document.warnings.is_empty());
+        assert_eq!(
+            document.settings.get_last("bitmap_backend"),
+            Some("native-potrace")
+        );
     }
 
     #[test]

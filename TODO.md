@@ -15,7 +15,7 @@
 - [x] Add the ability to save a project to a .rgrv file and be able to open it up again later. The format can be JSON under the hood if that is easiest. It should be able to be versioned and allow us to open older versions in newer versions of Rengrave.
 - [x] Allow importing an SVG directly into the program instead of requiring an image
 - [x] Scan the system fonts automatically on starup. It shouldn't be necessary to click a button to view system fonts
-- [ ] Remove functionality for the Potrace renderer. We will only use our native Rust renderer going forward. 
+- [x] Remove functionality for the Potrace renderer. We will only use our native Rust renderer going forward. 
 
 # Bugs
 - [x] Trying to switch from image engrave/v-carve to text engrave/v-carve does not work. Hopefully with the workflow listed under `UI` this will be resolved. 

@@ -1,9 +1,4 @@
-use std::ffi::OsString;
-use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use image::{DynamicImage, RgbaImage};
 use rengrave_potrace::{Bitmap, Options as NativePotraceOptions, TurnPolicy};
@@ -19,17 +14,8 @@ pub enum BitmapError {
         path: PathBuf,
         source: image::ImageError,
     },
-    #[error("unable to write temporary PBM `{path}`: {source}")]
-    WriteTemp {
-        path: PathBuf,
-        source: std::io::Error,
-    },
-    #[error("unable to run Potrace: {source}")]
-    RunPotrace { source: std::io::Error },
-    #[error("Potrace failed: {stderr}")]
-    PotraceFailed { stderr: String },
-    #[error("native Potrace failed: {source}")]
-    NativePotraceFailed { source: rengrave_potrace::Error },
+    #[error("native bitmap trace failed: {source}")]
+    NativeTraceFailed { source: rengrave_potrace::Error },
     #[error("bitmap vectorization canceled")]
     Canceled,
 }
@@ -43,15 +29,13 @@ pub struct BitmapTraceStats {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BitmapBackend {
     NativePotrace,
-    PotraceSidecar,
 }
 
 impl BitmapBackend {
-    pub const ALL: [Self; 2] = [Self::NativePotrace, Self::PotraceSidecar];
-
     pub fn parse(value: &str) -> Self {
         match value.to_ascii_lowercase().as_str() {
-            "potrace-sidecar" | "external-potrace" | "sidecar" => Self::PotraceSidecar,
+            "native-potrace" | "native-rust" | "rust" | "vtracer" | "potrace-sidecar"
+            | "external-potrace" | "sidecar" => Self::NativePotrace,
             _ => Self::NativePotrace,
         }
     }
@@ -66,19 +50,13 @@ impl BitmapBackend {
     pub fn value(self) -> &'static str {
         match self {
             Self::NativePotrace => "native-potrace",
-            Self::PotraceSidecar => "potrace-sidecar",
         }
     }
 
     pub fn label(self) -> &'static str {
         match self {
-            Self::NativePotrace => "Native Potrace",
-            Self::PotraceSidecar => "Potrace sidecar",
+            Self::NativePotrace => "Native Rust",
         }
-    }
-
-    pub fn requires_potrace(self) -> bool {
-        self == Self::PotraceSidecar
     }
 }
 
@@ -114,14 +92,7 @@ pub fn vectorize_bitmap_to_dxf_with_cancel(
     settings: &LegacySettings,
     cancel: &dyn Fn() -> bool,
 ) -> Result<String, BitmapError> {
-    match BitmapBackend::from_settings(settings) {
-        BitmapBackend::NativePotrace => {
-            vectorize_bitmap_with_native_potrace_to_dxf(path, settings, cancel)
-        }
-        BitmapBackend::PotraceSidecar => {
-            vectorize_bitmap_with_potrace_sidecar_to_dxf(path, settings, cancel)
-        }
-    }
+    vectorize_bitmap_with_native_potrace_to_dxf(path, settings, cancel)
 }
 
 fn vectorize_bitmap_with_native_potrace_to_dxf(
@@ -137,157 +108,7 @@ fn vectorize_bitmap_with_native_potrace_to_dxf(
     let bitmap = image_to_native_potrace_bitmap(image, cancel)?;
     let options = NativePotraceSettings::from_settings(settings).options();
     rengrave_potrace::trace_bitmap_to_dxf(&bitmap, options)
-        .map_err(|source| BitmapError::NativePotraceFailed { source })
-}
-
-fn vectorize_bitmap_with_potrace_sidecar_to_dxf(
-    path: &Path,
-    settings: &LegacySettings,
-    cancel: &dyn Fn() -> bool,
-) -> Result<String, BitmapError> {
-    check_canceled(cancel)?;
-    let options = PotraceOptions::from_settings(settings);
-    let temp_path = write_temp_pbm(path, cancel)?;
-    let input = temp_path.as_path();
-    let output = run_potrace(input, &options, cancel);
-
-    let _ = std::fs::remove_file(temp_path);
-
-    output
-}
-
-fn run_potrace(
-    input: &Path,
-    options: &PotraceOptions,
-    cancel: &dyn Fn() -> bool,
-) -> Result<String, BitmapError> {
-    check_canceled(cancel)?;
-    let mut child = Command::new("potrace")
-        .args(options.args(input))
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|source| BitmapError::RunPotrace { source })?;
-    let mut stdout = child.stdout.take().ok_or_else(pipe_error)?;
-    let mut stderr = child.stderr.take().ok_or_else(pipe_error)?;
-    let stdout_reader = thread::spawn(move || {
-        let mut bytes = Vec::new();
-        stdout.read_to_end(&mut bytes).map(|_| bytes)
-    });
-    let stderr_reader = thread::spawn(move || {
-        let mut bytes = Vec::new();
-        stderr.read_to_end(&mut bytes).map(|_| bytes)
-    });
-
-    let status = loop {
-        if cancel() {
-            let _ = child.kill();
-            let _ = child.wait();
-            let _ = join_reader(stdout_reader);
-            let _ = join_reader(stderr_reader);
-            return Err(BitmapError::Canceled);
-        }
-        if let Some(status) = child.try_wait().map_err(|source| {
-            let _ = child.kill();
-            BitmapError::RunPotrace { source }
-        })? {
-            break status;
-        }
-        thread::sleep(Duration::from_millis(10));
-    };
-
-    let stdout = join_reader(stdout_reader)?;
-    let stderr = join_reader(stderr_reader)?;
-
-    if !status.success() {
-        return Err(BitmapError::PotraceFailed {
-            stderr: String::from_utf8_lossy(&stderr).trim().to_owned(),
-        });
-    }
-
-    Ok(String::from_utf8_lossy(&stdout).into_owned())
-}
-
-fn join_reader(
-    reader: thread::JoinHandle<std::io::Result<Vec<u8>>>,
-) -> Result<Vec<u8>, BitmapError> {
-    reader
-        .join()
-        .map_err(|_| BitmapError::RunPotrace {
-            source: std::io::Error::new(
-                std::io::ErrorKind::Other,
-                "Potrace pipe reader thread stopped",
-            ),
-        })?
-        .map_err(|source| BitmapError::RunPotrace { source })
-}
-
-fn pipe_error() -> BitmapError {
-    BitmapError::RunPotrace {
-        source: std::io::Error::new(std::io::ErrorKind::Other, "Potrace pipe was not available"),
-    }
-}
-
-fn write_temp_pbm(path: &Path, cancel: &dyn Fn() -> bool) -> Result<PathBuf, BitmapError> {
-    check_canceled(cancel)?;
-    let image = image::open(path).map_err(|source| BitmapError::Decode {
-        path: path.to_owned(),
-        source,
-    })?;
-    let bytes = image_to_pbm_bytes_with_cancel(image, cancel)?;
-    let temp_path = std::env::temp_dir().join(format!(
-        "rengrave-potrace-{}-{}.pbm",
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|duration| duration.as_nanos())
-            .unwrap_or_default()
-    ));
-    std::fs::write(&temp_path, bytes).map_err(|source| BitmapError::WriteTemp {
-        path: temp_path.clone(),
-        source,
-    })?;
-    Ok(temp_path)
-}
-
-fn image_to_pbm_bytes_with_cancel(
-    image: DynamicImage,
-    cancel: &dyn Fn() -> bool,
-) -> Result<Vec<u8>, BitmapError> {
-    let rgba = image.to_rgba8();
-    let bounds = trace_content_bounds(&rgba, cancel)?;
-    let (width, height) = bounds
-        .map(|bounds| (bounds.width(), bounds.height()))
-        .unwrap_or((1, 1));
-    let mut output = format!("P4\n{width} {height}\n").into_bytes();
-
-    let Some(bounds) = bounds else {
-        output.push(0);
-        return Ok(output);
-    };
-
-    for y in bounds.min_y..=bounds.max_y {
-        check_canceled(cancel)?;
-        let mut byte = 0u8;
-        let mut bit = 0;
-        for x in bounds.min_x..=bounds.max_x {
-            let pixel = rgba.get_pixel(x, y).0;
-            if bitmap_pixel_is_black(pixel) {
-                byte |= 0x80 >> bit;
-            }
-            bit += 1;
-            if bit == 8 {
-                output.push(byte);
-                byte = 0;
-                bit = 0;
-            }
-        }
-        if bit != 0 {
-            output.push(byte);
-        }
-    }
-
-    Ok(output)
+        .map_err(|source| BitmapError::NativeTraceFailed { source })
 }
 
 fn image_to_native_potrace_bitmap(
@@ -304,7 +125,7 @@ fn image_to_native_potrace_bitmap(
     let Some(bounds) = bounds else {
         bits.push(false);
         return Bitmap::from_bits(1, 1, bits)
-            .map_err(|source| BitmapError::NativePotraceFailed { source });
+            .map_err(|source| BitmapError::NativeTraceFailed { source });
     };
 
     for y in (bounds.min_y..=bounds.max_y).rev() {
@@ -316,7 +137,7 @@ fn image_to_native_potrace_bitmap(
     }
 
     Bitmap::from_bits(width as i32, height as i32, bits)
-        .map_err(|source| BitmapError::NativePotraceFailed { source })
+        .map_err(|source| BitmapError::NativeTraceFailed { source })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -425,15 +246,6 @@ impl NativePotraceSettings {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct PotraceOptions {
-    turn_policy: String,
-    turd_size: String,
-    alpha_max: String,
-    opt_tolerance: String,
-    long_curve: bool,
-}
-
 fn get_f64(settings: &LegacySettings, key: &str, default: f64) -> f64 {
     settings
         .get_last(key)
@@ -441,51 +253,12 @@ fn get_f64(settings: &LegacySettings, key: &str, default: f64) -> f64 {
         .unwrap_or(default)
 }
 
-impl PotraceOptions {
-    fn from_settings(settings: &LegacySettings) -> Self {
-        Self {
-            turn_policy: settings
-                .get_last("bmp_turnp")
-                .unwrap_or("minority")
-                .to_owned(),
-            turd_size: settings.get_last("bmp_turds").unwrap_or("2").to_owned(),
-            alpha_max: settings.get_last("bmp_alpha").unwrap_or("1").to_owned(),
-            opt_tolerance: settings.get_last("bmp_optto").unwrap_or("0.2").to_owned(),
-            long_curve: get_legacy_bool(settings, "bmp_long", true),
-        }
-    }
-
-    fn args(&self, input: &Path) -> Vec<OsString> {
-        let mut args = vec![
-            OsString::from("-z"),
-            OsString::from(&self.turn_policy),
-            OsString::from("-t"),
-            OsString::from(&self.turd_size),
-            OsString::from("-a"),
-            OsString::from(&self.alpha_max),
-        ];
-        if self.long_curve {
-            args.push(OsString::from("-O"));
-            args.push(OsString::from(&self.opt_tolerance));
-        } else {
-            args.push(OsString::from("-n"));
-        }
-        args.extend([
-            OsString::from("-b"),
-            OsString::from("dxf"),
-            input.as_os_str().to_owned(),
-            OsString::from("-o"),
-            OsString::from("-"),
-        ]);
-        args
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use image::{DynamicImage, Rgba, RgbaImage};
     use std::cell::Cell;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn trace_mask_matches_pbm_threshold_and_counts_full_image() {
@@ -510,7 +283,7 @@ mod tests {
     }
 
     #[test]
-    fn bitmap_conversion_trims_white_border_and_writes_packed_pbm_bits() {
+    fn native_bitmap_conversion_trims_white_border_and_preserves_bits() {
         let mut image = RgbaImage::from_pixel(10, 3, Rgba([255, 255, 255, 255]));
         for x in 2..5 {
             let value = if x < 4 { 0 } else { 255 };
@@ -518,22 +291,27 @@ mod tests {
         }
         image.put_pixel(2, 1, Rgba([0, 0, 0, 255]));
 
-        let bytes =
-            image_to_pbm_bytes_with_cancel(DynamicImage::ImageRgba8(image), &|| false).unwrap();
+        let bitmap =
+            image_to_native_potrace_bitmap(DynamicImage::ImageRgba8(image), &|| false).unwrap();
 
-        assert_eq!(&bytes[..7], b"P4\n2 2\n");
-        assert_eq!(bytes[7], 0b1100_0000);
-        assert_eq!(bytes[8], 0b1000_0000);
+        assert_eq!(bitmap.width(), 2);
+        assert_eq!(bitmap.height(), 2);
+        assert!(bitmap.get(0, 1));
+        assert!(bitmap.get(1, 1));
+        assert!(bitmap.get(0, 0));
+        assert!(!bitmap.get(1, 0));
     }
 
     #[test]
-    fn fully_white_bitmap_converts_to_minimal_empty_pbm() {
+    fn fully_white_bitmap_converts_to_minimal_empty_native_bitmap() {
         let image = RgbaImage::from_pixel(4, 3, Rgba([255, 255, 255, 255]));
 
-        let bytes =
-            image_to_pbm_bytes_with_cancel(DynamicImage::ImageRgba8(image), &|| false).unwrap();
+        let bitmap =
+            image_to_native_potrace_bitmap(DynamicImage::ImageRgba8(image), &|| false).unwrap();
 
-        assert_eq!(&bytes, b"P4\n1 1\n\0");
+        assert_eq!(bitmap.width(), 1);
+        assert_eq!(bitmap.height(), 1);
+        assert!(!bitmap.get(0, 0));
     }
 
     #[test]
@@ -550,22 +328,22 @@ mod tests {
     }
 
     #[test]
-    fn transparent_pixels_composite_to_white_for_pbm_conversion() {
+    fn transparent_pixels_composite_to_white_for_native_bitmap_conversion() {
         let mut image = RgbaImage::new(1, 1);
         image.put_pixel(0, 0, Rgba([0, 0, 0, 0]));
 
-        let bytes =
-            image_to_pbm_bytes_with_cancel(DynamicImage::ImageRgba8(image), &|| false).unwrap();
+        let bitmap =
+            image_to_native_potrace_bitmap(DynamicImage::ImageRgba8(image), &|| false).unwrap();
 
-        assert_eq!(bytes.last(), Some(&0));
+        assert!(!bitmap.get(0, 0));
     }
 
     #[test]
-    fn pbm_conversion_can_cancel_between_rows() {
+    fn native_bitmap_conversion_can_cancel_between_rows() {
         let image = RgbaImage::from_pixel(1, 3, Rgba([0, 0, 0, 255]));
         let calls = Cell::new(0usize);
 
-        let err = image_to_pbm_bytes_with_cancel(DynamicImage::ImageRgba8(image), &|| {
+        let err = image_to_native_potrace_bitmap(DynamicImage::ImageRgba8(image), &|| {
             let next = calls.get() + 1;
             calls.set(next);
             next > 1
@@ -577,18 +355,19 @@ mod tests {
     }
 
     #[test]
-    fn gif_inputs_decode_for_pbm_conversion() {
+    fn gif_inputs_decode_for_native_bitmap_conversion() {
         let gif = b"GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02D\x01\x00;";
         let image = image::load_from_memory(gif).unwrap();
 
-        let bytes = image_to_pbm_bytes_with_cancel(image, &|| false).unwrap();
+        let bitmap = image_to_native_potrace_bitmap(image, &|| false).unwrap();
 
-        assert_eq!(&bytes[..7], b"P4\n1 1\n");
-        assert_eq!(bytes[7], 0b1000_0000);
+        assert_eq!(bitmap.width(), 1);
+        assert_eq!(bitmap.height(), 1);
+        assert!(bitmap.get(0, 0));
     }
 
     #[test]
-    fn bitmap_backend_defaults_to_native_potrace_and_accepts_sidecar() {
+    fn bitmap_backend_always_resolves_to_native_rust() {
         let settings = crate::settings::default_legacy_settings();
         assert_eq!(
             BitmapBackend::from_settings(&settings),
@@ -599,12 +378,13 @@ mod tests {
         settings.set_or_push("bitmap_backend", "potrace-sidecar", false);
         assert_eq!(
             BitmapBackend::from_settings(&settings),
-            BitmapBackend::PotraceSidecar
+            BitmapBackend::NativePotrace
         );
+        assert_eq!(BitmapBackend::NativePotrace.label(), "Native Rust");
     }
 
     #[test]
-    fn native_potrace_backend_vectorizes_bitmap_without_sidecar() {
+    fn native_potrace_backend_vectorizes_bitmap_without_external_potrace() {
         let mut image = RgbaImage::from_pixel(32, 32, Rgba([255, 255, 255, 255]));
         for y in 8..24 {
             for x in 8..24 {
@@ -629,49 +409,5 @@ mod tests {
         assert!(dxf.contains("POLYLINE"));
         assert!(dxf.contains("VERTEX"));
         assert!(dxf.ends_with("  0\nEOF\n"));
-    }
-
-    #[test]
-    fn potrace_args_match_f_engrave_long_curve_mode() {
-        let settings = crate::settings::default_legacy_settings();
-        let args = PotraceOptions::from_settings(&settings).args(Path::new("input.pbm"));
-        let args: Vec<_> = args
-            .iter()
-            .map(|arg| arg.to_string_lossy().into_owned())
-            .collect();
-
-        assert_eq!(
-            args,
-            [
-                "-z",
-                "minority",
-                "-t",
-                "2",
-                "-a",
-                "1",
-                "-O",
-                "0.2",
-                "-b",
-                "dxf",
-                "input.pbm",
-                "-o",
-                "-"
-            ]
-        );
-    }
-
-    #[test]
-    fn potrace_args_match_f_engrave_polygon_mode() {
-        let mut settings = crate::settings::default_legacy_settings();
-        settings.set_or_push("bmp_long", "0", false);
-
-        let args = PotraceOptions::from_settings(&settings).args(Path::new("input.pbm"));
-        let args: Vec<_> = args
-            .iter()
-            .map(|arg| arg.to_string_lossy().into_owned())
-            .collect();
-
-        assert!(args.contains(&"-n".to_owned()));
-        assert!(!args.contains(&"-O".to_owned()));
     }
 }
