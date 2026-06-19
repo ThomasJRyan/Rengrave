@@ -124,6 +124,7 @@ struct RengraveApp {
     input_catalog_search: String,
     input_preview: InputPreview,
     preview_sample_text: String,
+    show_new_project_modal: bool,
     preferences_path: Option<PathBuf>,
     calculation: Option<CalculationJob>,
     next_calculation_id: u64,
@@ -243,6 +244,7 @@ impl RengraveApp {
             input_catalog_search: String::new(),
             input_preview: InputPreview::default(),
             preview_sample_text: preferences.preview_sample_text,
+            show_new_project_modal: false,
             preferences_path,
             calculation: None,
             next_calculation_id: 1,
@@ -368,6 +370,32 @@ impl RengraveApp {
         self.show_axes = get_legacy_bool(&defaults, "show_axis", true);
         self.show_grid = true;
         self.status = "Controls reset to defaults".to_owned();
+    }
+
+    fn start_new_project(&mut self, tool_view: ToolView) {
+        self.cancel_calculation("New project");
+        self.settings_path.clear();
+        self.input_path.clear();
+        self.text = RengraveDocument::default().text;
+        self.reset_controls_to_defaults();
+        self.set_tool_view(tool_view);
+        self.gcode.clear();
+        self.svg = None;
+        self.dxf = None;
+        self.secondary_gcode.clear();
+        self.gcode_lines = 0;
+        self.gcode_arc_count = 0;
+        self.preview_segments.clear();
+        self.preview_rapids.clear();
+        self.preview_cleanup_segments.clear();
+        self.preview_bounds = None;
+        self.input_overlay_outline.clear();
+        self.last_output_request = None;
+        self.auto_recalc_signature = None;
+        self.auto_recalc_changed_at = None;
+        self.show_new_project_modal = false;
+        self.status = format!("New {} project", tool_view.label());
+        self.save_preferences();
     }
 
     fn start_calculation(&mut self, ctx: egui::Context) {
@@ -725,22 +753,6 @@ impl RengraveApp {
         };
         let next = self.tool_view.with_input_kind(kind);
         self.set_tool_view(next);
-    }
-
-    fn show_workbench_selector(&mut self, ui: &mut egui::Ui) {
-        let mut selected = self.tool_view;
-        egui::ComboBox::from_id_salt("workbench_selector")
-            .selected_text(selected.label())
-            .width(160.0)
-            .show_ui(ui, |ui| {
-                ui.label("Workbench");
-                for tool_view in ToolView::ALL {
-                    ui.selectable_value(&mut selected, tool_view, tool_view.label());
-                }
-            });
-        if selected != self.tool_view {
-            self.set_tool_view(selected);
-        }
     }
 
     fn show_workflow_input_panel(&mut self, ui: &mut egui::Ui) {
@@ -1544,6 +1556,7 @@ impl eframe::App for RengraveApp {
         }
 
         self.show_browser(ui.ctx());
+        self.show_new_project_modal(ui.ctx());
     }
 }
 
@@ -1561,7 +1574,7 @@ impl RengraveApp {
             });
             ui.separator();
             ui.label("Workbench");
-            self.show_workbench_selector(ui);
+            ui.strong(self.tool_view.label());
             if self.calculation.is_some() {
                 ui.separator();
                 ui.spinner();
@@ -1714,7 +1727,7 @@ impl RengraveApp {
         egui::MenuBar::new().ui(ui, |ui| {
             ui.menu_button("File", |ui| {
                 if menu_action(ui, "New", true) {
-                    self.reset_controls_to_defaults();
+                    self.show_new_project_modal = true;
                 }
 
                 if menu_action(ui, "Open", true) {
@@ -1869,6 +1882,42 @@ impl RengraveApp {
     fn reset_preview_pan_zoom(&mut self) {
         self.transform.pan = Point::default();
         self.transform.zoom = DEFAULT_PREVIEW_ZOOM;
+    }
+
+    fn show_new_project_modal(&mut self, ctx: &egui::Context) {
+        if !self.show_new_project_modal {
+            return;
+        }
+
+        let mut selected = None;
+        let response = egui::Modal::new(egui::Id::new("new_project_modal")).show(ctx, |ui| {
+            ui.set_width(420.0);
+            ui.heading("New project");
+            ui.add_space(6.0);
+            for category in ["Text generation", "Image generation"] {
+                ui.label(egui::RichText::new(category).strong());
+                ui.add_space(2.0);
+                for tool_view in ToolView::ALL
+                    .into_iter()
+                    .filter(|tool_view| tool_view.category_label() == category)
+                {
+                    if full_width_button(ui, tool_view.label(), true) {
+                        selected = Some(tool_view);
+                    }
+                }
+                ui.add_space(8.0);
+            }
+            ui.separator();
+            if full_width_button(ui, "Cancel", true) {
+                ui.close();
+            }
+        });
+
+        if let Some(tool_view) = selected {
+            self.start_new_project(tool_view);
+        } else if response.should_close() {
+            self.show_new_project_modal = false;
+        }
     }
 
     fn show_browser(&mut self, ctx: &egui::Context) {
@@ -3421,6 +3470,8 @@ mod tests {
         assert!(!ToolView::TextVCarve.accepts_kind(InputCatalogKind::Bitmap));
         assert!(ToolView::ImageVCarve.accepts_kind(InputCatalogKind::Dxf));
         assert!(ToolView::ImageVCarve.accepts_kind(InputCatalogKind::Bitmap));
+        assert_eq!(ToolView::TextEngrave.category_label(), "Text generation");
+        assert_eq!(ToolView::ImageVCarve.category_label(), "Image generation");
         assert_eq!(
             ToolView::TextVCarve.with_input_kind(InputCatalogKind::Bitmap),
             ToolView::ImageVCarve

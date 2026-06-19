@@ -94,6 +94,14 @@ impl ToolView {
         }
     }
 
+    pub(crate) fn category_label(self) -> &'static str {
+        if self.uses_text() {
+            "Text generation"
+        } else {
+            "Image generation"
+        }
+    }
+
     pub(crate) fn uses_text(self) -> bool {
         matches!(self, Self::TextEngrave | Self::TextVCarve)
     }
