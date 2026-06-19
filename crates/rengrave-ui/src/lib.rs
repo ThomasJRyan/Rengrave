@@ -617,16 +617,6 @@ impl RengraveApp {
         self.save_preferences();
     }
 
-    fn reset_output_paths_to_default_dir(&mut self) {
-        let default_dir = path_from_text(&self.default_dir_path);
-        let (gcode_path, svg_path, dxf_path) = default_output_paths(&default_dir);
-        self.gcode_path = gcode_path;
-        self.svg_path = svg_path;
-        self.dxf_path = dxf_path;
-        self.status = "Output paths updated from default directory".to_owned();
-        self.save_preferences();
-    }
-
     fn open_browser(&mut self, target: FileBrowserTarget) {
         let start_dir = browser_start_dir(
             target,
@@ -668,8 +658,6 @@ impl RengraveApp {
             FileBrowserTarget::Input => &self.input_path,
             FileBrowserTarget::DefaultDir => &self.default_dir_path,
             FileBrowserTarget::GcodeOutput => &self.gcode_path,
-            FileBrowserTarget::SvgOutput => &self.svg_path,
-            FileBrowserTarget::DxfOutput => &self.dxf_path,
         }
     }
 
@@ -694,8 +682,6 @@ impl RengraveApp {
                 self.refresh_input_catalog();
             }
             FileBrowserTarget::GcodeOutput => self.gcode_path = text,
-            FileBrowserTarget::SvgOutput => self.svg_path = text,
-            FileBrowserTarget::DxfOutput => self.dxf_path = text,
         }
         self.status = format!("Selected {}", target.label());
         self.save_preferences();
@@ -1574,25 +1560,6 @@ impl RengraveApp {
                 );
             });
             ui.separator();
-            if ui.button("New").clicked() {
-                self.reset_controls_to_defaults();
-            }
-            if ui.button("Open").clicked() {
-                self.choose_path(FileBrowserTarget::Settings, ui.ctx().clone());
-            }
-            if ui
-                .add_enabled(
-                    !self.settings_path.trim().is_empty(),
-                    egui::Button::new("Save"),
-                )
-                .clicked()
-            {
-                self.save_current_settings();
-            }
-            if ui.button("Save As").clicked() {
-                self.choose_path(FileBrowserTarget::SettingsOutput, ui.ctx().clone());
-            }
-            ui.separator();
             ui.label("Workbench");
             self.show_workbench_selector(ui);
             if self.calculation.is_some() {
@@ -1746,66 +1713,20 @@ impl RengraveApp {
     fn show_menu_bar(&mut self, ui: &mut egui::Ui) {
         egui::MenuBar::new().ui(ui, |ui| {
             ui.menu_button("File", |ui| {
-                if menu_action(ui, "Open settings...", true) {
-                    self.choose_path(FileBrowserTarget::Settings, ui.ctx().clone());
-                }
-                if menu_action(ui, "Save settings as...", true) {
-                    self.choose_path(FileBrowserTarget::SettingsOutput, ui.ctx().clone());
-                }
-                if menu_action(ui, "Open input...", true) {
-                    self.choose_path(FileBrowserTarget::Input, ui.ctx().clone());
-                }
-                if menu_action(ui, "Set default directory...", true) {
-                    self.choose_path(FileBrowserTarget::DefaultDir, ui.ctx().clone());
-                }
-                ui.separator();
-                if menu_action(ui, "Load", true) {
-                    self.reload_document(ui.ctx().clone());
-                }
-                if menu_action(ui, "Save settings", !self.settings_path.trim().is_empty()) {
-                    self.save_current_settings();
-                }
-                if menu_action(ui, "Reset controls to defaults", true) {
+                if menu_action(ui, "New", true) {
                     self.reset_controls_to_defaults();
                 }
-                ui.separator();
-                if menu_action(ui, "Choose G-code output...", true) {
-                    self.choose_path(FileBrowserTarget::GcodeOutput, ui.ctx().clone());
+
+                if menu_action(ui, "Open", true) {
+                    self.choose_path(FileBrowserTarget::Settings, ui.ctx().clone());
                 }
-                if menu_action(ui, "Choose SVG output...", true) {
-                    self.choose_path(FileBrowserTarget::SvgOutput, ui.ctx().clone());
+
+                if menu_action(ui, "Save", !self.settings_path.trim().is_empty()) {
+                    self.save_current_settings();
                 }
-                if menu_action(ui, "Choose DXF output...", true) {
-                    self.choose_path(FileBrowserTarget::DxfOutput, ui.ctx().clone());
-                }
-                if menu_action(ui, "Use default dir for outputs", true) {
-                    self.reset_output_paths_to_default_dir();
-                }
-                if menu_action(ui, "Export all available", self.any_export_available()) {
-                    self.export_all_available();
-                }
-                if menu_action(ui, "Export G-code", !self.gcode.is_empty()) {
-                    self.export_current(ExportKind::Gcode);
-                }
-                if menu_action(ui, "Export cleanup files", !self.secondary_gcode.is_empty()) {
-                    self.export_secondary_outputs();
-                }
-                if menu_action(ui, "Export SVG", self.svg.is_some()) {
-                    self.export_current(ExportKind::Svg);
-                }
-                if menu_action(ui, "Export DXF", self.dxf.is_some()) {
-                    self.export_current(ExportKind::Dxf);
-                }
-                ui.separator();
-                if menu_action(ui, "Copy G-code", !self.gcode.is_empty()) {
-                    self.copy_gcode(ui.ctx());
-                }
-                if menu_action(
-                    ui,
-                    "Copy current output tab",
-                    self.current_bottom_tab_payload().is_some(),
-                ) {
-                    self.copy_current_bottom_tab(ui.ctx());
+
+                if menu_action(ui, "Save As", true) {
+                    self.choose_path(FileBrowserTarget::SettingsOutput, ui.ctx().clone());
                 }
             });
 
@@ -3599,14 +3520,6 @@ mod tests {
         assert_eq!(
             output_file_name("  ", FileBrowserTarget::SettingsOutput),
             "rengrave_settings.ngc"
-        );
-        assert_eq!(
-            output_file_name("  ", FileBrowserTarget::SvgOutput),
-            "rengrave_output.svg"
-        );
-        assert_eq!(
-            output_file_name("/tmp/out", FileBrowserTarget::DxfOutput),
-            "out"
         );
     }
 

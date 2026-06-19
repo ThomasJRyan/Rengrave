@@ -11,8 +11,6 @@ pub(crate) enum FileBrowserTarget {
     Input,
     DefaultDir,
     GcodeOutput,
-    SvgOutput,
-    DxfOutput,
 }
 
 impl FileBrowserTarget {
@@ -23,8 +21,6 @@ impl FileBrowserTarget {
             Self::Input => "input",
             Self::DefaultDir => "default directory",
             Self::GcodeOutput => "G-code output",
-            Self::SvgOutput => "SVG output",
-            Self::DxfOutput => "DXF output",
         }
     }
 
@@ -35,8 +31,6 @@ impl FileBrowserTarget {
             Self::Input => "Open Input",
             Self::DefaultDir => "Choose Default Directory",
             Self::GcodeOutput => "Choose G-code Output",
-            Self::SvgOutput => "Choose SVG Output",
-            Self::DxfOutput => "Choose DXF Output",
         }
     }
 
@@ -44,8 +38,6 @@ impl FileBrowserTarget {
         match self {
             Self::SettingsOutput => Some("rengrave_settings.ngc"),
             Self::GcodeOutput => Some("rengrave_output.ngc"),
-            Self::SvgOutput => Some("rengrave_output.svg"),
-            Self::DxfOutput => Some("rengrave_output.dxf"),
             _ => None,
         }
     }
@@ -55,9 +47,7 @@ impl FileBrowserTarget {
             Self::DefaultDir => path.is_dir(),
             Self::Settings => path.is_file(),
             Self::Input => path.is_file() || path.is_dir(),
-            Self::SettingsOutput | Self::GcodeOutput | Self::SvgOutput | Self::DxfOutput => {
-                !path.is_dir()
-            }
+            Self::SettingsOutput | Self::GcodeOutput => !path.is_dir(),
         }
     }
 }
@@ -75,10 +65,7 @@ pub(crate) fn selection_followup(target: FileBrowserTarget) -> SelectionFollowup
         FileBrowserTarget::Settings => SelectionFollowup::LoadDocument,
         FileBrowserTarget::SettingsOutput => SelectionFollowup::SaveSettings,
         FileBrowserTarget::Input => SelectionFollowup::StartCalculation,
-        FileBrowserTarget::DefaultDir
-        | FileBrowserTarget::GcodeOutput
-        | FileBrowserTarget::SvgOutput
-        | FileBrowserTarget::DxfOutput => SelectionFollowup::None,
+        FileBrowserTarget::DefaultDir | FileBrowserTarget::GcodeOutput => SelectionFollowup::None,
     }
 }
 
@@ -312,14 +299,6 @@ pub(crate) fn choose_native_path(
         FileBrowserTarget::GcodeOutput => dialog
             .set_file_name(output_file_name(current_value, target))
             .add_filter("G-code", &["ngc", "nc", "tap"])
-            .save_file(),
-        FileBrowserTarget::SvgOutput => dialog
-            .set_file_name(output_file_name(current_value, target))
-            .add_filter("SVG", &["svg"])
-            .save_file(),
-        FileBrowserTarget::DxfOutput => dialog
-            .set_file_name(output_file_name(current_value, target))
-            .add_filter("DXF", &["dxf"])
             .save_file(),
     }
 }
