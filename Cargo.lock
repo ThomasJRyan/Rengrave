@@ -2539,6 +2539,7 @@ dependencies = [
  "image",
  "rengrave-core",
  "rfd",
+ "ttf-parser",
 ]
 
 [[package]]

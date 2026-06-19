@@ -208,6 +208,59 @@ const SYSTEM_FONT_SCAN_MAX_DEPTH: usize = 6;
 /// directories can yield thousands of fonts, so the list is capped to keep the
 /// UI responsive while the search field narrows results.
 pub(crate) const CATALOG_DISPLAY_LIMIT: usize = 250;
+const CATALOG_FONT_RENDER_LIMIT: usize = 128;
+
+#[derive(Debug, Default)]
+pub(crate) struct CatalogFontRegistry {
+    signature: Vec<PathBuf>,
+    families_by_path: std::collections::BTreeMap<PathBuf, egui::FontFamily>,
+}
+
+impl CatalogFontRegistry {
+    pub(crate) fn refresh(&mut self, ctx: &egui::Context, entries: &[InputCatalogEntry]) {
+        let signature = catalog_ttf_font_paths(entries, CATALOG_FONT_RENDER_LIMIT);
+        if signature == self.signature {
+            return;
+        }
+
+        let mut definitions = egui::FontDefinitions::default();
+        let mut families_by_path = std::collections::BTreeMap::new();
+        for (index, path) in signature.iter().enumerate() {
+            let Ok(bytes) = fs::read(path) else {
+                continue;
+            };
+            if ttf_parser::Face::parse(&bytes, 0).is_err() {
+                continue;
+            }
+
+            let name = format!("rengrave-catalog-font-{index}");
+            definitions.font_data.insert(
+                name.clone(),
+                std::sync::Arc::new(egui::FontData::from_owned(bytes)),
+            );
+            let family = egui::FontFamily::Name(name.clone().into());
+            definitions.families.insert(family.clone(), vec![name]);
+            families_by_path.insert(path.clone(), family);
+        }
+
+        ctx.set_fonts(definitions);
+        self.signature = signature;
+        self.families_by_path = families_by_path;
+    }
+
+    pub(crate) fn family_for_path(&self, path: &Path) -> Option<egui::FontFamily> {
+        self.families_by_path.get(path).cloned()
+    }
+}
+
+fn catalog_ttf_font_paths(entries: &[InputCatalogEntry], limit: usize) -> Vec<PathBuf> {
+    entries
+        .iter()
+        .filter(|entry| entry.kind == InputCatalogKind::TtfFont)
+        .take(limit)
+        .map(|entry| entry.path.clone())
+        .collect()
+}
 
 /// Recursively collects CXF/TTF fonts from the platform font directories.
 pub(crate) fn read_system_font_entries() -> Vec<InputCatalogEntry> {
@@ -328,5 +381,43 @@ pub(crate) fn format_bytes(bytes: u64) -> String {
         format!("{:.1} KB", bytes as f64 / 1024.0)
     } else {
         format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn catalog_font_registry_tracks_ttf_entries_only_with_limit() {
+        let entries = [
+            InputCatalogEntry {
+                path: PathBuf::from("/tmp/a.cxf"),
+                name: "a.cxf".to_owned(),
+                kind: InputCatalogKind::CxfFont,
+                size_bytes: 1,
+            },
+            InputCatalogEntry {
+                path: PathBuf::from("/tmp/b.ttf"),
+                name: "b.ttf".to_owned(),
+                kind: InputCatalogKind::TtfFont,
+                size_bytes: 1,
+            },
+            InputCatalogEntry {
+                path: PathBuf::from("/tmp/c.ttf"),
+                name: "c.ttf".to_owned(),
+                kind: InputCatalogKind::TtfFont,
+                size_bytes: 1,
+            },
+        ];
+
+        assert_eq!(
+            catalog_ttf_font_paths(&entries, 1),
+            vec![PathBuf::from("/tmp/b.ttf")]
+        );
+        assert_eq!(
+            catalog_ttf_font_paths(&entries, 8),
+            vec![PathBuf::from("/tmp/b.ttf"), PathBuf::from("/tmp/c.ttf")]
+        );
     }
 }

@@ -120,6 +120,7 @@ struct RengraveApp {
     input_overlay_outline: Vec<PreviewSegment>,
     browser: Option<FileBrowser>,
     input_catalog: InputCatalog,
+    catalog_font_registry: CatalogFontRegistry,
     input_catalog_filter: InputCatalogFilter,
     input_catalog_search: String,
     input_preview: InputPreview,
@@ -239,6 +240,7 @@ impl RengraveApp {
             input_overlay_outline: Vec::new(),
             browser: None,
             input_catalog,
+            catalog_font_registry: CatalogFontRegistry::default(),
             input_catalog_filter: InputCatalogFilter::default(),
             input_catalog_search: String::new(),
             input_preview: InputPreview::default(),
@@ -739,8 +741,8 @@ impl RengraveApp {
             self.tool_view,
         );
         let query = self.input_catalog_search.trim().to_lowercase();
-        let filtered: Vec<&InputCatalogEntry> = visible_entries
-            .iter()
+        let filtered: Vec<InputCatalogEntry> = visible_entries
+            .into_iter()
             .filter(|entry| query.is_empty() || entry.name.to_lowercase().contains(&query))
             .collect();
         if filtered.is_empty() {
@@ -748,6 +750,7 @@ impl RengraveApp {
             return;
         }
 
+        self.catalog_font_registry.refresh(ui.ctx(), &filtered);
         let total = filtered.len();
         let shown = total.min(CATALOG_DISPLAY_LIMIT);
         let selected_input = path_from_text(&self.input_path);
@@ -763,6 +766,10 @@ impl RengraveApp {
                         entry.name,
                         format_bytes(entry.size_bytes)
                     );
+                    let mut label = egui::RichText::new(label);
+                    if let Some(family) = self.catalog_font_registry.family_for_path(&entry.path) {
+                        label = label.font(egui::FontId::new(13.0, family));
+                    }
                     if ui.selectable_label(selected, label).clicked() {
                         chosen = Some(entry.path.clone());
                     }
