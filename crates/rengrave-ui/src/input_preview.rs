@@ -65,19 +65,9 @@ pub(crate) fn input_preview_accepts_sample(path: Option<&Path>) -> bool {
         .is_some_and(|kind| matches!(kind, InputCatalogKind::CxfFont | InputCatalogKind::TtfFont))
 }
 
-pub(crate) fn input_preview_sample_for_path(
-    path: Option<&Path>,
-    text: &str,
-    preview_sample_text: &str,
-) -> Option<String> {
+pub(crate) fn input_preview_sample_for_path(path: Option<&Path>, text: &str) -> Option<String> {
     let path = path?;
-    input_preview_accepts_sample(Some(path)).then(|| {
-        if preview_sample_text.trim().is_empty() {
-            preview_text_sample(text)
-        } else {
-            preview_text_sample(preview_sample_text)
-        }
-    })
+    input_preview_accepts_sample(Some(path)).then(|| preview_text_sample(text))
 }
 
 pub(crate) fn preview_text_sample(text: &str) -> String {

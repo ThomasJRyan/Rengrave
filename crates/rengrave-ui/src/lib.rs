@@ -123,7 +123,6 @@ struct RengraveApp {
     input_catalog_filter: InputCatalogFilter,
     input_catalog_search: String,
     input_preview: InputPreview,
-    preview_sample_text: String,
     show_new_project_modal: bool,
     preferences_path: Option<PathBuf>,
     calculation: Option<CalculationJob>,
@@ -243,7 +242,6 @@ impl RengraveApp {
             input_catalog_filter: InputCatalogFilter::default(),
             input_catalog_search: String::new(),
             input_preview: InputPreview::default(),
-            preview_sample_text: preferences.preview_sample_text,
             show_new_project_modal: false,
             preferences_path,
             calculation: None,
@@ -883,18 +881,6 @@ impl RengraveApp {
                 self.reload_input_preview();
             }
         });
-        if self.tool_view.uses_text()
-            && input_preview_accepts_sample(path_from_text(&self.input_path).as_deref())
-        {
-            let sample_action = text_row(ui, "Sample", &mut self.preview_sample_text);
-            if sample_action.value_changed {
-                self.save_preferences();
-            }
-            if ui.button("Use engraving text").clicked() {
-                self.preview_sample_text.clear();
-                self.save_preferences();
-            }
-        }
         self.ensure_input_preview();
         draw_input_preview(ui, &mut self.input_preview);
     }
@@ -1454,7 +1440,6 @@ impl RengraveApp {
             show_grid: self.show_grid,
             show_cleanup: self.show_cleanup,
             viewport_rotation_degrees: self.transform.viewport_rotation_degrees,
-            preview_sample_text: self.preview_sample_text.clone(),
             auto_recalculate: self.auto_recalculate,
             show_input_overlay: self.show_input_overlay,
         };
@@ -2012,8 +1997,7 @@ impl RengraveApp {
 
     fn ensure_input_preview(&mut self) {
         let path = path_from_text(&self.input_path);
-        let sample_text =
-            input_preview_sample_for_path(path.as_deref(), &self.text, &self.preview_sample_text);
+        let sample_text = input_preview_sample_for_path(path.as_deref(), &self.text);
         if self.input_preview.path != path || self.input_preview.sample_text != sample_text {
             self.input_preview = InputPreview::load(path, sample_text);
         }
@@ -2021,8 +2005,7 @@ impl RengraveApp {
 
     fn reload_input_preview(&mut self) {
         let path = path_from_text(&self.input_path);
-        let sample_text =
-            input_preview_sample_for_path(path.as_deref(), &self.text, &self.preview_sample_text);
+        let sample_text = input_preview_sample_for_path(path.as_deref(), &self.text);
         self.input_preview = InputPreview::load(path, sample_text);
         self.status = "Input preview refreshed".to_owned();
     }
@@ -3814,25 +3797,21 @@ mod tests {
     }
 
     #[test]
-    fn input_preview_sample_override_applies_only_to_fonts() {
+    fn input_preview_sample_uses_engraving_text_for_fonts_only() {
         assert_eq!(
-            input_preview_sample_for_path(Some(Path::new("/tmp/font.cxf")), "Generated", "Custom"),
-            Some("Custom".to_owned())
-        );
-        assert_eq!(
-            input_preview_sample_for_path(Some(Path::new("/tmp/font.ttf")), "Generated", "  "),
+            input_preview_sample_for_path(Some(Path::new("/tmp/font.cxf")), "Generated"),
             Some("Generated".to_owned())
         );
         assert_eq!(
-            input_preview_sample_for_path(
-                Some(Path::new("/tmp/artwork.dxf")),
-                "Generated",
-                "Custom"
-            ),
+            input_preview_sample_for_path(Some(Path::new("/tmp/font.ttf")), "Generated"),
+            Some("Generated".to_owned())
+        );
+        assert_eq!(
+            input_preview_sample_for_path(Some(Path::new("/tmp/artwork.dxf")), "Generated"),
             None
         );
         assert_eq!(
-            input_preview_sample_for_path(Some(Path::new("/tmp/image.png")), "Generated", "Custom"),
+            input_preview_sample_for_path(Some(Path::new("/tmp/image.png")), "Generated"),
             None
         );
     }
@@ -4198,7 +4177,6 @@ mod tests {
             show_grid: false,
             show_cleanup: false,
             viewport_rotation_degrees: 42.5,
-            preview_sample_text: "Sample=A".to_owned(),
             auto_recalculate: true,
             show_input_overlay: false,
         };
@@ -4217,7 +4195,6 @@ mod tests {
         assert!(preferences.show_grid);
         assert!(preferences.show_cleanup);
         assert_eq!(preferences.viewport_rotation_degrees, 0.0);
-        assert!(preferences.preview_sample_text.is_empty());
         assert!(!preferences.auto_recalculate);
         assert!(preferences.show_input_overlay);
     }

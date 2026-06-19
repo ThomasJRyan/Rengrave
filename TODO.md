@@ -1,7 +1,7 @@
 # UI
 - [x] Move the "New", "Open", "Save", and "Save As" buttons to the "File" dropdown menu
 - [x] Change the Workbench options from a drop-down list to a modal that gives you a set of buttons to press to choose which project you want to work on. This modal will be available through File->New. Categorize the buttons by type (image generation, text generation, etc)
-- [ ] Remove the "sample" input from the text workbenches
+- [x] Remove the "sample" input from the text workbenches
 - [ ] The bar at the top of the gcode preview is currently transparent. Let's make it solid instead
     - [ ] The buttons, scrollbars, and inputs in this bar are aligned to the top of the panel. Let's align then to the center instead
 - [ ] Remove the buttons for exporting Cleanup, SVG, DXF, and Export all under the Export section.

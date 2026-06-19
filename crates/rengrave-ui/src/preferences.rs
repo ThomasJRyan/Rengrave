@@ -17,7 +17,6 @@ pub(crate) struct UiPreferences {
     pub(crate) show_grid: bool,
     pub(crate) show_cleanup: bool,
     pub(crate) viewport_rotation_degrees: f64,
-    pub(crate) preview_sample_text: String,
     pub(crate) auto_recalculate: bool,
     pub(crate) show_input_overlay: bool,
 }
@@ -35,7 +34,6 @@ impl Default for UiPreferences {
             show_grid: true,
             show_cleanup: true,
             viewport_rotation_degrees: 0.0,
-            preview_sample_text: String::new(),
             auto_recalculate: false,
             show_input_overlay: true,
         }
@@ -84,7 +82,6 @@ impl UiPreferences {
                         preferences.viewport_rotation_degrees = rotation.clamp(-180.0, 180.0);
                     }
                 }
-                "preview_sample_text" => preferences.preview_sample_text = value,
                 "auto_recalculate" => {
                     preferences.auto_recalculate = value != "0" && value != "false"
                 }
@@ -113,7 +110,6 @@ impl UiPreferences {
                 "viewport_rotation_degrees",
                 viewport_rotation_degrees.as_str(),
             ),
-            ("preview_sample_text", self.preview_sample_text.as_str()),
             (
                 "auto_recalculate",
                 if self.auto_recalculate { "1" } else { "0" },
