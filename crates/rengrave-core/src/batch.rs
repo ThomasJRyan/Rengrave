@@ -5,11 +5,12 @@ use crate::cleanup::{CleanupBit, CleanupOptions, generate_cleanup_points_with_ca
 use crate::dxf::{DxfError, dxf_font_from_str_with_cancel, read_dxf_font_with_cancel};
 use crate::export::{ExportOptions, write_dxf, write_svg_with_circle};
 use crate::external::is_bitmap_input;
-use crate::font::{FontError, read_cxf_with_cancel, read_ttf_with_cancel};
+use crate::font::{Font, FontError, read_cxf_with_cancel, read_ttf_with_cancel};
 use crate::gcode::{
     GcodeOptions, write_cleanup_gcode, write_engrave_gcode, write_engrave_gcode_with_circle,
     write_vcarve_gcode,
 };
+use crate::geometry::Point;
 use crate::layout::{Bounds, EngraveCircle, EngraveSegment, LayoutSettings, layout_text};
 use crate::project::{DocumentError, DocumentRequest, load_document};
 use crate::project::{InputKind, resolve_input_kind};
@@ -231,7 +232,7 @@ pub fn layout_text_outline(
             }
         } else if is_bitmap_input(&path) {
             match vectorize_bitmap_to_dxf_with_cancel(&path, settings, &|| false) {
-                Ok(dxf) => match dxf_font_from_str_with_cancel(&dxf, segarc, &|| false) {
+                Ok(dxf) => match bitmap_font_from_dxf_with_cancel(&dxf, segarc, &|| false) {
                     Ok(font) => font,
                     Err(_) => return Ok(None),
                 },
@@ -414,7 +415,7 @@ fn generate_dxf_engrave_gcode(
     } else if is_bitmap_input(&path) {
         progress(BatchProgress::VectorizingBitmap);
         match vectorize_bitmap_to_dxf_with_cancel(&path, settings, cancel) {
-            Ok(dxf) => match dxf_font_from_str_with_cancel(&dxf, segarc, cancel) {
+            Ok(dxf) => match bitmap_font_from_dxf_with_cancel(&dxf, segarc, cancel) {
                 Ok(font) => font,
                 Err(DxfError::Canceled) => return Err(BatchError::Canceled),
                 Err(err) => {
@@ -452,6 +453,55 @@ fn generate_dxf_engrave_gcode(
         cancel,
         progress,
     )
+}
+
+fn bitmap_font_from_dxf_with_cancel(
+    dxf: &str,
+    segarc: f64,
+    cancel: &dyn Fn() -> bool,
+) -> Result<Font, DxfError> {
+    let mut font = dxf_font_from_str_with_cancel(dxf, segarc, cancel)?;
+    normalize_bitmap_font_to_content_origin(&mut font);
+    Ok(font)
+}
+
+fn normalize_bitmap_font_to_content_origin(font: &mut Font) {
+    let Some(min) = font_min_point(font) else {
+        return;
+    };
+
+    if min.x.abs() <= f64::EPSILON && min.y.abs() <= f64::EPSILON {
+        return;
+    }
+
+    for glyph in font.glyphs.values_mut() {
+        for stroke in &mut glyph.strokes {
+            stroke.start.x -= min.x;
+            stroke.end.x -= min.x;
+            stroke.start.y -= min.y;
+            stroke.end.y -= min.y;
+        }
+    }
+}
+
+fn font_min_point(font: &Font) -> Option<Point> {
+    let mut min: Option<Point> = None;
+
+    for glyph in font.glyphs.values() {
+        for stroke in &glyph.strokes {
+            for point in [stroke.start, stroke.end] {
+                if !point.x.is_finite() || !point.y.is_finite() {
+                    continue;
+                }
+                min = Some(match min {
+                    Some(current) => Point::new(current.x.min(point.x), current.y.min(point.y)),
+                    None => point,
+                });
+            }
+        }
+    }
+
+    min
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1097,6 +1147,56 @@ mod tests {
         assert!(output.gcode.contains("(fengrave_set input_type  image )"));
         assert!(!output.gcode.contains("(Engrave Text:"));
         assert!(output.gcode.contains("G1 X0.0000 Y1.9900"));
+    }
+
+    #[test]
+    fn bitmap_dxf_font_normalizes_residual_trace_offset() {
+        let dxf = "0\nSECTION\n0\nLINE\n10\n100\n20\n50\n11\n120\n21\n80\n0\nENDSEC\n";
+
+        let font = bitmap_font_from_dxf_with_cancel(dxf, 5.0, &|| false).unwrap();
+        let stroke = font.get_char('F').unwrap().strokes[0];
+
+        assert!((stroke.start.x - 0.0).abs() < 1e-9);
+        assert!((stroke.start.y - 0.0).abs() < 1e-9);
+        assert!((stroke.end.x - 20.0).abs() < 1e-9);
+        assert!((stroke.end.y - 30.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn bitmap_layout_uses_trimmed_content_origin() {
+        let path = std::env::temp_dir().join(format!(
+            "rengrave-trimmed-origin-{}-{}.png",
+            std::process::id(),
+            "batch"
+        ));
+        let mut image = image::RgbaImage::from_pixel(48, 24, image::Rgba([255, 255, 255, 255]));
+        for y in 8..18 {
+            for x in 34..42 {
+                image.put_pixel(x, y, image::Rgba([0, 0, 0, 255]));
+            }
+        }
+        image.save(&path).unwrap();
+
+        let outline = layout_text_outline(&BatchRequest {
+            font_or_image: Some(path.clone()),
+            settings_overrides: vec![LegacySetting::new("cut_type", "v-carve", false)],
+            ..BatchRequest::default()
+        })
+        .unwrap()
+        .unwrap();
+
+        let _ = fs::remove_file(path);
+        let bounds = outline.bounds.unwrap();
+        assert!(
+            bounds.min.x.abs() < 1.0e-9,
+            "expected bitmap content min X at origin, got {}",
+            bounds.min.x
+        );
+        assert!(
+            bounds.min.y.abs() < 1.0e-9,
+            "expected bitmap content min Y at origin, got {}",
+            bounds.min.y
+        );
     }
 
     #[test]
