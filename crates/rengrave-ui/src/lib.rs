@@ -21,7 +21,11 @@ use rengrave_core::dxf::read_dxf_font;
 use rengrave_core::external::{PotraceStatus, detect_potrace, is_bitmap_input};
 use rengrave_core::font::{Font, Stroke, read_cxf, read_ttf};
 use rengrave_core::geometry::{Point, ViewTransform};
-use rengrave_core::project::{DocumentRequest, RengraveDocument, load_document};
+use rengrave_core::project::{
+    DocumentRequest, RENGRAVE_PROJECT_FORMAT_VERSION, RengraveDocument, RengraveProjectFile,
+    RengraveProjectOutputs, is_rengrave_project_path, load_document, read_rengrave_project,
+    write_rengrave_project,
+};
 use rengrave_core::settings::{
     DEFAULT_GCODE_POSTAMBLE, DEFAULT_GCODE_PREAMBLE, LegacySetting, LegacySettings,
     default_legacy_settings, get_legacy_bool, legacy_bool_value,
@@ -93,6 +97,7 @@ struct RengraveApp {
     transform: ViewTransform,
     status: String,
     settings_count: usize,
+    project_path: String,
     settings_path: String,
     input_path: String,
     default_dir_path: String,
@@ -201,6 +206,7 @@ impl RengraveApp {
             },
             status,
             settings_count: document.settings.entries.len(),
+            project_path: String::new(),
             settings_path: path_to_text(&gcode_file),
             input_path: path_to_text(&display_input_path),
             default_dir_path: path_to_text(&default_dir),
@@ -335,26 +341,111 @@ impl RengraveApp {
         }
     }
 
-    fn save_current_settings(&mut self) {
-        let Some(path) = path_from_text(&self.settings_path) else {
-            self.status = "Settings path is empty".to_owned();
+    fn current_settings_snapshot(&self) -> Result<(LegacySettings, Vec<String>), String> {
+        let document =
+            load_document(&self.settings_request_for_save()).map_err(|err| err.to_string())?;
+        Ok((document.settings, document.warnings))
+    }
+
+    fn current_project_file(&self) -> Result<(RengraveProjectFile, Vec<String>), String> {
+        let (settings, warnings) = self.current_settings_snapshot()?;
+        Ok((
+            RengraveProjectFile {
+                format_version: RENGRAVE_PROJECT_FORMAT_VERSION,
+                application_version: rengrave_core::RENGRAVE_VERSION.to_owned(),
+                text: self.text.clone(),
+                settings,
+                input_path: path_from_text(&self.input_path),
+                default_dir: path_from_text(&self.default_dir_path),
+                legacy_settings_path: path_from_text(&self.settings_path),
+                workbench: self.tool_view.value().to_owned(),
+                outputs: RengraveProjectOutputs {
+                    gcode_path: path_from_text(&self.gcode_path),
+                    svg_path: path_from_text(&self.svg_path),
+                    dxf_path: path_from_text(&self.dxf_path),
+                },
+            },
+            warnings,
+        ))
+    }
+
+    fn load_project_or_legacy_settings(&mut self, path: PathBuf, ctx: egui::Context) {
+        if is_rengrave_project_path(&path) {
+            self.load_project(path, ctx);
+        } else {
+            self.project_path.clear();
+            self.settings_path = path.display().to_string();
+            self.reload_document(ctx);
+        }
+    }
+
+    fn load_project(&mut self, path: PathBuf, ctx: egui::Context) {
+        match read_rengrave_project(&path) {
+            Ok(project) => {
+                self.apply_project_file(project, path, ctx);
+            }
+            Err(err) => {
+                self.cancel_calculation("Project load failed");
+                self.status = "Project load failed".to_owned();
+                self.warnings = vec![err.to_string()];
+            }
+        }
+    }
+
+    fn apply_project_file(
+        &mut self,
+        project: RengraveProjectFile,
+        path: PathBuf,
+        ctx: egui::Context,
+    ) {
+        self.cancel_calculation("Project loaded");
+        self.project_path = path.display().to_string();
+        self.settings_path = path_to_text(&project.legacy_settings_path);
+        self.input_path = path_to_text(&project.input_path);
+        self.default_dir_path = path_to_text(&project.default_dir);
+        self.gcode_path = path_to_text(&project.outputs.gcode_path);
+        self.svg_path = path_to_text(&project.outputs.svg_path);
+        self.dxf_path = path_to_text(&project.outputs.dxf_path);
+        self.text = project.text;
+        self.controls = UiControls::from_settings(&project.settings);
+        let inferred = ToolView::from_settings_and_path(
+            &project.settings,
+            path_from_text(&self.input_path).as_deref(),
+        );
+        self.tool_view = ToolView::parse(&project.workbench).unwrap_or(inferred);
+        self.controls.cut_type = self.tool_view.cut_type();
+        self.show_toolpath = get_legacy_bool(&project.settings, "show_v_path", true);
+        self.show_bounds = get_legacy_bool(&project.settings, "show_box", true);
+        self.show_axes = get_legacy_bool(&project.settings, "show_axis", true);
+        self.settings_count = project.settings.entries.len();
+        self.warnings.clear();
+        self.status = format!("Project loaded: {}", path.display());
+        self.refresh_input_catalog();
+        self.save_preferences();
+        self.start_calculation(ctx);
+    }
+
+    fn save_current_project(&mut self) {
+        let Some(path) = path_from_text(&self.project_path).map(project_path_with_extension) else {
+            self.status = "Project path is empty".to_owned();
             return;
         };
 
-        match settings_file_contents(&self.settings_request_for_save()) {
-            Ok((contents, warnings)) => match write_text_file(&self.settings_path, &contents) {
-                Ok(_) => {
-                    self.status = format!("Settings saved: {}", path.display());
+        match self.current_project_file() {
+            Ok((project, warnings)) => match write_rengrave_project(&path, &project) {
+                Ok(()) => {
+                    self.project_path = path.display().to_string();
+                    self.status = format!("Project saved: {}", path.display());
                     self.warnings = warnings;
                     self.save_preferences();
                 }
                 Err(err) => {
-                    self.status = "Settings save failed".to_owned();
-                    self.warnings.push(err);
+                    self.status = "Project save failed".to_owned();
+                    self.warnings.push(err.to_string());
                 }
             },
             Err(err) => {
-                self.status = "Settings save failed".to_owned();
+                self.status = "Project save failed".to_owned();
                 self.warnings.push(err);
             }
         }
@@ -375,6 +466,7 @@ impl RengraveApp {
 
     fn start_new_project(&mut self, tool_view: ToolView) {
         self.cancel_calculation("New project");
+        self.project_path.clear();
         self.settings_path.clear();
         self.input_path.clear();
         self.text = RengraveDocument::default().text;
@@ -591,7 +683,7 @@ impl RengraveApp {
 
     fn browser_value(&self, target: FileBrowserTarget) -> &str {
         match target {
-            FileBrowserTarget::Settings | FileBrowserTarget::SettingsOutput => &self.settings_path,
+            FileBrowserTarget::Project | FileBrowserTarget::ProjectOutput => &self.project_path,
             FileBrowserTarget::Input => &self.input_path,
             FileBrowserTarget::DefaultDir => &self.default_dir_path,
             FileBrowserTarget::GcodeOutput => &self.gcode_path,
@@ -606,8 +698,18 @@ impl RengraveApp {
     ) {
         let text = path.display().to_string();
         match target {
-            FileBrowserTarget::Settings | FileBrowserTarget::SettingsOutput => {
-                self.settings_path = text
+            FileBrowserTarget::Project => {
+                if is_rengrave_project_path(&path) {
+                    self.project_path = text;
+                } else {
+                    self.settings_path = text;
+                    self.project_path.clear();
+                }
+            }
+            FileBrowserTarget::ProjectOutput => {
+                self.project_path = project_path_with_extension(path.clone())
+                    .display()
+                    .to_string()
             }
             FileBrowserTarget::Input => {
                 self.input_path = text;
@@ -624,8 +726,8 @@ impl RengraveApp {
         self.save_preferences();
         match selection_followup(target) {
             SelectionFollowup::None => {}
-            SelectionFollowup::LoadDocument => self.reload_document(ctx),
-            SelectionFollowup::SaveSettings => self.save_current_settings(),
+            SelectionFollowup::LoadProject => self.load_project_or_legacy_settings(path, ctx),
+            SelectionFollowup::SaveProject => self.save_current_project(),
             SelectionFollowup::StartCalculation => self.start_calculation(ctx),
         }
     }
@@ -1600,15 +1702,15 @@ impl RengraveApp {
                 }
 
                 if menu_action(ui, "Open", true) {
-                    self.choose_path(FileBrowserTarget::Settings, ui.ctx().clone());
+                    self.choose_path(FileBrowserTarget::Project, ui.ctx().clone());
                 }
 
-                if menu_action(ui, "Save", !self.settings_path.trim().is_empty()) {
-                    self.save_current_settings();
+                if menu_action(ui, "Save", !self.project_path.trim().is_empty()) {
+                    self.save_current_project();
                 }
 
                 if menu_action(ui, "Save As", true) {
-                    self.choose_path(FileBrowserTarget::SettingsOutput, ui.ctx().clone());
+                    self.choose_path(FileBrowserTarget::ProjectOutput, ui.ctx().clone());
                 }
             });
 
@@ -2079,9 +2181,10 @@ fn stale_reason_summary(prefix: &str, reasons: &[&str]) -> String {
 }
 
 fn settings_base_path_for_save(path_text: &str) -> Option<PathBuf> {
-    path_from_text(path_text).filter(|path| path.is_file())
+    path_from_text(path_text).filter(|path| path.is_file() && !is_rengrave_project_path(path))
 }
 
+#[cfg(test)]
 fn settings_file_contents(request: &DocumentRequest) -> Result<(String, Vec<String>), String> {
     let document = load_document(request).map_err(|err| err.to_string())?;
     Ok((document.settings.to_string(), document.warnings))
@@ -2106,6 +2209,14 @@ fn path_to_text(path: &Option<PathBuf>) -> String {
 fn path_from_text(text: &str) -> Option<PathBuf> {
     let trimmed = text.trim();
     (!trimmed.is_empty()).then(|| PathBuf::from(trimmed))
+}
+
+fn project_path_with_extension(path: PathBuf) -> PathBuf {
+    if is_rengrave_project_path(&path) {
+        path
+    } else {
+        path.with_extension(rengrave_core::project::RENGRAVE_PROJECT_EXTENSION)
+    }
 }
 
 fn initial_potrace_status(backend: BitmapBackend) -> PotraceStatus {
@@ -3166,6 +3277,18 @@ mod tests {
     }
 
     #[test]
+    fn project_paths_default_to_rgrv_extension() {
+        assert_eq!(
+            project_path_with_extension(PathBuf::from("/tmp/job")).as_path(),
+            Path::new("/tmp/job.rgrv")
+        );
+        assert_eq!(
+            project_path_with_extension(PathBuf::from("/tmp/job.RGRV")).as_path(),
+            Path::new("/tmp/job.RGRV")
+        );
+    }
+
+    #[test]
     fn native_potrace_startup_does_not_require_sidecar_probe() {
         let status = initial_potrace_status(BitmapBackend::NativePotrace);
 
@@ -3239,6 +3362,12 @@ mod tests {
         assert!(ToolView::ImageVCarve.accepts_kind(InputCatalogKind::Bitmap));
         assert_eq!(ToolView::TextEngrave.category_label(), "Text generation");
         assert_eq!(ToolView::ImageVCarve.category_label(), "Image generation");
+        assert_eq!(ToolView::ImageVCarve.value(), "image-v-carve");
+        assert_eq!(
+            ToolView::parse("image-v-carve"),
+            Some(ToolView::ImageVCarve)
+        );
+        assert_eq!(ToolView::parse("unknown"), None);
         assert_eq!(
             ToolView::TextVCarve.with_input_kind(InputCatalogKind::Bitmap),
             ToolView::ImageVCarve
@@ -3302,7 +3431,7 @@ mod tests {
         );
         assert_eq!(
             browser_start_dir(
-                FileBrowserTarget::Settings,
+                FileBrowserTarget::Project,
                 &file.display().to_string(),
                 None
             ),
@@ -3319,20 +3448,20 @@ mod tests {
             "custom.tap"
         );
         assert_eq!(
-            output_file_name("  ", FileBrowserTarget::SettingsOutput),
-            "rengrave_settings.ngc"
+            output_file_name("  ", FileBrowserTarget::ProjectOutput),
+            "rengrave_project.rgrv"
         );
     }
 
     #[test]
     fn browser_selection_followup_matches_user_workflow() {
         assert_eq!(
-            selection_followup(FileBrowserTarget::Settings),
-            SelectionFollowup::LoadDocument
+            selection_followup(FileBrowserTarget::Project),
+            SelectionFollowup::LoadProject
         );
         assert_eq!(
-            selection_followup(FileBrowserTarget::SettingsOutput),
-            SelectionFollowup::SaveSettings
+            selection_followup(FileBrowserTarget::ProjectOutput),
+            SelectionFollowup::SaveProject
         );
         assert_eq!(
             selection_followup(FileBrowserTarget::Input),

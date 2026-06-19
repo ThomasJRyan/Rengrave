@@ -10,6 +10,7 @@ clipper2.workspace = true
 image.workspace = true
 rayon.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
 ttf-parser.workspace = true
 rengrave-potrace.workspace = true

@@ -94,6 +94,25 @@ impl ToolView {
         }
     }
 
+    pub(crate) fn value(self) -> &'static str {
+        match self {
+            Self::TextEngrave => "text-engrave",
+            Self::ImageEngrave => "image-engrave",
+            Self::TextVCarve => "text-v-carve",
+            Self::ImageVCarve => "image-v-carve",
+        }
+    }
+
+    pub(crate) fn parse(value: &str) -> Option<Self> {
+        match value {
+            "text-engrave" => Some(Self::TextEngrave),
+            "image-engrave" => Some(Self::ImageEngrave),
+            "text-v-carve" => Some(Self::TextVCarve),
+            "image-v-carve" => Some(Self::ImageVCarve),
+            _ => None,
+        }
+    }
+
     pub(crate) fn category_label(self) -> &'static str {
         if self.uses_text() {
             "Text generation"

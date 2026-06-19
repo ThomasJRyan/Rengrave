@@ -3,6 +3,7 @@ use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::RENGRAVE_VERSION;
 use crate::bitmap::BitmapBackend;
 use crate::external::{PotraceStatus, detect_potrace, is_bitmap_input};
 use crate::settings::{LegacySetting, LegacySettings, default_legacy_settings, tcode_settings};
@@ -22,6 +23,87 @@ pub struct RengraveDocument {
     pub text: String,
     pub input_path: Option<PathBuf>,
     pub warnings: Vec<String>,
+}
+
+pub const RENGRAVE_PROJECT_EXTENSION: &str = "rgrv";
+pub const RENGRAVE_PROJECT_FORMAT_VERSION: u32 = 1;
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct RengraveProjectFile {
+    #[serde(default = "current_project_format_version")]
+    pub format_version: u32,
+    #[serde(default = "current_application_version")]
+    pub application_version: String,
+    #[serde(default = "default_project_text")]
+    pub text: String,
+    #[serde(default = "default_legacy_settings")]
+    pub settings: LegacySettings,
+    #[serde(default)]
+    pub input_path: Option<PathBuf>,
+    #[serde(default)]
+    pub default_dir: Option<PathBuf>,
+    #[serde(default)]
+    pub legacy_settings_path: Option<PathBuf>,
+    #[serde(default)]
+    pub workbench: String,
+    #[serde(default)]
+    pub outputs: RengraveProjectOutputs,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct RengraveProjectOutputs {
+    #[serde(default)]
+    pub gcode_path: Option<PathBuf>,
+    #[serde(default)]
+    pub svg_path: Option<PathBuf>,
+    #[serde(default)]
+    pub dxf_path: Option<PathBuf>,
+}
+
+impl Default for RengraveProjectFile {
+    fn default() -> Self {
+        Self {
+            format_version: RENGRAVE_PROJECT_FORMAT_VERSION,
+            application_version: RENGRAVE_VERSION.to_owned(),
+            text: default_project_text(),
+            settings: default_legacy_settings(),
+            input_path: None,
+            default_dir: None,
+            legacy_settings_path: None,
+            workbench: String::new(),
+            outputs: RengraveProjectOutputs::default(),
+        }
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum ProjectFileError {
+    #[error("unable to read R-Engrave project `{path}`: {source}")]
+    Read {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+    #[error("unable to parse R-Engrave project `{path}`: {source}")]
+    Parse {
+        path: PathBuf,
+        source: serde_json::Error,
+    },
+    #[error(
+        "unsupported R-Engrave project version {version}; this build supports up to {supported}"
+    )]
+    UnsupportedVersion { version: u32, supported: u32 },
+    #[error("unable to serialize R-Engrave project: {source}")]
+    Serialize { source: serde_json::Error },
+    #[error("unable to create R-Engrave project directory `{path}`: {source}")]
+    CreateParent {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+    #[error("unable to write R-Engrave project `{path}`: {source}")]
+    Write {
+        path: PathBuf,
+        source: std::io::Error,
+    },
 }
 
 impl Default for RengraveDocument {
@@ -54,6 +136,71 @@ pub enum InputKind {
     TtfFont(PathBuf),
     Image(PathBuf),
     Missing,
+}
+
+pub fn is_rengrave_project_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case(RENGRAVE_PROJECT_EXTENSION))
+}
+
+pub fn read_rengrave_project(path: &Path) -> Result<RengraveProjectFile, ProjectFileError> {
+    let input = fs::read_to_string(path).map_err(|source| ProjectFileError::Read {
+        path: path.to_owned(),
+        source,
+    })?;
+    let project: RengraveProjectFile =
+        serde_json::from_str(&input).map_err(|source| ProjectFileError::Parse {
+            path: path.to_owned(),
+            source,
+        })?;
+    validate_project_version(project.format_version)?;
+    Ok(project)
+}
+
+pub fn write_rengrave_project(
+    path: &Path,
+    project: &RengraveProjectFile,
+) -> Result<(), ProjectFileError> {
+    validate_project_version(project.format_version)?;
+    let contents = serde_json::to_string_pretty(project)
+        .map_err(|source| ProjectFileError::Serialize { source })?;
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        fs::create_dir_all(parent).map_err(|source| ProjectFileError::CreateParent {
+            path: parent.to_owned(),
+            source,
+        })?;
+    }
+    fs::write(path, contents).map_err(|source| ProjectFileError::Write {
+        path: path.to_owned(),
+        source,
+    })
+}
+
+fn validate_project_version(version: u32) -> Result<(), ProjectFileError> {
+    if version <= RENGRAVE_PROJECT_FORMAT_VERSION {
+        Ok(())
+    } else {
+        Err(ProjectFileError::UnsupportedVersion {
+            version,
+            supported: RENGRAVE_PROJECT_FORMAT_VERSION,
+        })
+    }
+}
+
+fn current_project_format_version() -> u32 {
+    RENGRAVE_PROJECT_FORMAT_VERSION
+}
+
+fn current_application_version() -> String {
+    RENGRAVE_VERSION.to_owned()
+}
+
+fn default_project_text() -> String {
+    "R-Engrave".to_owned()
 }
 
 pub fn resolve_input_kind(settings: &LegacySettings) -> InputKind {
@@ -507,5 +654,75 @@ mod tests {
             resolve_input_kind(&settings),
             InputKind::CxfFont(PathBuf::from("/tmp/fonts/romanc.cxf"))
         );
+    }
+
+    #[test]
+    fn rengrave_project_file_round_trips_versioned_json() {
+        let dir = std::env::temp_dir().join(format!(
+            "rengrave-project-round-trip-{}",
+            std::process::id()
+        ));
+        let path = dir.join("job.rgrv");
+        let mut settings = default_legacy_settings();
+        settings.set_or_push("units", "mm", false);
+        let project = RengraveProjectFile {
+            format_version: RENGRAVE_PROJECT_FORMAT_VERSION,
+            application_version: "test".to_owned(),
+            text: "Saved text".to_owned(),
+            settings,
+            input_path: Some(PathBuf::from("/tmp/input.ttf")),
+            default_dir: Some(PathBuf::from("/tmp")),
+            legacy_settings_path: Some(PathBuf::from("/tmp/legacy.ngc")),
+            workbench: "text-v-carve".to_owned(),
+            outputs: RengraveProjectOutputs {
+                gcode_path: Some(PathBuf::from("/tmp/out.ngc")),
+                svg_path: Some(PathBuf::from("/tmp/out.svg")),
+                dxf_path: Some(PathBuf::from("/tmp/out.dxf")),
+            },
+        };
+
+        write_rengrave_project(&path, &project).unwrap();
+        let loaded = read_rengrave_project(&path).unwrap();
+
+        let _ = fs::remove_dir_all(dir);
+        assert_eq!(loaded, project);
+        assert!(is_rengrave_project_path(Path::new("job.RGRV")));
+        assert!(!is_rengrave_project_path(Path::new("job.ngc")));
+    }
+
+    #[test]
+    fn rengrave_project_file_loads_minimal_older_shape_with_defaults() {
+        let dir = std::env::temp_dir().join(format!("rengrave-project-old-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("old.rgrv");
+        fs::write(&path, r#"{"text":"Old project","settings":{"entries":[]}}"#).unwrap();
+
+        let loaded = read_rengrave_project(&path).unwrap();
+
+        let _ = fs::remove_dir_all(dir);
+        assert_eq!(loaded.format_version, RENGRAVE_PROJECT_FORMAT_VERSION);
+        assert_eq!(loaded.text, "Old project");
+        assert_eq!(loaded.application_version, RENGRAVE_VERSION);
+        assert_eq!(loaded.outputs, RengraveProjectOutputs::default());
+    }
+
+    #[test]
+    fn rengrave_project_file_rejects_future_versions() {
+        let dir =
+            std::env::temp_dir().join(format!("rengrave-project-future-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("future.rgrv");
+        fs::write(&path, r#"{"format_version":999,"settings":{"entries":[]}}"#).unwrap();
+
+        let err = read_rengrave_project(&path).unwrap_err();
+
+        let _ = fs::remove_dir_all(dir);
+        assert!(matches!(
+            err,
+            ProjectFileError::UnsupportedVersion {
+                version: 999,
+                supported: RENGRAVE_PROJECT_FORMAT_VERSION
+            }
+        ));
     }
 }

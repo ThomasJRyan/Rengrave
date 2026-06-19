@@ -6,8 +6,8 @@ use super::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FileBrowserTarget {
-    Settings,
-    SettingsOutput,
+    Project,
+    ProjectOutput,
     Input,
     DefaultDir,
     GcodeOutput,
@@ -16,8 +16,8 @@ pub(crate) enum FileBrowserTarget {
 impl FileBrowserTarget {
     pub(crate) fn label(self) -> &'static str {
         match self {
-            Self::Settings => "settings",
-            Self::SettingsOutput => "settings output",
+            Self::Project => "project",
+            Self::ProjectOutput => "project output",
             Self::Input => "input",
             Self::DefaultDir => "default directory",
             Self::GcodeOutput => "G-code output",
@@ -26,8 +26,8 @@ impl FileBrowserTarget {
 
     pub(crate) fn dialog_title(self) -> &'static str {
         match self {
-            Self::Settings => "Open Settings",
-            Self::SettingsOutput => "Save Settings As",
+            Self::Project => "Open Project",
+            Self::ProjectOutput => "Save Project As",
             Self::Input => "Open Input",
             Self::DefaultDir => "Choose Default Directory",
             Self::GcodeOutput => "Choose G-code Output",
@@ -36,7 +36,7 @@ impl FileBrowserTarget {
 
     pub(crate) fn default_file_name(self) -> Option<&'static str> {
         match self {
-            Self::SettingsOutput => Some("rengrave_settings.ngc"),
+            Self::ProjectOutput => Some("rengrave_project.rgrv"),
             Self::GcodeOutput => Some("rengrave_output.ngc"),
             _ => None,
         }
@@ -45,9 +45,9 @@ impl FileBrowserTarget {
     pub(crate) fn can_select(self, path: &Path) -> bool {
         match self {
             Self::DefaultDir => path.is_dir(),
-            Self::Settings => path.is_file(),
+            Self::Project => path.is_file(),
             Self::Input => path.is_file() || path.is_dir(),
-            Self::SettingsOutput | Self::GcodeOutput => !path.is_dir(),
+            Self::ProjectOutput | Self::GcodeOutput => !path.is_dir(),
         }
     }
 }
@@ -55,15 +55,15 @@ impl FileBrowserTarget {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SelectionFollowup {
     None,
-    LoadDocument,
-    SaveSettings,
+    LoadProject,
+    SaveProject,
     StartCalculation,
 }
 
 pub(crate) fn selection_followup(target: FileBrowserTarget) -> SelectionFollowup {
     match target {
-        FileBrowserTarget::Settings => SelectionFollowup::LoadDocument,
-        FileBrowserTarget::SettingsOutput => SelectionFollowup::SaveSettings,
+        FileBrowserTarget::Project => SelectionFollowup::LoadProject,
+        FileBrowserTarget::ProjectOutput => SelectionFollowup::SaveProject,
         FileBrowserTarget::Input => SelectionFollowup::StartCalculation,
         FileBrowserTarget::DefaultDir | FileBrowserTarget::GcodeOutput => SelectionFollowup::None,
     }
@@ -284,13 +284,14 @@ pub(crate) fn choose_native_path(
 
     match target {
         FileBrowserTarget::DefaultDir => dialog.pick_folder(),
-        FileBrowserTarget::Settings => dialog
+        FileBrowserTarget::Project => dialog
+            .add_filter("R-Engrave project", &["rgrv"])
             .add_filter("F-Engrave settings", &["ngc", "nc", "tap"])
             .add_filter("All files", &["*"])
             .pick_file(),
-        FileBrowserTarget::SettingsOutput => dialog
+        FileBrowserTarget::ProjectOutput => dialog
             .set_file_name(output_file_name(current_value, target))
-            .add_filter("F-Engrave settings", &["ngc", "nc", "tap"])
+            .add_filter("R-Engrave project", &["rgrv"])
             .save_file(),
         FileBrowserTarget::Input => dialog
             .add_filter(input_filter.label(), input_filter.extensions())
