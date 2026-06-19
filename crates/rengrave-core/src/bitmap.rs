@@ -5,7 +5,7 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use image::DynamicImage;
+use image::{DynamicImage, RgbaImage};
 use rengrave_potrace::{Bitmap, Options as NativePotraceOptions, TurnPolicy};
 
 use crate::settings::{LegacySettings, get_legacy_bool};
@@ -147,17 +147,11 @@ fn vectorize_bitmap_with_potrace_sidecar_to_dxf(
 ) -> Result<String, BitmapError> {
     check_canceled(cancel)?;
     let options = PotraceOptions::from_settings(settings);
-    let temp_path = if needs_image_conversion(path) {
-        Some(write_temp_pbm(path, cancel)?)
-    } else {
-        None
-    };
-    let input = temp_path.as_deref().unwrap_or(path);
+    let temp_path = write_temp_pbm(path, cancel)?;
+    let input = temp_path.as_path();
     let output = run_potrace(input, &options, cancel);
 
-    if let Some(path) = temp_path {
-        let _ = std::fs::remove_file(path);
-    }
+    let _ = std::fs::remove_file(temp_path);
 
     output
 }
@@ -261,14 +255,22 @@ fn image_to_pbm_bytes_with_cancel(
     cancel: &dyn Fn() -> bool,
 ) -> Result<Vec<u8>, BitmapError> {
     let rgba = image.to_rgba8();
-    let (width, height) = rgba.dimensions();
+    let bounds = trace_content_bounds(&rgba, cancel)?;
+    let (width, height) = bounds
+        .map(|bounds| (bounds.width(), bounds.height()))
+        .unwrap_or((1, 1));
     let mut output = format!("P4\n{width} {height}\n").into_bytes();
 
-    for y in 0..height {
+    let Some(bounds) = bounds else {
+        output.push(0);
+        return Ok(output);
+    };
+
+    for y in bounds.min_y..=bounds.max_y {
         check_canceled(cancel)?;
         let mut byte = 0u8;
         let mut bit = 0;
-        for x in 0..width {
+        for x in bounds.min_x..=bounds.max_x {
             let pixel = rgba.get_pixel(x, y).0;
             if bitmap_pixel_is_black(pixel) {
                 byte |= 0x80 >> bit;
@@ -293,12 +295,21 @@ fn image_to_native_potrace_bitmap(
     cancel: &dyn Fn() -> bool,
 ) -> Result<Bitmap, BitmapError> {
     let rgba = image.to_rgba8();
-    let (width, height) = rgba.dimensions();
+    let bounds = trace_content_bounds(&rgba, cancel)?;
+    let (width, height) = bounds
+        .map(|bounds| (bounds.width(), bounds.height()))
+        .unwrap_or((1, 1));
     let mut bits = Vec::with_capacity((width * height) as usize);
 
-    for y in (0..height).rev() {
+    let Some(bounds) = bounds else {
+        bits.push(false);
+        return Bitmap::from_bits(1, 1, bits)
+            .map_err(|source| BitmapError::NativePotraceFailed { source });
+    };
+
+    for y in (bounds.min_y..=bounds.max_y).rev() {
         check_canceled(cancel)?;
-        for x in 0..width {
+        for x in bounds.min_x..=bounds.max_x {
             let pixel = rgba.get_pixel(x, y).0;
             bits.push(bitmap_pixel_is_black(pixel));
         }
@@ -306,6 +317,57 @@ fn image_to_native_potrace_bitmap(
 
     Bitmap::from_bits(width as i32, height as i32, bits)
         .map_err(|source| BitmapError::NativePotraceFailed { source })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TraceContentBounds {
+    min_x: u32,
+    min_y: u32,
+    max_x: u32,
+    max_y: u32,
+}
+
+impl TraceContentBounds {
+    fn width(self) -> u32 {
+        self.max_x - self.min_x + 1
+    }
+
+    fn height(self) -> u32 {
+        self.max_y - self.min_y + 1
+    }
+}
+
+fn trace_content_bounds(
+    rgba: &RgbaImage,
+    cancel: &dyn Fn() -> bool,
+) -> Result<Option<TraceContentBounds>, BitmapError> {
+    let (width, height) = rgba.dimensions();
+    let mut bounds: Option<TraceContentBounds> = None;
+
+    for y in 0..height {
+        check_canceled(cancel)?;
+        for x in 0..width {
+            if !bitmap_pixel_is_black(rgba.get_pixel(x, y).0) {
+                continue;
+            }
+
+            if let Some(bounds) = &mut bounds {
+                bounds.min_x = bounds.min_x.min(x);
+                bounds.min_y = bounds.min_y.min(y);
+                bounds.max_x = bounds.max_x.max(x);
+                bounds.max_y = bounds.max_y.max(y);
+            } else {
+                bounds = Some(TraceContentBounds {
+                    min_x: x,
+                    min_y: y,
+                    max_x: x,
+                    max_y: y,
+                });
+            }
+        }
+    }
+
+    Ok(bounds)
 }
 
 fn bitmap_pixel_is_black(pixel: [u8; 4]) -> bool {
@@ -327,16 +389,6 @@ fn check_canceled(cancel: &dyn Fn() -> bool) -> Result<(), BitmapError> {
 
 fn composite_over_white(channel: u32, alpha: u32) -> u32 {
     (channel * alpha + 255 * (255 - alpha)) / 255
-}
-
-fn needs_image_conversion(path: &Path) -> bool {
-    matches!(
-        path.extension()
-            .and_then(|ext| ext.to_str())
-            .map(str::to_ascii_lowercase)
-            .as_deref(),
-        Some("gif" | "jpg" | "jpeg" | "png" | "tif" | "tiff")
-    )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -458,19 +510,43 @@ mod tests {
     }
 
     #[test]
-    fn bitmap_conversion_writes_packed_pbm_bits() {
-        let mut image = RgbaImage::new(10, 1);
-        for x in 0..10 {
-            let value = if x < 3 { 0 } else { 255 };
+    fn bitmap_conversion_trims_white_border_and_writes_packed_pbm_bits() {
+        let mut image = RgbaImage::from_pixel(10, 3, Rgba([255, 255, 255, 255]));
+        for x in 2..5 {
+            let value = if x < 4 { 0 } else { 255 };
             image.put_pixel(x, 0, Rgba([value, value, value, 255]));
         }
+        image.put_pixel(2, 1, Rgba([0, 0, 0, 255]));
 
         let bytes =
             image_to_pbm_bytes_with_cancel(DynamicImage::ImageRgba8(image), &|| false).unwrap();
 
-        assert_eq!(&bytes[..8], b"P4\n10 1\n");
-        assert_eq!(bytes[8], 0b1110_0000);
-        assert_eq!(bytes[9], 0);
+        assert_eq!(&bytes[..7], b"P4\n2 2\n");
+        assert_eq!(bytes[7], 0b1100_0000);
+        assert_eq!(bytes[8], 0b1000_0000);
+    }
+
+    #[test]
+    fn fully_white_bitmap_converts_to_minimal_empty_pbm() {
+        let image = RgbaImage::from_pixel(4, 3, Rgba([255, 255, 255, 255]));
+
+        let bytes =
+            image_to_pbm_bytes_with_cancel(DynamicImage::ImageRgba8(image), &|| false).unwrap();
+
+        assert_eq!(&bytes, b"P4\n1 1\n\0");
+    }
+
+    #[test]
+    fn native_potrace_bitmap_trims_to_content_bounds() {
+        let mut image = RgbaImage::from_pixel(6, 5, Rgba([255, 255, 255, 255]));
+        image.put_pixel(2, 1, Rgba([0, 0, 0, 255]));
+        image.put_pixel(4, 3, Rgba([0, 0, 0, 255]));
+
+        let bitmap =
+            image_to_native_potrace_bitmap(DynamicImage::ImageRgba8(image), &|| false).unwrap();
+
+        assert_eq!(bitmap.width(), 3);
+        assert_eq!(bitmap.height(), 3);
     }
 
     #[test]
@@ -509,7 +585,6 @@ mod tests {
 
         assert_eq!(&bytes[..7], b"P4\n1 1\n");
         assert_eq!(bytes[7], 0b1000_0000);
-        assert!(needs_image_conversion(Path::new("input.gif")));
     }
 
     #[test]

@@ -493,7 +493,7 @@ mod tests {
         .unwrap();
 
         let _ = fs::remove_file(path);
-        assert_eq!(document.text, "F-Engrave");
+        assert_eq!(document.text, "R-Engrave");
         assert_eq!(document.warnings.len(), 1);
     }
 
