@@ -1703,35 +1703,9 @@ impl RengraveApp {
             );
             summary_separator(ui);
             summary_label(ui, output_state, output_state_color(output_state));
-            summary_separator(ui);
-            summary_label(
-                ui,
-                &artifact_summary(
-                    &self.gcode,
-                    self.svg.as_deref(),
-                    self.dxf.as_deref(),
-                    self.secondary_gcode.len(),
-                ),
-                egui::Color32::from_rgb(214, 220, 224),
-            );
             if let Some(warnings) = warning_count_summary(&self.warnings) {
                 summary_separator(ui);
                 summary_label(ui, &warnings, egui::Color32::from_rgb(225, 176, 84));
-            }
-            if let Some(vectorizer) = bitmap_vectorizer_summary(
-                input_path_is_bitmap(&self.input_path),
-                self.controls.bitmap_backend,
-                self.potrace_status.available,
-            ) {
-                summary_separator(ui);
-                let color = match self.controls.bitmap_backend {
-                    BitmapBackend::NativePotrace => egui::Color32::from_rgb(94, 176, 132),
-                    BitmapBackend::PotraceSidecar if self.potrace_status.available => {
-                        egui::Color32::from_rgb(94, 176, 132)
-                    }
-                    BitmapBackend::PotraceSidecar => egui::Color32::from_rgb(225, 176, 84),
-                };
-                summary_label(ui, vectorizer, color);
             }
         });
     }
@@ -2219,62 +2193,11 @@ fn output_state_color(output_state: &str) -> egui::Color32 {
     }
 }
 
-fn artifact_summary(
-    gcode: &str,
-    svg: Option<&str>,
-    dxf: Option<&str>,
-    cleanup_count: usize,
-) -> String {
-    let mut artifacts = Vec::new();
-    if !gcode.trim().is_empty() {
-        artifacts.push("G-code".to_owned());
-    }
-    if svg
-        .map(|payload| !payload.trim().is_empty())
-        .unwrap_or(false)
-    {
-        artifacts.push("SVG".to_owned());
-    }
-    if dxf
-        .map(|payload| !payload.trim().is_empty())
-        .unwrap_or(false)
-    {
-        artifacts.push("DXF".to_owned());
-    }
-    if cleanup_count > 0 {
-        artifacts.push(format!("cleanup x{cleanup_count}"));
-    }
-
-    if artifacts.is_empty() {
-        "Artifacts: none".to_owned()
-    } else {
-        format!("Artifacts: {}", artifacts.join(", "))
-    }
-}
-
 fn warning_count_summary(warnings: &[String]) -> Option<String> {
     match warnings.len() {
         0 => None,
         1 => Some("Warnings: 1".to_owned()),
         count => Some(format!("Warnings: {count}")),
-    }
-}
-
-fn bitmap_vectorizer_summary(
-    is_bitmap: bool,
-    backend: BitmapBackend,
-    potrace_available: bool,
-) -> Option<&'static str> {
-    if !is_bitmap {
-        return None;
-    }
-
-    match backend {
-        BitmapBackend::NativePotrace => Some("Vectorizer: Native Potrace"),
-        BitmapBackend::PotraceSidecar if potrace_available => {
-            Some("Vectorizer: Potrace sidecar ready")
-        }
-        BitmapBackend::PotraceSidecar => Some("Vectorizer: Potrace sidecar missing"),
     }
 }
 
@@ -3349,32 +3272,15 @@ mod tests {
     }
 
     #[test]
-    fn artifact_and_runtime_summaries_track_export_readiness() {
-        assert_eq!(
-            artifact_summary("G90\n", Some("<svg/>"), Some("0\nEOF\n"), 2),
-            "Artifacts: G-code, SVG, DXF, cleanup x2"
-        );
-        assert_eq!(artifact_summary(" ", Some(""), None, 0), "Artifacts: none");
+    fn warning_summary_tracks_visible_warning_count() {
         assert_eq!(warning_count_summary(&[]), None);
         assert_eq!(
             warning_count_summary(&["missing potrace".to_owned()]),
             Some("Warnings: 1".to_owned())
         );
         assert_eq!(
-            bitmap_vectorizer_summary(false, BitmapBackend::NativePotrace, false),
-            None
-        );
-        assert_eq!(
-            bitmap_vectorizer_summary(true, BitmapBackend::NativePotrace, false),
-            Some("Vectorizer: Native Potrace")
-        );
-        assert_eq!(
-            bitmap_vectorizer_summary(true, BitmapBackend::PotraceSidecar, false),
-            Some("Vectorizer: Potrace sidecar missing")
-        );
-        assert_eq!(
-            bitmap_vectorizer_summary(true, BitmapBackend::PotraceSidecar, true),
-            Some("Vectorizer: Potrace sidecar ready")
+            warning_count_summary(&["one".to_owned(), "two".to_owned()]),
+            Some("Warnings: 2".to_owned())
         );
     }
 

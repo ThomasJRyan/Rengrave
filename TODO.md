@@ -9,7 +9,7 @@
 - [x] Create an SVG of the letter R in a square box, make it green, and replace the "R-Engrave CNC G-code generator" title at the top left with it.
 - [x] Under the File dropdown in the menu there are a number of options to choode from. Remove them all except for the aformentioned New, Open, Save and Save As.
 - [x] Under the Run dropdown in the menu remove the "Refresh Potrace" option
-- [ ] In the status bar, remove the Artifacts and Vectorizer statuses
+- [x] In the status bar, remove the Artifacts and Vectorizer statuses
 
 # Functionality
 - [ ] Add the ability to save a project to a .rgrv file and be able to open it up again later. The format can be JSON under the hood if that is easiest. It should be able to be versioned and allow us to open older versions in newer versions of Rengrave.
