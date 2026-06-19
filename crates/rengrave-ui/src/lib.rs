@@ -1601,40 +1601,46 @@ impl RengraveApp {
     }
 
     fn show_bottom_panel_contents(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            ui.selectable_value(&mut self.bottom_tab, BottomTab::Status, "Status");
-            ui.selectable_value(&mut self.bottom_tab, BottomTab::Gcode, "G-code");
-            ui.selectable_value(&mut self.bottom_tab, BottomTab::Cleanup, "Cleanup");
-            ui.selectable_value(&mut self.bottom_tab, BottomTab::Svg, "SVG");
-            ui.selectable_value(&mut self.bottom_tab, BottomTab::Dxf, "DXF");
-            ui.separator();
-            ui.monospace(&self.status);
-            if let Some(stale_summary) = self.output_stale_summary() {
-                ui.separator();
-                ui.colored_label(egui::Color32::from_rgb(225, 176, 84), stale_summary);
-                if self.stale_recalculate_available() && ui.button("Recalculate").clicked() {
-                    self.start_calculation(ui.ctx().clone());
-                }
-            }
-            ui.separator();
-            if ui
-                .add_enabled(
-                    self.current_bottom_tab_payload().is_some(),
-                    egui::Button::new("Copy tab"),
-                )
-                .clicked()
-            {
-                self.copy_current_bottom_tab(ui.ctx());
-            }
-            ui.separator();
-            ui.monospace(format!(
-                "{} lines, {} cut moves, {} rapid moves, {} cleanup moves",
-                self.gcode_lines,
-                self.preview_segments.len(),
-                self.preview_rapids.len(),
-                self.preview_cleanup_segments.len()
-            ));
-        });
+        egui::Frame::new()
+            .fill(ui.visuals().panel_fill)
+            .inner_margin(egui::Margin::symmetric(6, 4))
+            .show(ui, |ui| {
+                ui.horizontal_centered(|ui| {
+                    ui.selectable_value(&mut self.bottom_tab, BottomTab::Status, "Status");
+                    ui.selectable_value(&mut self.bottom_tab, BottomTab::Gcode, "G-code");
+                    ui.selectable_value(&mut self.bottom_tab, BottomTab::Cleanup, "Cleanup");
+                    ui.selectable_value(&mut self.bottom_tab, BottomTab::Svg, "SVG");
+                    ui.selectable_value(&mut self.bottom_tab, BottomTab::Dxf, "DXF");
+                    ui.separator();
+                    ui.monospace(&self.status);
+                    if let Some(stale_summary) = self.output_stale_summary() {
+                        ui.separator();
+                        ui.colored_label(egui::Color32::from_rgb(225, 176, 84), stale_summary);
+                        if self.stale_recalculate_available() && ui.button("Recalculate").clicked()
+                        {
+                            self.start_calculation(ui.ctx().clone());
+                        }
+                    }
+                    ui.separator();
+                    if ui
+                        .add_enabled(
+                            self.current_bottom_tab_payload().is_some(),
+                            egui::Button::new("Copy tab"),
+                        )
+                        .clicked()
+                    {
+                        self.copy_current_bottom_tab(ui.ctx());
+                    }
+                    ui.separator();
+                    ui.monospace(format!(
+                        "{} lines, {} cut moves, {} rapid moves, {} cleanup moves",
+                        self.gcode_lines,
+                        self.preview_segments.len(),
+                        self.preview_rapids.len(),
+                        self.preview_cleanup_segments.len()
+                    ));
+                });
+            });
         ui.separator();
         match self.bottom_tab {
             BottomTab::Status => draw_status_log(ui, &self.warnings),
