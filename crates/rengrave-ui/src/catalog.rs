@@ -224,10 +224,10 @@ pub(crate) struct CatalogFontRegistry {
 }
 
 impl CatalogFontRegistry {
-    pub(crate) fn refresh(&mut self, ctx: &egui::Context, entries: &[InputCatalogEntry]) {
+    pub(crate) fn refresh(&mut self, ctx: &egui::Context, entries: &[InputCatalogEntry]) -> bool {
         let signature = catalog_ttf_font_paths(entries, CATALOG_FONT_RENDER_LIMIT);
         if signature == self.signature {
-            return;
+            return false;
         }
 
         let mut definitions = egui::FontDefinitions::default();
@@ -253,6 +253,7 @@ impl CatalogFontRegistry {
         ctx.set_fonts(definitions);
         self.signature = signature;
         self.families_by_path = families_by_path;
+        true
     }
 
     pub(crate) fn family_for_path(&self, path: &Path) -> Option<egui::FontFamily> {

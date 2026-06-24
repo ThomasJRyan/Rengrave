@@ -54,7 +54,6 @@ pub(crate) use widgets::*;
 const DEFAULT_PREVIEW_ZOOM: f64 = 80.0;
 const MM_PER_INCH: f64 = 25.4;
 const PREVIEW_FIT_PADDING: f32 = 24.0;
-const OUTPUT_PREVIEW_CHARS: usize = 8000;
 const INPUT_PREVIEW_VECTOR_HEIGHT: f32 = 180.0;
 const INPUT_PREVIEW_THUMBNAIL_WIDTH: u32 = 300;
 const INPUT_PREVIEW_THUMBNAIL_HEIGHT: u32 = 180;
@@ -64,7 +63,7 @@ const AUTO_RECALC_DEBOUNCE: Duration = Duration::from_millis(400);
 const TOOLBAR_HEIGHT: f32 = 104.0;
 const INPUT_PANEL_WIDTH: f32 = 380.0;
 const RIGHT_PANEL_WIDTH: f32 = 320.0;
-const STATUS_PANEL_HEIGHT: f32 = 150.0;
+const STATUS_PANEL_HEIGHT: f32 = 28.0;
 const STATUS_STRIP_HEIGHT: f32 = 26.0;
 const FORM_CONTROL_WIDTH: f32 = 170.0;
 const PATH_CONTROL_WIDTH: f32 = 244.0;
@@ -141,7 +140,6 @@ struct RengraveApp {
     auto_recalculate: bool,
     auto_recalc_signature: Option<BatchRequest>,
     auto_recalc_changed_at: Option<Instant>,
-    bottom_tab: BottomTab,
     #[cfg(debug_assertions)]
     debug_layout_overlay: bool,
 }
@@ -263,7 +261,6 @@ impl RengraveApp {
             auto_recalculate: preferences.auto_recalculate,
             auto_recalc_signature: None,
             auto_recalc_changed_at: None,
-            bottom_tab: BottomTab::Status,
             #[cfg(debug_assertions)]
             debug_layout_overlay: false,
         };
@@ -858,7 +855,10 @@ impl RengraveApp {
             return;
         }
 
-        self.catalog_font_registry.refresh(ui.ctx(), &filtered);
+        let catalog_fonts_changed = self.catalog_font_registry.refresh(ui.ctx(), &filtered);
+        if catalog_fonts_changed {
+            ui.ctx().request_repaint();
+        }
         let total = filtered.len();
         let shown = total.min(CATALOG_DISPLAY_LIMIT);
         let selected_input = path_from_text(&self.input_path);
@@ -875,7 +875,10 @@ impl RengraveApp {
                         format_bytes(entry.size_bytes)
                     );
                     let mut label = egui::RichText::new(label);
-                    if let Some(family) = self.catalog_font_registry.family_for_path(&entry.path) {
+                    if !catalog_fonts_changed
+                        && let Some(family) =
+                            self.catalog_font_registry.family_for_path(&entry.path)
+                    {
                         label = label.font(egui::FontId::new(13.0, family));
                     }
                     if ui.selectable_label(selected, label).clicked() {
@@ -1451,8 +1454,8 @@ impl eframe::App for RengraveApp {
             .rect;
 
         let bottom_rect = egui::Panel::bottom("status_log")
-            .resizable(true)
-            .default_size(STATUS_PANEL_HEIGHT)
+            .resizable(false)
+            .exact_size(STATUS_PANEL_HEIGHT)
             .show_inside(ui, |ui| {
                 self.show_bottom_panel_contents(ui);
             })
@@ -1534,16 +1537,16 @@ impl RengraveApp {
     fn show_bottom_panel_contents(&mut self, ui: &mut egui::Ui) {
         egui::Frame::new()
             .fill(ui.visuals().panel_fill)
-            .inner_margin(egui::Margin::symmetric(6, 4))
+            .inner_margin(egui::Margin::symmetric(8, 4))
             .show(ui, |ui| {
-                ui.horizontal_centered(|ui| {
-                    ui.selectable_value(&mut self.bottom_tab, BottomTab::Status, "Status");
-                    ui.selectable_value(&mut self.bottom_tab, BottomTab::Gcode, "G-code");
-                    ui.selectable_value(&mut self.bottom_tab, BottomTab::Cleanup, "Cleanup");
-                    ui.selectable_value(&mut self.bottom_tab, BottomTab::Svg, "SVG");
-                    ui.selectable_value(&mut self.bottom_tab, BottomTab::Dxf, "DXF");
-                    ui.separator();
-                    ui.monospace(&self.status);
+                ui.horizontal(|ui| {
+                    ui.monospace(generated_gcode_summary(
+                        self.gcode_lines,
+                        self.preview_segments.len(),
+                        self.preview_rapids.len(),
+                        self.preview_cleanup_segments.len(),
+                        self.gcode_arc_count,
+                    ));
                     if let Some(stale_summary) = self.output_stale_summary() {
                         ui.separator();
                         ui.colored_label(egui::Color32::from_rgb(225, 176, 84), stale_summary);
@@ -1552,37 +1555,8 @@ impl RengraveApp {
                             self.start_calculation(ui.ctx().clone());
                         }
                     }
-                    ui.separator();
-                    if ui
-                        .add_enabled(
-                            self.current_bottom_tab_payload().is_some(),
-                            egui::Button::new("Copy tab"),
-                        )
-                        .clicked()
-                    {
-                        self.copy_current_bottom_tab(ui.ctx());
-                    }
-                    ui.separator();
-                    ui.monospace(format!(
-                        "{} lines, {} cut moves, {} rapid moves, {} cleanup moves",
-                        self.gcode_lines,
-                        self.preview_segments.len(),
-                        self.preview_rapids.len(),
-                        self.preview_cleanup_segments.len()
-                    ));
                 });
             });
-        ui.separator();
-        match self.bottom_tab {
-            BottomTab::Status => draw_status_log(ui, &self.warnings),
-            BottomTab::Gcode => draw_output_preview(ui, Some(&self.gcode), "No G-code generated"),
-            BottomTab::Cleanup => {
-                let preview = secondary_output_preview_text(&self.secondary_gcode);
-                draw_output_preview(ui, preview.as_deref(), "No cleanup G-code generated")
-            }
-            BottomTab::Svg => draw_output_preview(ui, self.svg.as_deref(), "No SVG generated"),
-            BottomTab::Dxf => draw_output_preview(ui, self.dxf.as_deref(), "No DXF generated"),
-        }
     }
 
     fn show_preview_panel(&mut self, ui: &mut egui::Ui, rect: egui::Rect) {
@@ -1923,23 +1897,6 @@ impl RengraveApp {
         self.copy_text_payload(ctx, "G-code", self.gcode.clone());
     }
 
-    fn copy_current_bottom_tab(&mut self, ctx: &egui::Context) {
-        if let Some((label, payload)) = self.current_bottom_tab_payload() {
-            self.copy_text_payload(ctx, label, payload);
-        }
-    }
-
-    fn current_bottom_tab_payload(&self) -> Option<(&'static str, String)> {
-        bottom_tab_copy_payload(
-            self.bottom_tab,
-            &self.warnings,
-            &self.gcode,
-            &self.secondary_gcode,
-            self.svg.as_deref(),
-            self.dxf.as_deref(),
-        )
-    }
-
     fn copy_text_payload(&mut self, ctx: &egui::Context, label: &str, payload: String) {
         ctx.copy_text(payload);
         self.status = format!("{label} copied");
@@ -1980,15 +1937,6 @@ impl CalculationPhase {
             Self::Finalizing => "Finalizing output",
         }
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum BottomTab {
-    Status,
-    Gcode,
-    Cleanup,
-    Svg,
-    Dxf,
 }
 
 fn send_calculation_progress(
@@ -2407,82 +2355,16 @@ fn format_duration_minutes(minutes: f64) -> String {
     )
 }
 
-fn draw_status_log(ui: &mut egui::Ui, warnings: &[String]) {
-    if warnings.is_empty() {
-        ui.label("No warnings");
-        return;
-    }
-
-    egui::ScrollArea::vertical().show(ui, |ui| {
-        for warning in warnings {
-            ui.colored_label(egui::Color32::from_rgb(225, 176, 84), warning);
-        }
-    });
-}
-
-fn draw_output_preview(ui: &mut egui::Ui, text: Option<&str>, empty_label: &str) {
-    let Some(text) = text.filter(|text| !text.trim().is_empty()) else {
-        ui.label(empty_label);
-        return;
-    };
-
-    let mut preview = output_preview_text(text, OUTPUT_PREVIEW_CHARS);
-    ui.add_sized(
-        [ui.available_width(), ui.available_height().max(40.0)],
-        egui::TextEdit::multiline(&mut preview)
-            .font(egui::TextStyle::Monospace)
-            .interactive(false),
-    );
-}
-
-fn output_preview_text(text: &str, max_chars: usize) -> String {
-    if text.chars().count() <= max_chars {
-        return text.to_owned();
-    }
-
-    let mut output = text.chars().take(max_chars).collect::<String>();
-    output.push_str("\n... output truncated in preview ...");
-    output
-}
-
-fn secondary_output_preview_text(outputs: &[SecondaryGcode]) -> Option<String> {
-    if outputs.is_empty() {
-        return None;
-    }
-
-    let mut preview = String::new();
-    for output in outputs {
-        if !preview.is_empty() {
-            preview.push('\n');
-        }
-        preview.push_str(&format!("( cleanup output: _{} )\n", output.suffix));
-        preview.push_str(output.gcode.trim_end());
-        preview.push('\n');
-    }
-    Some(preview)
-}
-
-fn bottom_tab_copy_payload(
-    tab: BottomTab,
-    warnings: &[String],
-    gcode: &str,
-    secondary_gcode: &[SecondaryGcode],
-    svg: Option<&str>,
-    dxf: Option<&str>,
-) -> Option<(&'static str, String)> {
-    match tab {
-        BottomTab::Status => (!warnings.is_empty()).then(|| ("Status log", warnings.join("\n"))),
-        BottomTab::Gcode => non_empty_payload("G-code", gcode),
-        BottomTab::Cleanup => {
-            secondary_output_preview_text(secondary_gcode).map(|payload| ("Cleanup", payload))
-        }
-        BottomTab::Svg => svg.and_then(|payload| non_empty_payload("SVG", payload)),
-        BottomTab::Dxf => dxf.and_then(|payload| non_empty_payload("DXF", payload)),
-    }
-}
-
-fn non_empty_payload(label: &'static str, payload: &str) -> Option<(&'static str, String)> {
-    (!payload.trim().is_empty()).then(|| (label, payload.to_owned()))
+fn generated_gcode_summary(
+    lines: usize,
+    cut_moves: usize,
+    rapid_moves: usize,
+    cleanup_moves: usize,
+    arc_moves: usize,
+) -> String {
+    format!(
+        "G-code: {lines} lines, {cut_moves} cut moves, {rapid_moves} rapid moves, {cleanup_moves} cleanup moves, {arc_moves} arcs"
+    )
 }
 
 fn left_panel_content_width(ui: &egui::Ui) -> f32 {
@@ -2492,12 +2374,100 @@ fn left_panel_content_width(ui: &egui::Ui) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use egui_kittest::{Harness, kittest::Queryable};
 
     fn assert_close(actual: f64, expected: f64) {
         assert!(
             (actual - expected).abs() < 1e-9,
             "expected {expected}, got {actual}"
         );
+    }
+
+    fn test_app() -> RengraveApp {
+        let document = RengraveDocument::default();
+        let (gcode_path, svg_path, dxf_path) = default_output_paths(&None);
+
+        RengraveApp {
+            text: document.text,
+            transform: ViewTransform {
+                zoom: DEFAULT_PREVIEW_ZOOM,
+                ..ViewTransform::default()
+            },
+            status: "Ready".to_owned(),
+            settings_count: document.settings.entries.len(),
+            project_path: String::new(),
+            settings_path: String::new(),
+            input_path: String::new(),
+            default_dir_path: String::new(),
+            tool_view: ToolView::TextEngrave,
+            controls: default_ui_controls(),
+            gcode: String::new(),
+            svg: None,
+            dxf: None,
+            secondary_gcode: Vec::new(),
+            gcode_lines: 0,
+            gcode_arc_count: 0,
+            preview_segments: Vec::new(),
+            preview_rapids: Vec::new(),
+            preview_cleanup_segments: Vec::new(),
+            preview_bounds: None,
+            gcode_path,
+            svg_path,
+            dxf_path,
+            show_toolpath: true,
+            show_rapids: true,
+            show_cleanup: true,
+            show_bounds: true,
+            show_axes: true,
+            show_grid: true,
+            show_input_overlay: true,
+            input_overlay_outline: Vec::new(),
+            browser: None,
+            input_catalog: InputCatalog::default(),
+            catalog_font_registry: CatalogFontRegistry::default(),
+            input_catalog_filter: InputCatalogFilter::default(),
+            input_catalog_search: String::new(),
+            input_preview: InputPreview::default(),
+            show_new_project_modal: false,
+            preferences_path: None,
+            calculation: None,
+            next_calculation_id: 1,
+            warnings: Vec::new(),
+            fit_preview_requested: false,
+            last_output_request: None,
+            auto_recalculate: false,
+            auto_recalc_signature: None,
+            auto_recalc_changed_at: None,
+            #[cfg(debug_assertions)]
+            debug_layout_overlay: false,
+        }
+    }
+
+    fn test_segment(start: (f64, f64), end: (f64, f64)) -> PreviewSegment {
+        PreviewSegment {
+            start: Point::new(start.0, start.1),
+            end: Point::new(end.0, end.1),
+        }
+    }
+
+    fn first_system_ttf_for_ui_test() -> Option<PathBuf> {
+        [
+            "/usr/share/fonts",
+            "/usr/local/share/fonts",
+            "/Library/Fonts",
+            "C:/Windows/Fonts",
+        ]
+        .into_iter()
+        .map(Path::new)
+        .find_map(|dir| {
+            if !dir.exists() {
+                return None;
+            }
+            read_system_font_entries()
+                .into_iter()
+                .find(|entry| entry.kind == InputCatalogKind::TtfFont)
+                .map(|entry| entry.path)
+        })
     }
 
     #[test]
@@ -3991,36 +3961,6 @@ mod tests {
     }
 
     #[test]
-    fn output_preview_text_truncates_large_payloads() {
-        assert_eq!(output_preview_text("G90\nG0 X0\n", 100), "G90\nG0 X0\n");
-
-        let preview = output_preview_text("abcdefghij", 4);
-
-        assert_eq!(preview, "abcd\n... output truncated in preview ...");
-    }
-
-    #[test]
-    fn secondary_output_preview_groups_cleanup_files_by_suffix() {
-        let preview = secondary_output_preview_text(&[
-            SecondaryGcode {
-                suffix: "clean".to_owned(),
-                gcode: "G90\nG1 X0\n".to_owned(),
-            },
-            SecondaryGcode {
-                suffix: "v_clean".to_owned(),
-                gcode: "G91\nG1 X1\n".to_owned(),
-            },
-        ])
-        .unwrap();
-
-        assert_eq!(
-            preview,
-            "( cleanup output: _clean )\nG90\nG1 X0\n\n( cleanup output: _v_clean )\nG91\nG1 X1\n"
-        );
-        assert_eq!(secondary_output_preview_text(&[]), None);
-    }
-
-    #[test]
     fn cleanup_preview_segments_parse_secondary_cut_moves() {
         let segments = cleanup_preview_segments(&[
             SecondaryGcode {
@@ -4050,40 +3990,97 @@ mod tests {
     }
 
     #[test]
-    fn bottom_tab_copy_payload_tracks_visible_output_tabs() {
-        let warnings = vec!["missing input".to_owned(), "fallback output".to_owned()];
-        let cleanup = vec![SecondaryGcode {
-            suffix: "clean".to_owned(),
-            gcode: "G90\nG1 X0\n".to_owned(),
-        }];
+    fn generated_gcode_summary_reports_compact_motion_counts() {
+        assert_eq!(
+            generated_gcode_summary(177, 35, 14, 2, 3),
+            "G-code: 177 lines, 35 cut moves, 14 rapid moves, 2 cleanup moves, 3 arcs"
+        );
+    }
 
-        assert_eq!(
-            bottom_tab_copy_payload(BottomTab::Status, &warnings, "", &[], None, None),
-            Some(("Status log", "missing input\nfallback output".to_owned()))
+    #[test]
+    fn kittest_renders_compact_gcode_status_strip() {
+        let mut app = test_app();
+        app.gcode_lines = 177;
+        app.gcode_arc_count = 3;
+        app.preview_segments = vec![
+            test_segment((0.0, 0.0), (1.0, 0.0)),
+            test_segment((1.0, 0.0), (1.0, 1.0)),
+        ];
+        app.preview_rapids = vec![test_segment((1.0, 1.0), (2.0, 2.0))];
+        app.preview_cleanup_segments = vec![test_segment((2.0, 2.0), (3.0, 2.0))];
+
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(700.0, 60.0))
+            .build_ui_state(|ui, app| app.show_bottom_panel_contents(ui), app);
+        harness.run();
+
+        assert!(
+            harness
+                .query_by_label(
+                    "G-code: 177 lines, 2 cut moves, 1 rapid moves, 1 cleanup moves, 3 arcs"
+                )
+                .is_some()
         );
-        assert_eq!(
-            bottom_tab_copy_payload(BottomTab::Gcode, &[], "G90\n", &[], None, None),
-            Some(("G-code", "G90\n".to_owned()))
-        );
-        assert_eq!(
-            bottom_tab_copy_payload(BottomTab::Cleanup, &[], "", &cleanup, None, None),
-            Some((
-                "Cleanup",
-                "( cleanup output: _clean )\nG90\nG1 X0\n".to_owned()
-            ))
-        );
-        assert_eq!(
-            bottom_tab_copy_payload(BottomTab::Svg, &[], "", &[], Some("<svg/>"), None),
-            Some(("SVG", "<svg/>".to_owned()))
-        );
-        assert_eq!(
-            bottom_tab_copy_payload(BottomTab::Dxf, &[], "", &[], None, Some("0\nEOF\n")),
-            Some(("DXF", "0\nEOF\n".to_owned()))
-        );
-        assert_eq!(
-            bottom_tab_copy_payload(BottomTab::Gcode, &[], "  ", &[], None, None),
-            None
-        );
+        assert!(harness.query_by_label("Copy tab").is_none());
+        assert!(harness.query_by_label("Status").is_none());
+    }
+
+    #[test]
+    fn kittest_clicks_preview_toolbar_button_and_updates_state() {
+        let app = test_app();
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(640.0, 80.0))
+            .build_ui_state(|ui, app| app.show_canvas_toolbar(ui), app);
+        let original_zoom = harness.state().transform.zoom;
+
+        harness.get_by_label("Zoom +").click();
+        harness.run();
+
+        assert!(harness.state().transform.zoom > original_zoom);
+    }
+
+    #[test]
+    fn kittest_opens_text_catalog_for_text_tools_with_ttf_entry_without_panicking() {
+        let Some(font_path) = first_system_ttf_for_ui_test() else {
+            return;
+        };
+        let font_name = font_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("font.ttf")
+            .to_owned();
+        let row_label = format!("TTF  {font_name}  4.0 KB");
+
+        for tool_view in [ToolView::TextEngrave, ToolView::TextVCarve] {
+            let mut app = test_app();
+            app.tool_view = tool_view;
+            app.controls.cut_type = tool_view.cut_type();
+            app.input_catalog = InputCatalog {
+                dir: font_path.parent().map(Path::to_path_buf),
+                is_system_fonts: false,
+                entries: vec![InputCatalogEntry {
+                    path: font_path.clone(),
+                    name: font_name.clone(),
+                    kind: InputCatalogKind::TtfFont,
+                    size_bytes: 4096,
+                }],
+                error: None,
+            };
+
+            let mut harness = Harness::builder()
+                .with_size(egui::vec2(460.0, 520.0))
+                .build_ui_state(|ui, app| app.show_workflow_input_panel(ui), app);
+            harness.run();
+
+            harness.get_by_label("Catalog").click();
+            harness.run();
+
+            assert!(
+                harness.query_by_label(row_label.as_str()).is_some(),
+                "{} catalog did not render the TTF row",
+                tool_view.label()
+            );
+        }
     }
 
     #[test]

@@ -16,3 +16,6 @@ image.workspace = true
 rengrave-core = { path = "../rengrave-core" }
 rfd.workspace = true
 ttf-parser.workspace = true
+
+[dev-dependencies]
+egui_kittest.workspace = true
