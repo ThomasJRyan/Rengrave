@@ -13,6 +13,15 @@ pub(crate) struct InputCatalog {
 }
 
 impl InputCatalog {
+    pub(crate) fn loading_system_fonts() -> Self {
+        Self {
+            dir: None,
+            is_system_fonts: true,
+            entries: Vec::new(),
+            error: None,
+        }
+    }
+
     pub(crate) fn scan(dir: PathBuf) -> Self {
         match read_input_catalog_entries(&dir) {
             Ok(entries) => Self {
@@ -45,7 +54,11 @@ impl InputCatalog {
 
     pub(crate) fn source_label(&self) -> String {
         if self.is_system_fonts {
-            format!("System fonts ({})", self.entries.len())
+            if self.entries.is_empty() && self.error.is_none() {
+                "System fonts loading".to_owned()
+            } else {
+                format!("System fonts ({})", self.entries.len())
+            }
         } else if let Some(dir) = &self.dir {
             dir.display().to_string()
         } else {
@@ -211,10 +224,10 @@ pub(crate) fn system_font_dirs() -> Vec<PathBuf> {
 /// are unusual and bounded recursion keeps the scan responsive.
 const SYSTEM_FONT_SCAN_MAX_DEPTH: usize = 6;
 
-/// Maximum number of catalog entries rendered at once. Scanning the system font
-/// directories can yield thousands of fonts, so the list is capped to keep the
-/// UI responsive while the search field narrows results.
-pub(crate) const CATALOG_DISPLAY_LIMIT: usize = 250;
+/// Maximum filtered rows that may be rendered in their own TTF face. Loading
+/// hundreds of font files on first expansion makes the catalog feel blocked;
+/// the normal UI font is faster and clearer until search narrows the list.
+pub(crate) const CATALOG_FONT_PREVIEW_THRESHOLD: usize = 32;
 const CATALOG_FONT_RENDER_LIMIT: usize = 128;
 
 #[derive(Debug, Default)]

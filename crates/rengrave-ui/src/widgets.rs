@@ -42,6 +42,27 @@ pub(crate) fn number_row(ui: &mut egui::Ui, label: &str, value: &mut f64, speed:
     });
 }
 
+pub(crate) fn number_row_with_help(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: &mut f64,
+    speed: f64,
+    help: &str,
+) {
+    ui.horizontal(|ui| {
+        row_label_with_help(ui, label, 124.0, help);
+        right_aligned_group(ui, FORM_CONTROL_WIDTH, |ui| {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.add_sized(
+                    [FORM_CONTROL_WIDTH, 22.0],
+                    egui::DragValue::new(value).speed(speed).max_decimals(4),
+                )
+                .on_hover_text(help);
+            });
+        });
+    });
+}
+
 pub(crate) fn text_row(ui: &mut egui::Ui, label: &str, value: &mut String) -> PathRowAction {
     let mut action = PathRowAction::default();
     ui.horizontal(|ui| {
@@ -108,6 +129,26 @@ pub(crate) fn combo_row(
     });
 }
 
+pub(crate) fn combo_row_with_help(
+    ui: &mut egui::Ui,
+    label: &str,
+    selected_text: &str,
+    help: &str,
+    body: impl FnOnce(&mut egui::Ui),
+) {
+    ui.horizontal(|ui| {
+        row_label_with_help(ui, label, 124.0, help);
+        right_aligned_group(ui, FORM_CONTROL_WIDTH, |ui| {
+            egui::ComboBox::from_id_salt(label)
+                .selected_text(selected_text)
+                .width(FORM_CONTROL_WIDTH)
+                .show_ui(ui, body)
+                .response
+                .on_hover_text(help);
+        });
+    });
+}
+
 pub(crate) fn right_aligned_group(ui: &mut egui::Ui, width: f32, body: impl FnOnce(&mut egui::Ui)) {
     let spacing = ui.spacing().item_spacing.x;
     let spacer = (ui.available_width() - width - spacing).max(0.0);
@@ -126,6 +167,14 @@ pub(crate) fn row_label(ui: &mut egui::Ui, label: &str, width: f32) {
         |ui| {
             ui.label(label);
         },
+    );
+}
+
+pub(crate) fn row_label_with_help(ui: &mut egui::Ui, label: &str, width: f32, help: &str) {
+    ui.allocate_ui_with_layout(
+        egui::vec2(width, 20.0),
+        egui::Layout::left_to_right(egui::Align::Center),
+        |ui| ui.label(label).on_hover_text(help),
     );
 }
 

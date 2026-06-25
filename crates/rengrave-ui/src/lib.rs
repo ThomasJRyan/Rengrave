@@ -126,6 +126,9 @@ struct RengraveApp {
     input_overlay_outline: Vec<PreviewSegment>,
     browser: Option<FileBrowser>,
     input_catalog: InputCatalog,
+    system_font_catalog: Option<InputCatalog>,
+    system_font_catalog_receiver: Option<Receiver<InputCatalog>>,
+    pending_text_font_selection: bool,
     catalog_font_registry: CatalogFontRegistry,
     input_catalog_filter: InputCatalogFilter,
     input_catalog_search: String,
@@ -142,6 +145,12 @@ struct RengraveApp {
     auto_recalc_changed_at: Option<Instant>,
     #[cfg(debug_assertions)]
     debug_layout_overlay: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CatalogPanelMode {
+    Font,
+    Input,
 }
 
 impl RengraveApp {
@@ -184,6 +193,8 @@ impl RengraveApp {
             display_input_path.as_ref(),
             default_dir.as_ref(),
         );
+        let system_font_catalog_receiver =
+            Some(start_system_font_catalog_preload(cc.egui_ctx.clone()));
         let status = if document.warnings.is_empty() {
             "Ready".to_owned()
         } else {
@@ -247,6 +258,9 @@ impl RengraveApp {
             input_overlay_outline: Vec::new(),
             browser: None,
             input_catalog,
+            system_font_catalog: None,
+            system_font_catalog_receiver,
+            pending_text_font_selection: false,
             catalog_font_registry: CatalogFontRegistry::default(),
             input_catalog_filter: InputCatalogFilter::default(),
             input_catalog_search: String::new(),
@@ -462,7 +476,7 @@ impl RengraveApp {
         self.status = "Controls reset to defaults".to_owned();
     }
 
-    fn start_new_project(&mut self, tool_view: ToolView) {
+    fn start_new_project(&mut self, tool_view: ToolView, ctx: egui::Context) {
         self.cancel_calculation("New project");
         self.project_path.clear();
         self.settings_path.clear();
@@ -485,8 +499,16 @@ impl RengraveApp {
         self.auto_recalc_signature = None;
         self.auto_recalc_changed_at = None;
         self.show_new_project_modal = false;
+        self.pending_text_font_selection = tool_view.uses_text();
         self.refresh_default_catalog_for_tool_view();
-        self.status = format!("New {} project", tool_view.label());
+        let selected_font =
+            self.pending_text_font_selection && self.select_first_available_text_font(ctx.clone());
+        if selected_font {
+            self.pending_text_font_selection = false;
+        }
+        if !selected_font {
+            self.status = format!("New {} project", tool_view.label());
+        }
         self.save_preferences();
     }
 
@@ -554,6 +576,46 @@ impl RengraveApp {
             }
             Err(TryRecvError::Disconnected) => {
                 self.status = "Calculation worker stopped".to_owned();
+            }
+        }
+    }
+
+    fn poll_system_font_catalog(&mut self, ctx: &egui::Context) {
+        let Some(receiver) = self.system_font_catalog_receiver.take() else {
+            return;
+        };
+        match receiver.try_recv() {
+            Ok(catalog) => {
+                let count = catalog.entries.len();
+                let visible_catalog_is_system_fonts = self.input_catalog.is_system_fonts;
+                self.system_font_catalog = Some(catalog.clone());
+                if self.tool_view.uses_text() && visible_catalog_is_system_fonts {
+                    self.input_catalog = catalog;
+                    if self.pending_text_font_selection
+                        && self.select_first_available_text_font(ctx.clone())
+                    {
+                        self.pending_text_font_selection = false;
+                    } else {
+                        self.status = format!("Found {count} system font(s)");
+                    }
+                    ctx.request_repaint();
+                }
+            }
+            Err(TryRecvError::Empty) => {
+                self.system_font_catalog_receiver = Some(receiver);
+            }
+            Err(TryRecvError::Disconnected) => {
+                if self.tool_view.uses_text()
+                    && self.input_catalog.is_system_fonts
+                    && self.input_catalog.entries.is_empty()
+                {
+                    self.input_catalog = InputCatalog {
+                        dir: None,
+                        is_system_fonts: true,
+                        entries: Vec::new(),
+                        error: Some("System font scan stopped before finishing".to_owned()),
+                    };
+                }
             }
         }
     }
@@ -730,8 +792,13 @@ impl RengraveApp {
     }
 
     fn refresh_system_font_catalog(&mut self) {
-        self.input_catalog = InputCatalog::scan_system_fonts();
-        self.status = format!("Found {} system font(s)", self.input_catalog.entries.len());
+        if let Some(catalog) = &self.system_font_catalog {
+            self.input_catalog = catalog.clone();
+            self.status = format!("Found {} system font(s)", self.input_catalog.entries.len());
+        } else {
+            self.input_catalog = InputCatalog::loading_system_fonts();
+            self.status = "Loading system fonts".to_owned();
+        }
     }
 
     fn refresh_default_catalog_for_tool_view(&mut self) {
@@ -744,11 +811,27 @@ impl RengraveApp {
     }
 
     fn select_input_catalog_entry(&mut self, path: PathBuf, ctx: egui::Context) {
+        self.pending_text_font_selection = false;
         self.update_tool_view_for_input_path(&path);
         self.input_path = path.display().to_string();
         self.status = "Input selected".to_owned();
         self.save_preferences();
         self.start_calculation(ctx);
+    }
+
+    fn select_first_available_text_font(&mut self, ctx: egui::Context) -> bool {
+        if !self.tool_view.uses_text() || !self.input_path.trim().is_empty() {
+            return false;
+        }
+        let Some(path) = first_available_text_font_path(
+            &self.input_catalog.entries,
+            self.input_catalog_filter,
+            self.tool_view,
+        ) else {
+            return false;
+        };
+        self.select_input_catalog_entry(path, ctx);
+        true
     }
 
     fn set_tool_view(&mut self, tool_view: ToolView) {
@@ -770,27 +853,33 @@ impl RengraveApp {
     }
 
     fn show_workflow_input_panel(&mut self, ui: &mut egui::Ui) {
-        egui::CollapsingHeader::new("Input")
-            .default_open(true)
-            .show(ui, |ui| {
-                self.show_input_paths(ui);
-            });
+        workflow_stage_heading(ui, "Input");
 
         if self.tool_view.uses_text() {
-            egui::CollapsingHeader::new("Text")
+            egui::CollapsingHeader::new("Text content")
                 .default_open(true)
                 .show(ui, |ui| {
                     self.show_text_input_panel(ui);
                 });
+
+            egui::CollapsingHeader::new("Font")
+                .default_open(false)
+                .show(ui, |ui| {
+                    self.show_input_catalog_panel(ui, CatalogPanelMode::Font);
+                });
+        } else {
+            egui::CollapsingHeader::new("Source")
+                .default_open(true)
+                .show(ui, |ui| {
+                    self.show_input_paths(ui);
+                });
+
+            egui::CollapsingHeader::new("Catalog")
+                .default_open(false)
+                .show(ui, |ui| {
+                    self.show_input_catalog_panel(ui, CatalogPanelMode::Input);
+                });
         }
-
-        egui::CollapsingHeader::new("Catalog")
-            .default_open(false)
-            .show(ui, |ui| {
-                self.show_input_catalog_panel(ui);
-            });
-
-        ui.label(format!("Legacy keys: {}", self.settings_count));
     }
 
     fn show_input_paths(&mut self, ui: &mut egui::Ui) {
@@ -798,10 +887,6 @@ impl RengraveApp {
             if full_width_button(ui, "Open image\u{2026}", true) {
                 self.choose_path(FileBrowserTarget::Input, ui.ctx().clone());
             }
-        } else if self.tool_view.uses_text()
-            && full_width_button(ui, "Open font file\u{2026}", true)
-        {
-            self.choose_path(FileBrowserTarget::Input, ui.ctx().clone());
         }
     }
 
@@ -812,24 +897,23 @@ impl RengraveApp {
         );
     }
 
-    fn show_input_catalog_panel(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal_wrapped(|ui| {
-            if ui.button("Scan folder").clicked() {
-                self.refresh_input_catalog();
-            }
-            if self.tool_view.uses_text() && ui.button("System fonts").clicked() {
-                self.refresh_system_font_catalog();
-            }
-        });
-        ui.horizontal(|ui| {
-            ui.label("Source");
-            let source = self.input_catalog.source_label();
-            let compact = compact_text_middle(&source, 72);
-            let response = ui.monospace(compact.as_str());
-            if compact != source {
-                response.on_hover_text(source);
-            }
-        });
+    fn show_input_catalog_panel(&mut self, ui: &mut egui::Ui, mode: CatalogPanelMode) {
+        if mode == CatalogPanelMode::Input {
+            ui.horizontal_wrapped(|ui| {
+                if ui.button("Scan folder").clicked() {
+                    self.refresh_input_catalog();
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label("Source");
+                let source = self.input_catalog.source_label();
+                let compact = compact_text_middle(&source, 72);
+                let response = ui.monospace(compact.as_str());
+                if compact != source {
+                    response.on_hover_text(source);
+                }
+            });
+        }
         if let Some(error) = &self.input_catalog.error {
             ui.colored_label(egui::Color32::from_rgb(225, 176, 84), error);
         }
@@ -855,27 +939,26 @@ impl RengraveApp {
             return;
         }
 
-        let catalog_fonts_changed = self.catalog_font_registry.refresh(ui.ctx(), &filtered);
+        let preview_catalog_fonts = filtered.len() <= CATALOG_FONT_PREVIEW_THRESHOLD;
+        let catalog_fonts_changed =
+            preview_catalog_fonts && self.catalog_font_registry.refresh(ui.ctx(), &filtered);
         if catalog_fonts_changed {
             ui.ctx().request_repaint();
         }
-        let total = filtered.len();
-        let shown = total.min(CATALOG_DISPLAY_LIMIT);
+        let catalog_width = ui.available_width();
         let selected_input = path_from_text(&self.input_path);
         let mut chosen = None;
         egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
             .max_height(220.0)
             .show(ui, |ui| {
-                for entry in filtered.into_iter().take(CATALOG_DISPLAY_LIMIT) {
+                ui.set_min_width(catalog_width);
+                for entry in filtered {
                     let selected = selected_input.as_ref() == Some(&entry.path);
-                    let label = format!(
-                        "{}  {}  {}",
-                        entry.kind.label(),
-                        entry.name,
-                        format_bytes(entry.size_bytes)
-                    );
+                    let label = catalog_entry_display_name(&entry);
                     let mut label = egui::RichText::new(label);
-                    if !catalog_fonts_changed
+                    if preview_catalog_fonts
+                        && !catalog_fonts_changed
                         && let Some(family) =
                             self.catalog_font_registry.family_for_path(&entry.path)
                     {
@@ -886,23 +969,20 @@ impl RengraveApp {
                     }
                 }
             });
-        if total > shown {
-            ui.label(
-                egui::RichText::new(format!(
-                    "Showing {shown} of {total}. Refine the search to narrow results."
-                ))
-                .small()
-                .color(egui::Color32::from_rgb(150, 158, 164)),
-            );
-        }
         if let Some(path) = chosen {
             self.select_input_catalog_entry(path, ui.ctx().clone());
+        }
+        if mode == CatalogPanelMode::Font {
+            ui.add_space(8.0);
+            if full_width_button(ui, "Open custom font file\u{2026}", true) {
+                self.choose_path(FileBrowserTarget::Input, ui.ctx().clone());
+            }
         }
     }
 
     fn show_input_preview_panel(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            ui.heading("Preview");
+            ui.heading("Input preview");
             if ui.button("Refresh").clicked() {
                 self.reload_input_preview();
             }
@@ -912,13 +992,16 @@ impl RengraveApp {
     }
 
     fn show_workflow_settings_panel(&mut self, ui: &mut egui::Ui) {
-        egui::CollapsingHeader::new("Layout")
+        workflow_stage_heading(ui, "Geometry");
+        egui::CollapsingHeader::new("Size and placement")
             .default_open(true)
             .show(ui, |ui| {
                 self.show_layout_settings(ui);
             });
 
-        egui::CollapsingHeader::new("Cut")
+        ui.separator();
+        workflow_stage_heading(ui, "Tool / Cut");
+        egui::CollapsingHeader::new("Cut parameters")
             .default_open(true)
             .show(ui, |ui| {
                 self.show_machine_settings(ui);
@@ -933,17 +1016,17 @@ impl RengraveApp {
         }
 
         if self.tool_view.uses_vcarve() {
-            egui::CollapsingHeader::new("V-carve")
+            egui::CollapsingHeader::new("V-carve tool")
                 .default_open(false)
                 .show(ui, |ui| {
                     self.show_vcarve_settings(ui);
                 });
-            egui::CollapsingHeader::new("Multipass")
+            egui::CollapsingHeader::new("Passes")
                 .default_open(false)
                 .show(ui, |ui| {
                     self.show_multipass_settings(ui);
                 });
-            egui::CollapsingHeader::new("Cleanup")
+            egui::CollapsingHeader::new("Cleanup paths")
                 .default_open(false)
                 .show(ui, |ui| {
                     self.show_cleanup_settings(ui);
@@ -1045,23 +1128,29 @@ impl RengraveApp {
         number_row(ui, "Plunge", &mut self.controls.plunge, 0.5);
         number_row(ui, "Accuracy", &mut self.controls.accuracy, 0.0005);
         if !self.tool_view.uses_vcarve() {
-            combo_row(ui, "Arc fit", self.controls.arc_fit.label(), |ui| {
-                ui.selectable_value(
-                    &mut self.controls.arc_fit,
-                    ArcFitChoice::NoFit,
-                    ArcFitChoice::NoFit.label(),
-                );
-                ui.selectable_value(
-                    &mut self.controls.arc_fit,
-                    ArcFitChoice::Center,
-                    ArcFitChoice::Center.label(),
-                );
-                ui.selectable_value(
-                    &mut self.controls.arc_fit,
-                    ArcFitChoice::Radius,
-                    ArcFitChoice::Radius.label(),
-                );
-            });
+            combo_row_with_help(
+                ui,
+                "Arc fit",
+                self.controls.arc_fit.label(),
+                "Replace short line segments with arcs where possible. This can reduce G-code size, but changes how motion is represented.",
+                |ui| {
+                    ui.selectable_value(
+                        &mut self.controls.arc_fit,
+                        ArcFitChoice::NoFit,
+                        ArcFitChoice::NoFit.label(),
+                    );
+                    ui.selectable_value(
+                        &mut self.controls.arc_fit,
+                        ArcFitChoice::Center,
+                        ArcFitChoice::Center.label(),
+                    );
+                    ui.selectable_value(
+                        &mut self.controls.arc_fit,
+                        ArcFitChoice::Radius,
+                        ArcFitChoice::Radius.label(),
+                    );
+                },
+            );
         }
     }
 
@@ -1076,9 +1165,27 @@ impl RengraveApp {
                 }
             },
         );
-        number_row(ui, "Turd size", &mut self.controls.bmp_turds, 1.0);
-        number_row(ui, "Alpha max", &mut self.controls.bmp_alpha, 0.05);
-        number_row(ui, "Opt tolerance", &mut self.controls.bmp_optto, 0.01);
+        number_row_with_help(
+            ui,
+            "Turd size",
+            &mut self.controls.bmp_turds,
+            1.0,
+            "Ignore bitmap specks smaller than this area before tracing.",
+        );
+        number_row_with_help(
+            ui,
+            "Alpha max",
+            &mut self.controls.bmp_alpha,
+            0.05,
+            "Controls how aggressively traced corners are smoothed.",
+        );
+        number_row_with_help(
+            ui,
+            "Opt tolerance",
+            &mut self.controls.bmp_optto,
+            0.01,
+            "Higher values simplify traced curves more; lower values keep more detail.",
+        );
         ui.checkbox(&mut self.controls.bmp_long, "Long curves");
     }
 
@@ -1105,8 +1212,20 @@ impl RengraveApp {
         number_row(ui, "V step", &mut self.controls.v_step_len, 0.001);
         number_row(ui, "Allowance", &mut self.controls.allowance, 0.001);
         number_row(ui, "Depth limit", &mut self.controls.v_depth_lim, 0.01);
-        number_row(ui, "Drive corner", &mut self.controls.v_drv_crner, 1.0);
-        number_row(ui, "Step corner", &mut self.controls.v_stp_crner, 1.0);
+        number_row_with_help(
+            ui,
+            "Drive corner",
+            &mut self.controls.v_drv_crner,
+            1.0,
+            "Corner angle threshold for driving the V-bit path through sharper turns.",
+        );
+        number_row_with_help(
+            ui,
+            "Step corner",
+            &mut self.controls.v_stp_crner,
+            1.0,
+            "Corner angle threshold for step-over behavior around V-carve corners.",
+        );
         combo_row(ui, "Check scope", self.controls.v_check_all.label(), |ui| {
             for value in VCheckScopeChoice::ALL {
                 ui.selectable_value(&mut self.controls.v_check_all, value, value.label());
@@ -1114,7 +1233,8 @@ impl RengraveApp {
         });
         ui.horizontal_wrapped(|ui| {
             ui.checkbox(&mut self.controls.inlay, "Inlay");
-            ui.checkbox(&mut self.controls.v_flop, "Flip normals");
+            ui.checkbox(&mut self.controls.v_flop, "Flip normals")
+                .on_hover_text("Reverse the side used for V-carve normal calculations.");
         });
     }
 
@@ -1156,63 +1276,17 @@ impl RengraveApp {
     }
 
     fn show_canvas_panel(&mut self, ui: &mut egui::Ui) -> egui::Rect {
-        self.show_canvas_toolbar(ui);
         let rect = ui.available_rect_before_wrap();
         self.show_preview_panel(ui, rect);
         rect
     }
 
-    fn show_canvas_toolbar(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            if ui.button("Fit").clicked() {
-                self.fit_preview_requested = true;
-            }
-            if ui.button("Reset view").clicked() {
-                self.reset_preview_pan_zoom();
-            }
-            if ui.small_button("Zoom -").clicked() {
-                self.transform.zoom = (self.transform.zoom / 1.25).clamp(1.0, 500.0);
-            }
-            ui.add_sized(
-                [130.0, 18.0],
-                egui::Slider::new(&mut self.transform.zoom, 1.0..=500.0)
-                    .text("Zoom")
-                    .clamping(egui::SliderClamping::Always),
-            );
-            if ui.small_button("Zoom +").clicked() {
-                self.transform.zoom = (self.transform.zoom * 1.25).clamp(1.0, 500.0);
-            }
-            ui.separator();
-            if ui
-                .add_sized(
-                    [130.0, 18.0],
-                    egui::Slider::new(
-                        &mut self.transform.viewport_rotation_degrees,
-                        -180.0..=180.0,
-                    )
-                    .text("View")
-                    .clamping(egui::SliderClamping::Always),
-                )
-                .changed()
-            {
-                self.save_preferences();
-            }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.toggle_value(&mut self.show_grid, "Grid").changed() {
-                    self.save_preferences();
-                }
-                ui.toggle_value(&mut self.show_axes, "Axes");
-                ui.toggle_value(&mut self.show_bounds, "Bounds");
-            });
-        });
-        ui.separator();
-    }
-
     fn show_right_sidebar(&mut self, ui: &mut egui::Ui) {
+        workflow_stage_heading(ui, "Preview");
         self.show_input_preview_panel(ui);
 
         ui.separator();
-        ui.heading("Layers");
+        ui.heading("Preview layers");
         if ui
             .checkbox(&mut self.show_rapids, "Show travel moves")
             .changed()
@@ -1228,8 +1302,12 @@ impl RengraveApp {
         {
             self.save_preferences();
         }
-        ui.checkbox(&mut self.show_bounds, "Show bounding box");
         ui.checkbox(&mut self.show_toolpath, "Show toolpath");
+        ui.checkbox(&mut self.show_bounds, "Show bounding box");
+        ui.checkbox(&mut self.show_axes, "Show axes");
+        if ui.checkbox(&mut self.show_grid, "Show grid").changed() {
+            self.save_preferences();
+        }
         if ui
             .add_enabled(
                 self.has_input_overlay(),
@@ -1241,20 +1319,22 @@ impl RengraveApp {
             self.save_preferences();
         }
 
-        ui.separator();
-        ui.heading("Statistics");
-        let stats = self.job_statistics();
-        stat_row(ui, "Width", &stats.width);
-        stat_row(ui, "Height", &stats.height);
-        stat_row(ui, "Total paths", &stats.total_paths);
-        stat_row(ui, "Total length", &stats.total_length);
-        stat_row(ui, "Estimated time", &stats.estimated_time);
-        stat_row(ui, "Rapid moves", &stats.rapid_percent);
-        stat_row(ui, "G-code lines", &stats.gcode_lines);
-        stat_row(ui, "Arc moves", &stats.arc_moves);
+        egui::CollapsingHeader::new("Job details")
+            .default_open(false)
+            .show(ui, |ui| {
+                let stats = self.job_statistics();
+                stat_row(ui, "Width", &stats.width);
+                stat_row(ui, "Height", &stats.height);
+                stat_row(ui, "Total paths", &stats.total_paths);
+                stat_row(ui, "Total length", &stats.total_length);
+                stat_row(ui, "Estimated time", &stats.estimated_time);
+                stat_row(ui, "Rapid moves", &stats.rapid_percent);
+                stat_row(ui, "G-code lines", &stats.gcode_lines);
+                stat_row(ui, "Arc moves", &stats.arc_moves);
+            });
 
         ui.separator();
-        ui.heading("Export");
+        workflow_stage_heading(ui, "Export");
         self.show_units_row(ui);
         let gcode_path_action = path_row(ui, "G-code", &mut self.gcode_path);
         if gcode_path_action.browse_clicked {
@@ -1263,6 +1343,8 @@ impl RengraveApp {
         if gcode_path_action.value_changed {
             self.save_preferences();
         }
+        ui.add_space(4.0);
+        self.show_export_readiness(ui);
         ui.add_space(4.0);
         if full_width_button(ui, "Generate G-code", true) {
             self.start_calculation(ui.ctx().clone());
@@ -1275,6 +1357,46 @@ impl RengraveApp {
         }
     }
 
+    fn show_export_readiness(&self, ui: &mut egui::Ui) {
+        ui.heading("Preflight");
+        let output_state = output_state_summary(
+            self.calculation.is_some(),
+            self.output_is_stale(),
+            !self.gcode.trim().is_empty(),
+        );
+        readiness_row_colored(ui, "State", output_state, output_state_color(output_state));
+
+        readiness_row(ui, "Z", &export_z_summary(&self.controls));
+        readiness_row(ui, "Feed", &export_feed_summary(&self.controls));
+        if let Some(warning_count) = warning_count_plain(&self.warnings) {
+            readiness_row(ui, "Warnings", &warning_count);
+        }
+
+        for caution in export_readiness_cautions(
+            self.calculation.is_some(),
+            self.output_is_stale(),
+            self.gcode.trim().is_empty(),
+            !self.warnings.is_empty(),
+            self.gcode_path.trim().is_empty(),
+        ) {
+            ui.colored_label(egui::Color32::from_rgb(225, 176, 84), caution);
+        }
+        if !self.warnings.is_empty() {
+            self.show_warning_details(ui);
+        }
+    }
+
+    fn show_warning_details(&self, ui: &mut egui::Ui) {
+        egui::CollapsingHeader::new("Warning details")
+            .default_open(true)
+            .show(ui, |ui| {
+                for warning in &self.warnings {
+                    ui.colored_label(egui::Color32::from_rgb(225, 176, 84), warning);
+                }
+                ui.label("Fix the input or settings above, then generate G-code again.");
+            });
+    }
+
     fn show_bottom_status_bar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_centered(|ui| {
             let ready = self.calculation.is_none();
@@ -1284,7 +1406,7 @@ impl RengraveApp {
                 egui::Color32::from_rgb(225, 176, 84)
             };
             ui.colored_label(color, "\u{25CF}");
-            ui.label(if ready { "Ready" } else { "Working" });
+            ui.label(if ready { "Idle" } else { "Working" });
             ui.separator();
             ui.monospace(format!("Lines: {}", self.gcode_lines));
             ui.separator();
@@ -1344,22 +1466,30 @@ impl RengraveApp {
             .default_open(false)
             .show(ui, |ui| {
                 if self.tool_view.uses_text() {
-                    combo_row(ui, "Height calc", self.controls.height_calc.label(), |ui| {
-                        ui.selectable_value(
-                            &mut self.controls.height_calc,
-                            HeightCalcChoice::MaxUse,
-                            HeightCalcChoice::MaxUse.label(),
-                        );
-                        ui.selectable_value(
-                            &mut self.controls.height_calc,
-                            HeightCalcChoice::MaxAll,
-                            HeightCalcChoice::MaxAll.label(),
-                        );
-                    });
+                    combo_row_with_help(
+                        ui,
+                        "Height calc",
+                        self.controls.height_calc.label(),
+                        "Choose whether text height is based on used glyphs only or the full font height.",
+                        |ui| {
+                            ui.selectable_value(
+                                &mut self.controls.height_calc,
+                                HeightCalcChoice::MaxUse,
+                                HeightCalcChoice::MaxUse.label(),
+                            );
+                            ui.selectable_value(
+                                &mut self.controls.height_calc,
+                                HeightCalcChoice::MaxAll,
+                                HeightCalcChoice::MaxAll.label(),
+                            );
+                        },
+                    );
                 }
                 number_row(ui, "Arc segments", &mut self.controls.segarc, 0.5);
                 text_row(ui, "Preamble", &mut self.controls.gpre);
                 text_row(ui, "Postamble", &mut self.controls.gpost);
+                ui.monospace(format!("Legacy keys: {}", self.settings_count))
+                    .on_hover_text("Compatibility settings currently loaded from the project or legacy file.");
                 ui.horizontal_wrapped(|ui| {
                     ui.checkbox(&mut self.controls.recovery_comments, "Recovery comments");
                     ui.checkbox(&mut self.controls.var_dis, "Disable variables");
@@ -1369,7 +1499,8 @@ impl RengraveApp {
                     ui.checkbox(&mut self.controls.show_thick, "Show thickness");
                     if self.tool_view.uses_vcarve() {
                         ui.checkbox(&mut self.controls.show_v_area, "Show V area");
-                        ui.checkbox(&mut self.controls.v_pplot, "Plot during V-carve");
+                        ui.checkbox(&mut self.controls.v_pplot, "Plot during V-carve")
+                            .on_hover_text("Update the preview while V-carve paths are being calculated.");
                     }
                 });
             });
@@ -1403,6 +1534,7 @@ impl RengraveApp {
 impl eframe::App for RengraveApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.poll_calculation();
+        self.poll_system_font_catalog(ui.ctx());
         self.maybe_auto_recalculate(ui.ctx());
         let root_rect = ui.max_rect();
 
@@ -1502,14 +1634,6 @@ impl RengraveApp {
                     self.cancel_calculation("Calculation canceled");
                 }
             }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui
-                    .add_enabled(!self.gcode.is_empty(), egui::Button::new("Export G-code"))
-                    .clicked()
-                {
-                    self.export_gcode();
-                }
-            });
         });
         ui.horizontal(|ui| {
             ui.label("Status");
@@ -1776,7 +1900,7 @@ impl RengraveApp {
         });
 
         if let Some(tool_view) = selected {
-            self.start_new_project(tool_view);
+            self.start_new_project(tool_view, ctx.clone());
         } else if response.should_close() {
             self.show_new_project_modal = false;
         }
@@ -1949,6 +2073,16 @@ fn send_calculation_progress(
     ctx.request_repaint();
 }
 
+fn start_system_font_catalog_preload(ctx: egui::Context) -> Receiver<InputCatalog> {
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        let catalog = InputCatalog::scan_system_fonts();
+        let _ = sender.send(catalog);
+        ctx.request_repaint();
+    });
+    receiver
+}
+
 fn default_output_path(default_dir: &Option<PathBuf>, file_name: &str) -> String {
     default_dir
         .as_ref()
@@ -1989,7 +2123,7 @@ fn default_input_catalog_for_tool_view(
     default_dir: Option<&PathBuf>,
 ) -> InputCatalog {
     if tool_view_uses_system_font_catalog_by_default(tool_view) {
-        InputCatalog::scan_system_fonts()
+        InputCatalog::loading_system_fonts()
     } else {
         InputCatalog::scan(input_catalog_start_dir(
             &input.cloned(),
@@ -2148,6 +2282,44 @@ fn input_path_is_bitmap(path_text: &str) -> bool {
         .unwrap_or(false)
 }
 
+fn catalog_entry_display_name(entry: &InputCatalogEntry) -> String {
+    match entry.kind {
+        InputCatalogKind::CxfFont | InputCatalogKind::TtfFont => entry
+            .path
+            .file_stem()
+            .and_then(|name| name.to_str())
+            .filter(|name| !name.trim().is_empty())
+            .map(str::to_owned)
+            .unwrap_or_else(|| entry.name.clone()),
+        _ => format!(
+            "{}  {}  {}",
+            entry.kind.label(),
+            entry.name,
+            format_bytes(entry.size_bytes)
+        ),
+    }
+}
+
+fn first_available_text_font_path(
+    entries: &[InputCatalogEntry],
+    filter: InputCatalogFilter,
+    tool_view: ToolView,
+) -> Option<PathBuf> {
+    if !tool_view.uses_text() {
+        return None;
+    }
+    entries
+        .iter()
+        .find(|entry| {
+            matches!(
+                entry.kind,
+                InputCatalogKind::CxfFont | InputCatalogKind::TtfFont
+            ) && filter.accepts(entry.kind)
+                && tool_view.accepts_kind(entry.kind)
+        })
+        .map(|entry| entry.path.clone())
+}
+
 fn vcarve_multipass_enabled(finish_stock: f64) -> bool {
     finish_stock > 0.0
 }
@@ -2220,11 +2392,65 @@ fn output_state_color(output_state: &str) -> egui::Color32 {
 }
 
 fn warning_count_summary(warnings: &[String]) -> Option<String> {
+    warning_count_plain(warnings).map(|count| format!("Warnings: {count}"))
+}
+
+fn warning_count_plain(warnings: &[String]) -> Option<String> {
     match warnings.len() {
         0 => None,
-        1 => Some("Warnings: 1".to_owned()),
-        count => Some(format!("Warnings: {count}")),
+        1 => Some("1 warning".to_owned()),
+        count => Some(format!("{count} warnings")),
     }
+}
+
+fn export_z_summary(controls: &UiControls) -> String {
+    if controls.cut_type == CutTypeChoice::VCarve {
+        format!(
+            "Safe {}, depth limit {}",
+            format_setting_number(controls.safe_z),
+            format_setting_number(controls.v_depth_lim)
+        )
+    } else {
+        format!(
+            "Safe {}, cut {}",
+            format_setting_number(controls.safe_z),
+            format_setting_number(controls.depth_z)
+        )
+    }
+}
+
+fn export_feed_summary(controls: &UiControls) -> String {
+    format!(
+        "Feed {}, plunge {}",
+        format_setting_number(controls.feed),
+        format_setting_number(controls.plunge)
+    )
+}
+
+fn export_readiness_cautions(
+    calculation_active: bool,
+    output_stale: bool,
+    output_empty: bool,
+    has_warnings: bool,
+    path_empty: bool,
+) -> Vec<&'static str> {
+    let mut cautions = Vec::new();
+    if calculation_active {
+        cautions.push("Calculation is still running.");
+    }
+    if output_empty {
+        cautions.push("Generate G-code before copying or saving.");
+    }
+    if output_stale {
+        cautions.push("Output is stale; copy/save will use the previous G-code.");
+    }
+    if has_warnings {
+        cautions.push("Review warnings before running this file on a machine.");
+    }
+    if path_empty {
+        cautions.push("Choose a G-code path before saving.");
+    }
+    cautions
 }
 
 fn summary_label(ui: &mut egui::Ui, text: &str, color: egui::Color32) {
@@ -2233,6 +2459,29 @@ fn summary_label(ui: &mut egui::Ui, text: &str, color: egui::Color32) {
 
 fn summary_separator(ui: &mut egui::Ui) {
     ui.label(egui::RichText::new("/").color(egui::Color32::from_rgb(120, 130, 136)));
+}
+
+fn workflow_stage_heading(ui: &mut egui::Ui, label: &str) {
+    ui.add_space(4.0);
+    ui.label(
+        egui::RichText::new(label)
+            .strong()
+            .color(egui::Color32::from_rgb(214, 220, 224)),
+    );
+    ui.add_space(2.0);
+}
+
+fn readiness_row(ui: &mut egui::Ui, label: &str, value: &str) {
+    readiness_row_colored(ui, label, value, egui::Color32::from_rgb(214, 220, 224));
+}
+
+fn readiness_row_colored(ui: &mut egui::Ui, label: &str, value: &str, color: egui::Color32) {
+    ui.horizontal(|ui| {
+        ui.label(label);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.label(egui::RichText::new(value).color(color));
+        });
+    });
 }
 
 struct JobStatistics {
@@ -2424,6 +2673,9 @@ mod tests {
             input_overlay_outline: Vec::new(),
             browser: None,
             input_catalog: InputCatalog::default(),
+            system_font_catalog: None,
+            system_font_catalog_receiver: None,
+            pending_text_font_selection: false,
             catalog_font_registry: CatalogFontRegistry::default(),
             input_catalog_filter: InputCatalogFilter::default(),
             input_catalog_search: String::new(),
@@ -2917,6 +3169,96 @@ mod tests {
         assert!(!tool_view_uses_system_font_catalog_by_default(
             ToolView::ImageVCarve
         ));
+
+        let catalog = default_input_catalog_for_tool_view(ToolView::TextEngrave, None, None);
+        assert!(catalog.is_system_fonts);
+        assert!(catalog.entries.is_empty());
+        assert!(catalog.error.is_none());
+        assert_eq!(catalog.source_label(), "System fonts loading");
+    }
+
+    #[test]
+    fn system_font_catalog_preload_updates_visible_text_catalog() {
+        let mut app = test_app();
+        app.tool_view = ToolView::TextEngrave;
+        app.input_catalog = InputCatalog::loading_system_fonts();
+        let (sender, receiver) = mpsc::channel();
+        app.system_font_catalog_receiver = Some(receiver);
+
+        sender
+            .send(InputCatalog {
+                dir: None,
+                is_system_fonts: true,
+                entries: vec![InputCatalogEntry {
+                    path: PathBuf::from("/tmp/preloaded.ttf"),
+                    name: "preloaded.ttf".to_owned(),
+                    kind: InputCatalogKind::TtfFont,
+                    size_bytes: 128,
+                }],
+                error: None,
+            })
+            .unwrap();
+
+        app.poll_system_font_catalog(&egui::Context::default());
+
+        assert!(app.system_font_catalog.is_some());
+        assert!(app.system_font_catalog_receiver.is_none());
+        assert_eq!(app.input_catalog.entries.len(), 1);
+        assert_eq!(app.status, "Found 1 system font(s)");
+    }
+
+    #[test]
+    fn system_font_catalog_preload_does_not_replace_folder_catalog() {
+        let mut app = test_app();
+        app.tool_view = ToolView::TextEngrave;
+        app.input_catalog = InputCatalog::scan(PathBuf::from("/tmp"));
+        let (sender, receiver) = mpsc::channel();
+        app.system_font_catalog_receiver = Some(receiver);
+
+        sender
+            .send(InputCatalog {
+                dir: None,
+                is_system_fonts: true,
+                entries: vec![InputCatalogEntry {
+                    path: PathBuf::from("/tmp/preloaded.ttf"),
+                    name: "preloaded.ttf".to_owned(),
+                    kind: InputCatalogKind::TtfFont,
+                    size_bytes: 128,
+                }],
+                error: None,
+            })
+            .unwrap();
+
+        app.poll_system_font_catalog(&egui::Context::default());
+
+        assert!(app.system_font_catalog.is_some());
+        assert!(!app.input_catalog.is_system_fonts);
+        assert_ne!(app.status, "Found 1 system font(s)");
+    }
+
+    #[test]
+    fn new_text_project_selects_first_cached_catalog_font() {
+        let Some(font_path) = bundled_demo_font_path() else {
+            return;
+        };
+        let mut app = test_app();
+        app.system_font_catalog = Some(InputCatalog {
+            dir: None,
+            is_system_fonts: true,
+            entries: vec![InputCatalogEntry {
+                path: font_path.clone(),
+                name: "rengrave_demo.cxf".to_owned(),
+                kind: InputCatalogKind::CxfFont,
+                size_bytes: 128,
+            }],
+            error: None,
+        });
+
+        app.start_new_project(ToolView::TextEngrave, egui::Context::default());
+
+        assert_eq!(app.input_path, font_path.display().to_string());
+        assert!(!app.pending_text_font_selection);
+        assert!(app.calculation.is_some());
     }
 
     #[test]
@@ -3367,11 +3709,49 @@ mod tests {
         assert_eq!(warning_count_summary(&[]), None);
         assert_eq!(
             warning_count_summary(&["missing input".to_owned()]),
-            Some("Warnings: 1".to_owned())
+            Some("Warnings: 1 warning".to_owned())
         );
         assert_eq!(
             warning_count_summary(&["one".to_owned(), "two".to_owned()]),
-            Some("Warnings: 2".to_owned())
+            Some("Warnings: 2 warnings".to_owned())
+        );
+        assert_eq!(
+            warning_count_plain(&["missing input".to_owned()]),
+            Some("1 warning".to_owned())
+        );
+    }
+
+    #[test]
+    fn export_readiness_helpers_surface_machine_state_without_blocking() {
+        let mut controls = UiControls::from_settings(&default_legacy_settings());
+        controls.safe_z = 0.25;
+        controls.depth_z = -0.005;
+        controls.feed = 5.0;
+        controls.plunge = 1.5;
+
+        assert_eq!(export_z_summary(&controls), "Safe 0.25, cut -0.005");
+        assert_eq!(export_feed_summary(&controls), "Feed 5, plunge 1.5");
+
+        controls.cut_type = CutTypeChoice::VCarve;
+        controls.v_depth_lim = -0.125;
+        assert_eq!(export_z_summary(&controls), "Safe 0.25, depth limit -0.125");
+    }
+
+    #[test]
+    fn export_readiness_cautions_are_warn_only_and_specific() {
+        assert_eq!(
+            export_readiness_cautions(false, false, false, false, false),
+            Vec::<&'static str>::new()
+        );
+        assert_eq!(
+            export_readiness_cautions(true, true, true, true, true),
+            vec![
+                "Calculation is still running.",
+                "Generate G-code before copying or saving.",
+                "Output is stale; copy/save will use the previous G-code.",
+                "Review warnings before running this file on a machine.",
+                "Choose a G-code path before saving.",
+            ]
         );
     }
 
@@ -3535,6 +3915,80 @@ mod tests {
         assert_eq!(entries[2].kind, InputCatalogKind::Svg);
         assert_eq!(entries[3].kind, InputCatalogKind::Bitmap);
         assert!(entries.iter().all(|entry| entry.name != "notes.txt"));
+    }
+
+    #[test]
+    fn catalog_entry_display_name_hides_font_metadata() {
+        let font_entry = InputCatalogEntry {
+            path: PathBuf::from("/tmp/engraving/romanc.cxf"),
+            name: "romanc.cxf".to_owned(),
+            kind: InputCatalogKind::CxfFont,
+            size_bytes: 4096,
+        };
+        let svg_entry = InputCatalogEntry {
+            path: PathBuf::from("/tmp/engraving/badge.svg"),
+            name: "badge.svg".to_owned(),
+            kind: InputCatalogKind::Svg,
+            size_bytes: 2048,
+        };
+
+        assert_eq!(catalog_entry_display_name(&font_entry), "romanc");
+        assert_eq!(
+            catalog_entry_display_name(&svg_entry),
+            "SVG  badge.svg  2.0 KB"
+        );
+    }
+
+    #[test]
+    fn first_available_text_font_uses_first_compatible_catalog_entry() {
+        let entries = vec![
+            InputCatalogEntry {
+                path: PathBuf::from("/tmp/shape.svg"),
+                name: "shape.svg".to_owned(),
+                kind: InputCatalogKind::Svg,
+                size_bytes: 10,
+            },
+            InputCatalogEntry {
+                path: PathBuf::from("/tmp/alpha.cxf"),
+                name: "alpha.cxf".to_owned(),
+                kind: InputCatalogKind::CxfFont,
+                size_bytes: 20,
+            },
+            InputCatalogEntry {
+                path: PathBuf::from("/tmp/bravo.ttf"),
+                name: "bravo.ttf".to_owned(),
+                kind: InputCatalogKind::TtfFont,
+                size_bytes: 30,
+            },
+        ];
+
+        assert_eq!(
+            first_available_text_font_path(
+                &entries,
+                InputCatalogFilter::default(),
+                ToolView::TextEngrave
+            ),
+            Some(PathBuf::from("/tmp/alpha.cxf"))
+        );
+        assert_eq!(
+            first_available_text_font_path(
+                &entries,
+                InputCatalogFilter {
+                    cxf: false,
+                    ..InputCatalogFilter::default()
+                },
+                ToolView::TextEngrave
+            ),
+            Some(PathBuf::from("/tmp/bravo.ttf"))
+        );
+        assert_eq!(
+            first_available_text_font_path(
+                &entries,
+                InputCatalogFilter::default(),
+                ToolView::ImageEngrave
+            ),
+            None
+        );
     }
 
     #[test]
@@ -4026,20 +4480,6 @@ mod tests {
     }
 
     #[test]
-    fn kittest_clicks_preview_toolbar_button_and_updates_state() {
-        let app = test_app();
-        let mut harness = Harness::builder()
-            .with_size(egui::vec2(640.0, 80.0))
-            .build_ui_state(|ui, app| app.show_canvas_toolbar(ui), app);
-        let original_zoom = harness.state().transform.zoom;
-
-        harness.get_by_label("Zoom +").click();
-        harness.run();
-
-        assert!(harness.state().transform.zoom > original_zoom);
-    }
-
-    #[test]
     fn kittest_opens_text_catalog_for_text_tools_with_ttf_entry_without_panicking() {
         let Some(font_path) = first_system_ttf_for_ui_test() else {
             return;
@@ -4049,7 +4489,11 @@ mod tests {
             .and_then(|name| name.to_str())
             .unwrap_or("font.ttf")
             .to_owned();
-        let row_label = format!("TTF  {font_name}  4.0 KB");
+        let row_label = font_path
+            .file_stem()
+            .and_then(|name| name.to_str())
+            .unwrap_or(font_name.as_str())
+            .to_owned();
 
         for tool_view in [ToolView::TextEngrave, ToolView::TextVCarve] {
             let mut app = test_app();
@@ -4072,7 +4516,9 @@ mod tests {
                 .build_ui_state(|ui, app| app.show_workflow_input_panel(ui), app);
             harness.run();
 
-            harness.get_by_label("Catalog").click();
+            assert!(harness.query_by_label("Source").is_none());
+            assert!(harness.query_by_label("Open font file…").is_none());
+            harness.get_by_label("Font").click();
             harness.run();
 
             assert!(
@@ -4080,6 +4526,9 @@ mod tests {
                 "{} catalog did not render the TTF row",
                 tool_view.label()
             );
+            assert!(harness.query_by_label("Open custom font file…").is_some());
+            assert!(harness.query_by_label("Scan folder").is_none());
+            assert!(harness.query_by_label("System fonts").is_none());
         }
     }
 
