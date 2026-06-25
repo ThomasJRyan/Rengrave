@@ -1,0 +1,206 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-06-23T22:00:35-04:00",
+  "title": "Design System: R-Engrave",
+  "extensions": {
+    "colorMeta": {
+      "preview-bg": {
+        "role": "neutral",
+        "displayName": "Preview Charcoal",
+        "canonical": "#1c1e20",
+        "tonalRamp": ["#121416", "#1c1e20", "#2b3033", "#383f43", "#586268", "#788288", "#aeb7bc", "#d6dce0"]
+      },
+      "panel-bg": {
+        "role": "neutral",
+        "displayName": "Panel Graphite",
+        "canonical": "#24272a",
+        "tonalRamp": ["#16181a", "#24272a", "#2a2d30", "#3e484e", "#5a646a", "#788288", "#aeb7bc", "#d6dce0"]
+      },
+      "selection-blue": {
+        "role": "primary",
+        "displayName": "Selection Steel Blue",
+        "canonical": "#36738d",
+        "tonalRamp": ["#10242d", "#1f4657", "#36738d", "#5d7f8f", "#76a4be", "#9bc1d4", "#c2dce8", "#e7f3f8"]
+      },
+      "cut-green": {
+        "role": "primary",
+        "displayName": "Cut Green",
+        "canonical": "#5eb084",
+        "tonalRamp": ["#102418", "#1d5f3e", "#2f9e63", "#5eb084", "#83c6a1", "#acdbc0", "#d1ecd9", "#f4fbf7"]
+      },
+      "rapid-amber": {
+        "role": "secondary",
+        "displayName": "Rapid Amber",
+        "canonical": "#be8e48",
+        "tonalRamp": ["#2a1c0d", "#5c3e1f", "#8d662f", "#be8e48", "#d6a85e", "#e7c58d", "#f2ddb8", "#fbf2df"]
+      },
+      "warning-amber": {
+        "role": "secondary",
+        "displayName": "Warning Amber",
+        "canonical": "#e1b054",
+        "tonalRamp": ["#302209", "#6f4d18", "#a87d31", "#e1b054", "#edc87d", "#f4dca8", "#faedcf", "#fff8e9"]
+      },
+      "cleanup-blue": {
+        "role": "secondary",
+        "displayName": "Cleanup Blue",
+        "canonical": "#76a4be",
+        "tonalRamp": ["#102231", "#234b64", "#407796", "#76a4be", "#99bed0", "#bed7e3", "#ddecf2", "#f3f9fb"]
+      },
+      "input-overlay-pink": {
+        "role": "tertiary",
+        "displayName": "Input Overlay Pink",
+        "canonical": "#e6a8dccd",
+        "tonalRamp": ["#301527", "#663052", "#9c5f8d", "#c987b9", "#e6a8dc", "#f0c3e8", "#f7ddf2", "#fcf2fa"]
+      }
+    },
+    "typographyMeta": {
+      "title": {
+        "displayName": "Desktop Title",
+        "purpose": "Panel headings, modal titles, and workbench labels."
+      },
+      "body": {
+        "displayName": "Desktop Body",
+        "purpose": "Ordinary labels, menus, warnings, and supporting text."
+      },
+      "label": {
+        "displayName": "Control Label",
+        "purpose": "Form rows, checkboxes, buttons, combo boxes, and toggles."
+      },
+      "mono": {
+        "displayName": "Machine Readout",
+        "purpose": "Coordinates, dimensions, paths, G-code statistics, and scale labels."
+      }
+    },
+    "shadows": [],
+    "motion": [
+      {
+        "name": "state-feedback-only",
+        "value": "150ms-250ms state transitions only",
+        "purpose": "Use motion only for state feedback where egui supports it; no decorative choreography."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "desktop-min",
+        "value": "1280px x 800px"
+      },
+      {
+        "name": "left-panel",
+        "value": "450px-640px"
+      },
+      {
+        "name": "right-panel",
+        "value": "280px-460px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Standard Button",
+      "kind": "button",
+      "refersTo": "button-standard",
+      "description": "Default compact command button for ordinary desktop actions.",
+      "html": "<button class=\"ds-btn-standard\">Fit</button>",
+      "css": ".ds-btn-standard { height: 22px; padding: 4px 10px; border-radius: 4px; border: 1px solid #3a4246; background: #2a2d30; color: #d6dce0; font: 400 13px/1.25 system-ui, sans-serif; transition: background-color 160ms ease-out, border-color 160ms ease-out; } .ds-btn-standard:hover { background: #3e484e; } .ds-btn-standard:focus-visible { outline: 2px solid #36738d; outline-offset: 2px; } .ds-btn-standard:active { background: #5d7f8f; }"
+    },
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Focused command emphasis for calculate, export, or recalculate actions.",
+      "html": "<button class=\"ds-btn-primary\">Generate G-code</button>",
+      "css": ".ds-btn-primary { height: 22px; padding: 4px 10px; border-radius: 4px; border: 1px solid #5d7f8f; background: #36738d; color: #d6dce0; font: 400 13px/1.25 system-ui, sans-serif; transition: background-color 160ms ease-out, border-color 160ms ease-out; } .ds-btn-primary:hover { background: #5d7f8f; } .ds-btn-primary:focus-visible { outline: 2px solid #76a4be; outline-offset: 2px; } .ds-btn-primary:active { background: #2f657d; }"
+    },
+    {
+      "name": "Path Field",
+      "kind": "input",
+      "refersTo": "field-standard",
+      "description": "Right-aligned path or value field paired with a Browse command.",
+      "html": "<label class=\"ds-path-row\"><span>G-code</span><input value=\"/tmp/output.ngc\" /><button>Browse</button></label>",
+      "css": ".ds-path-row { display: flex; align-items: center; gap: 8px; width: 360px; color: #d6dce0; font: 400 13px/1.25 system-ui, sans-serif; } .ds-path-row span { width: 88px; } .ds-path-row input { width: 170px; height: 22px; box-sizing: border-box; padding: 2px 6px; text-align: right; border-radius: 4px; border: 1px solid #3a4246; background: #1c1e20; color: #d6dce0; font: inherit; } .ds-path-row input:focus-visible { outline: 2px solid #36738d; outline-offset: 2px; } .ds-path-row button { height: 22px; padding: 4px 10px; border-radius: 4px; border: 1px solid #3a4246; background: #2a2d30; color: #d6dce0; font: inherit; } .ds-path-row button:hover { background: #3e484e; }"
+    },
+    {
+      "name": "Preview Legend",
+      "kind": "custom",
+      "refersTo": "preview-overlay",
+      "description": "Floating canvas overlay for layer counts and coordinate bounds.",
+      "html": "<div class=\"ds-preview-legend\"><div><i class=\"cut\"></i>Cut 142</div><div><i class=\"rapid\"></i>Rapid 37</div><div><i class=\"cleanup\"></i>Cleanup 18</div><div>X -1.2500..4.5000</div></div>",
+      "css": ".ds-preview-legend { width: 172px; padding: 7px 8px; border-radius: 4px; border: 1px solid #3a4246; background: rgba(18, 20, 22, 0.82); color: #d6dce0; font: 400 11px/16px monospace; } .ds-preview-legend div { height: 16px; white-space: nowrap; } .ds-preview-legend i { display: inline-block; width: 7px; height: 7px; margin-right: 8px; border-radius: 50%; vertical-align: middle; } .ds-preview-legend .cut { background: #5eb084; } .ds-preview-legend .rapid { background: #be8e48; } .ds-preview-legend .cleanup { background: #76a4be; }"
+    },
+    {
+      "name": "Status Strip",
+      "kind": "custom",
+      "refersTo": "preview-overlay",
+      "description": "Compact bottom readout for ready or working state plus machine statistics.",
+      "html": "<div class=\"ds-status-strip\"><span class=\"ready\">●</span><span>Ready</span><b></b><code>Lines: 1842</code><b></b><code>Arcs: 16</code><b></b><code>Est: 12m</code></div>",
+      "css": ".ds-status-strip { display: flex; align-items: center; gap: 8px; min-height: 26px; padding: 4px 8px; background: #24272a; color: #d6dce0; font: 400 13px/1.25 system-ui, sans-serif; } .ds-status-strip .ready { color: #5eb084; } .ds-status-strip code { color: #d6dce0; font: 400 12px/1.25 monospace; } .ds-status-strip b { width: 1px; height: 14px; background: #3a4246; }"
+    },
+    {
+      "name": "Logo Mark",
+      "kind": "custom",
+      "refersTo": "button-primary",
+      "description": "Compact app mark used in the top toolbar.",
+      "html": "<div class=\"ds-logo-mark\">R</div>",
+      "css": ".ds-logo-mark { width: 40px; height: 40px; display: grid; place-items: center; border-radius: 6px; border: 1.5px solid #1d5f3e; background: #2f9e63; color: #f4fbf7; font: 400 28px/1 system-ui, sans-serif; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Machinist's Bench",
+    "overview": "R-Engrave should feel like native functional software for a CNC workflow: dense, direct, and arranged for repeated use by someone checking dimensions before cutting material. The system is not trying to impress like a webpage. It should look like a workbench where every control has a job, every status indicator tells the user something useful, and every color earns its place in the toolpath review loop.\n\nThe current visual system is a restrained dark desktop interface with graphite panels, a deep preview canvas, compact form rows, and color reserved for machine state or toolpath semantics. Future UI work should strengthen this vocabulary rather than introducing marketing-page composition, decorative imagery, oversized headings, or novelty controls.",
+    "keyCharacteristics": [
+      "Compact desktop density with stable panel widths and fixed-height controls.",
+      "Dark graphite surfaces that keep the toolpath preview visually dominant.",
+      "Semantic color for cut, rapid, cleanup, warning, ready, stale, selection, and overlay states.",
+      "Familiar egui-native controls: menus, sliders, checkboxes, drag values, combo boxes, and modal dialogs.",
+      "Monospace readouts for numeric state, G-code statistics, scale, extents, and cursor coordinates."
+    ],
+    "rules": [
+      {
+        "name": "The Accent Means State Rule",
+        "body": "Green, amber, blue, and pink are not decoration. They are reserved for toolpath layers, output status, warnings, selection, and overlays.",
+        "section": "colors"
+      },
+      {
+        "name": "The Preview First Rule",
+        "body": "The preview canvas must stay visually dominant. Panels support the work; they do not compete with toolpath geometry.",
+        "section": "colors"
+      },
+      {
+        "name": "The No Hero Type Rule",
+        "body": "R-Engrave is not a webpage. Large display headings, promotional type scale, and landing-page hierarchy are prohibited in the desktop workbench.",
+        "section": "typography"
+      },
+      {
+        "name": "The Numbers Are Instruments Rule",
+        "body": "Numeric machining state belongs in monospace text so values align mentally with measurement, code, and machine output.",
+        "section": "typography"
+      },
+      {
+        "name": "The Flat Workbench Rule",
+        "body": "Surfaces are flat at rest. Do not add soft drop shadows, glass effects, or decorative elevation to make controls look more designed.",
+        "section": "elevation"
+      },
+      {
+        "name": "The Stroke Shows Containment Rule",
+        "body": "Use a 1px stroke for overlay panels, scale bars, logo marks, and modal containment when the boundary matters.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "Do keep the interface compact, direct, and arranged around the CNC workflow: input, settings, preview, output, status, and logs.",
+      "Do reserve accent colors for toolpath layers, output state, warnings, selection, and overlays.",
+      "Do keep the preview canvas central and visually dominant.",
+      "Do use monospace readouts for machine-like values: coordinates, dimensions, line counts, arc counts, scale, paths, and G-code summaries.",
+      "Do keep every state label explicit; never rely on color alone for critical machining or output state.",
+      "Do preserve familiar egui desktop affordances: menus, checkboxes, sliders, combo boxes, drag values, scroll areas, and modals."
+    ],
+    "donts": [
+      "Don't make R-Engrave feel like a webpage or marketing surface.",
+      "Don't use hero layouts, decorative imagery, oversized typography, promotional copy, empty visual flourish, or controls arranged for visual novelty instead of task flow.",
+      "Don't add cards as decorative section wrappers. Use panels, separators, and the preview canvas structure.",
+      "Don't introduce gradient text, glass effects, soft oversized shadows, diagonal stripe backgrounds, or side-stripe card accents.",
+      "Don't invent mobile-first or landing-page responsive patterns. This is resizable desktop software.",
+      "Don't use color as the only indicator for warnings, stale output, readiness, active layers, or disabled functionality."
+    ]
+  }
+}
