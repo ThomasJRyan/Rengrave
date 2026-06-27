@@ -206,6 +206,7 @@ impl RengraveApp {
             controls.convert_units(UnitsChoice::default_ui());
         }
         controls.cut_type = tool_view.cut_type();
+        controls.inlay = tool_view.uses_inlay();
         let (default_gcode_path, default_svg_path, default_dxf_path) =
             default_output_paths(&default_dir);
         let mut app = Self {
@@ -335,6 +336,7 @@ impl RengraveApp {
                     display_input_path.as_deref(),
                 );
                 self.controls.cut_type = self.tool_view.cut_type();
+                self.controls.inlay = self.tool_view.uses_inlay();
                 self.show_toolpath = get_legacy_bool(&document.settings, "show_v_path", true);
                 self.show_bounds = get_legacy_bool(&document.settings, "show_box", true);
                 self.show_axes = get_legacy_bool(&document.settings, "show_axis", true);
@@ -424,8 +426,15 @@ impl RengraveApp {
             &project.settings,
             path_from_text(&self.input_path).as_deref(),
         );
-        self.tool_view = ToolView::parse(&project.workbench).unwrap_or(inferred);
+        self.tool_view = ToolView::parse(&project.workbench)
+            .map(|tool_view| {
+                tool_view.with_inlay(
+                    tool_view.uses_vcarve() && get_legacy_bool(&project.settings, "inlay", false),
+                )
+            })
+            .unwrap_or(inferred);
         self.controls.cut_type = self.tool_view.cut_type();
+        self.controls.inlay = self.tool_view.uses_inlay();
         self.show_toolpath = get_legacy_bool(&project.settings, "show_v_path", true);
         self.show_bounds = get_legacy_bool(&project.settings, "show_box", true);
         self.show_axes = get_legacy_bool(&project.settings, "show_axis", true);
@@ -467,6 +476,7 @@ impl RengraveApp {
         let defaults = default_legacy_settings();
         self.controls = default_ui_controls();
         self.controls.cut_type = self.tool_view.cut_type();
+        self.controls.inlay = self.tool_view.uses_inlay();
         self.show_toolpath = get_legacy_bool(&defaults, "show_v_path", true);
         self.show_rapids = true;
         self.show_cleanup = true;
@@ -837,10 +847,12 @@ impl RengraveApp {
     fn set_tool_view(&mut self, tool_view: ToolView) {
         if self.tool_view == tool_view {
             self.controls.cut_type = tool_view.cut_type();
+            self.controls.inlay = tool_view.uses_inlay();
             return;
         }
         self.tool_view = tool_view;
         self.controls.cut_type = tool_view.cut_type();
+        self.controls.inlay = tool_view.uses_inlay();
         self.status = format!("{} selected", tool_view.label());
     }
 
@@ -1232,7 +1244,9 @@ impl RengraveApp {
             }
         });
         ui.horizontal_wrapped(|ui| {
-            ui.checkbox(&mut self.controls.inlay, "Inlay");
+            if ui.checkbox(&mut self.controls.inlay, "Inlay").changed() {
+                self.tool_view = self.tool_view.with_inlay(self.controls.inlay);
+            }
             ui.checkbox(&mut self.controls.v_flop, "Flip normals")
                 .on_hover_text("Reverse the side used for V-carve normal calculations.");
         });
@@ -2359,9 +2373,14 @@ fn path_display_name(path: &Path) -> String {
 }
 
 fn tool_summary(controls: &UiControls) -> String {
+    let job = if controls.cut_type == CutTypeChoice::VCarve && controls.inlay {
+        "Inlay"
+    } else {
+        controls.cut_type.label()
+    };
     format!(
         "Job: {}, {}, {}",
-        controls.cut_type.label(),
+        job,
         controls.bit_shape.label(),
         controls.units.label()
     )
@@ -3262,6 +3281,24 @@ mod tests {
     }
 
     #[test]
+    fn new_inlay_projects_set_f_engrave_inlay_flags() {
+        let mut app = test_app();
+
+        app.start_new_project(ToolView::ImageInlay, egui::Context::default());
+
+        assert_eq!(app.tool_view, ToolView::ImageInlay);
+        assert_eq!(app.controls.cut_type, CutTypeChoice::VCarve);
+        assert!(app.controls.inlay);
+        assert_eq!(app.status, "New Image Inlay project");
+
+        app.start_new_project(ToolView::ImageVCarve, egui::Context::default());
+
+        assert_eq!(app.tool_view, ToolView::ImageVCarve);
+        assert_eq!(app.controls.cut_type, CutTypeChoice::VCarve);
+        assert!(!app.controls.inlay);
+    }
+
+    #[test]
     fn launch_font_or_image_ignores_preferences_when_settings_arg_is_explicit() {
         let preferences = UiPreferences {
             input_path: "/tmp/remembered.cxf".to_owned(),
@@ -3627,6 +3664,8 @@ mod tests {
         );
         assert_eq!(input_source_summary("  "), "Source: none");
         assert_eq!(tool_summary(&controls), "Job: V-carve, Ball, mm");
+        controls.inlay = true;
+        assert_eq!(tool_summary(&controls), "Job: Inlay, Ball, mm");
         assert_eq!(
             output_state_summary(true, false, true),
             "Output: calculating"
@@ -3651,22 +3690,27 @@ mod tests {
         assert_eq!(ToolView::ImageEngrave.cut_type(), CutTypeChoice::Engrave);
         assert_eq!(ToolView::TextVCarve.cut_type(), CutTypeChoice::VCarve);
         assert_eq!(ToolView::ImageVCarve.cut_type(), CutTypeChoice::VCarve);
+        assert_eq!(ToolView::TextInlay.cut_type(), CutTypeChoice::VCarve);
+        assert_eq!(ToolView::ImageInlay.cut_type(), CutTypeChoice::VCarve);
+        assert!(ToolView::TextInlay.uses_inlay());
+        assert!(ToolView::ImageInlay.uses_inlay());
         assert!(ToolView::TextVCarve.accepts_kind(InputCatalogKind::CxfFont));
         assert!(!ToolView::TextVCarve.accepts_kind(InputCatalogKind::Bitmap));
         assert!(ToolView::ImageVCarve.accepts_kind(InputCatalogKind::Dxf));
         assert!(ToolView::ImageVCarve.accepts_kind(InputCatalogKind::Svg));
         assert!(ToolView::ImageVCarve.accepts_kind(InputCatalogKind::Bitmap));
         assert_eq!(ToolView::TextEngrave.category_label(), "Text generation");
-        assert_eq!(ToolView::ImageVCarve.category_label(), "Image generation");
-        assert_eq!(ToolView::ImageVCarve.value(), "image-v-carve");
-        assert_eq!(
-            ToolView::parse("image-v-carve"),
-            Some(ToolView::ImageVCarve)
-        );
+        assert_eq!(ToolView::ImageInlay.category_label(), "Image generation");
+        assert_eq!(ToolView::ImageInlay.value(), "image-inlay");
+        assert_eq!(ToolView::parse("image-inlay"), Some(ToolView::ImageInlay));
         assert_eq!(ToolView::parse("unknown"), None);
         assert_eq!(
             ToolView::TextVCarve.with_input_kind(InputCatalogKind::Bitmap),
             ToolView::ImageVCarve
+        );
+        assert_eq!(
+            ToolView::TextInlay.with_input_kind(InputCatalogKind::Bitmap),
+            ToolView::ImageInlay
         );
         assert_eq!(
             ToolView::TextEngrave.with_input_kind(InputCatalogKind::Svg),
@@ -3675,6 +3719,29 @@ mod tests {
         assert_eq!(
             ToolView::ImageEngrave.with_input_kind(InputCatalogKind::TtfFont),
             ToolView::TextEngrave
+        );
+        assert_eq!(
+            ToolView::ImageInlay.with_inlay(false),
+            ToolView::ImageVCarve
+        );
+        assert_eq!(ToolView::TextVCarve.with_inlay(true), ToolView::TextInlay);
+        let text_tools = ToolView::ALL
+            .iter()
+            .filter(|tool_view| tool_view.category_label() == "Text generation")
+            .map(|tool_view| tool_view.label())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            text_tools,
+            vec!["Text Engrave", "Text V-carve", "Text Inlay"]
+        );
+        let image_tools = ToolView::ALL
+            .iter()
+            .filter(|tool_view| tool_view.category_label() == "Image generation")
+            .map(|tool_view| tool_view.label())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            image_tools,
+            vec!["Image Engrave", "Image V-carve", "Image Inlay"]
         );
     }
 
@@ -3701,6 +3768,15 @@ mod tests {
         assert_eq!(
             ToolView::from_settings_and_path(&settings, Some(Path::new("/tmp/shape.svg"))),
             ToolView::ImageVCarve
+        );
+        settings.set_or_push("inlay", "1", false);
+        assert_eq!(
+            ToolView::from_settings_and_path(&settings, Some(Path::new("/tmp/font.ttf"))),
+            ToolView::TextInlay
+        );
+        assert_eq!(
+            ToolView::from_settings_and_path(&settings, Some(Path::new("/tmp/shape.dxf"))),
+            ToolView::ImageInlay
         );
     }
 
@@ -3985,6 +4061,14 @@ mod tests {
             first_available_text_font_path(
                 &entries,
                 InputCatalogFilter::default(),
+                ToolView::TextInlay
+            ),
+            Some(PathBuf::from("/tmp/alpha.cxf"))
+        );
+        assert_eq!(
+            first_available_text_font_path(
+                &entries,
+                InputCatalogFilter::default(),
                 ToolView::ImageEngrave
             ),
             None
@@ -4045,6 +4129,18 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["a.cxf", "b.ttf"]
         );
+        let text_inlay_entries = visible_input_catalog_entries_for_tool(
+            &entries,
+            InputCatalogFilter::default(),
+            ToolView::TextInlay,
+        );
+        assert_eq!(
+            text_inlay_entries
+                .iter()
+                .map(|entry| entry.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["a.cxf", "b.ttf"]
+        );
         let image_view_entries = visible_input_catalog_entries_for_tool(
             &entries,
             InputCatalogFilter::default(),
@@ -4052,6 +4148,18 @@ mod tests {
         );
         assert_eq!(
             image_view_entries
+                .iter()
+                .map(|entry| entry.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["c.dxf", "d.png", "e.svg"]
+        );
+        let image_inlay_entries = visible_input_catalog_entries_for_tool(
+            &entries,
+            InputCatalogFilter::default(),
+            ToolView::ImageInlay,
+        );
+        assert_eq!(
+            image_inlay_entries
                 .iter()
                 .map(|entry| entry.name.as_str())
                 .collect::<Vec<_>>(),
@@ -4495,10 +4603,15 @@ mod tests {
             .unwrap_or(font_name.as_str())
             .to_owned();
 
-        for tool_view in [ToolView::TextEngrave, ToolView::TextVCarve] {
+        for tool_view in [
+            ToolView::TextEngrave,
+            ToolView::TextVCarve,
+            ToolView::TextInlay,
+        ] {
             let mut app = test_app();
             app.tool_view = tool_view;
             app.controls.cut_type = tool_view.cut_type();
+            app.controls.inlay = tool_view.uses_inlay();
             app.input_catalog = InputCatalog {
                 dir: font_path.parent().map(Path::to_path_buf),
                 is_system_fonts: false,
@@ -4611,6 +4724,7 @@ mod tests {
         controls.justify = JustifyChoice::Right;
         controls.yscale = 4.25;
         controls.plotbox = true;
+        controls.inlay = true;
         controls.mirror = true;
 
         let overrides = controls.overrides();
@@ -4629,6 +4743,7 @@ mod tests {
         assert_eq!(value_for("justify"), Some("Right"));
         assert_eq!(value_for("YSCALE"), Some("4.25"));
         assert_eq!(value_for("plotbox"), Some("1"));
+        assert_eq!(value_for("inlay"), Some("1"));
         assert_eq!(value_for("mirror"), Some("1"));
     }
 

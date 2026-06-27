@@ -75,14 +75,18 @@ pub(crate) enum ToolView {
     ImageEngrave,
     TextVCarve,
     ImageVCarve,
+    TextInlay,
+    ImageInlay,
 }
 
 impl ToolView {
-    pub(crate) const ALL: [Self; 4] = [
+    pub(crate) const ALL: [Self; 6] = [
         Self::TextEngrave,
-        Self::ImageEngrave,
         Self::TextVCarve,
+        Self::TextInlay,
+        Self::ImageEngrave,
         Self::ImageVCarve,
+        Self::ImageInlay,
     ];
 
     pub(crate) fn label(self) -> &'static str {
@@ -91,6 +95,8 @@ impl ToolView {
             Self::ImageEngrave => "Image Engrave",
             Self::TextVCarve => "Text V-carve",
             Self::ImageVCarve => "Image V-carve",
+            Self::TextInlay => "Text Inlay",
+            Self::ImageInlay => "Image Inlay",
         }
     }
 
@@ -100,6 +106,8 @@ impl ToolView {
             Self::ImageEngrave => "image-engrave",
             Self::TextVCarve => "text-v-carve",
             Self::ImageVCarve => "image-v-carve",
+            Self::TextInlay => "text-inlay",
+            Self::ImageInlay => "image-inlay",
         }
     }
 
@@ -109,6 +117,8 @@ impl ToolView {
             "image-engrave" => Some(Self::ImageEngrave),
             "text-v-carve" => Some(Self::TextVCarve),
             "image-v-carve" => Some(Self::ImageVCarve),
+            "text-inlay" => Some(Self::TextInlay),
+            "image-inlay" => Some(Self::ImageInlay),
             _ => None,
         }
     }
@@ -122,15 +132,25 @@ impl ToolView {
     }
 
     pub(crate) fn uses_text(self) -> bool {
-        matches!(self, Self::TextEngrave | Self::TextVCarve)
+        matches!(self, Self::TextEngrave | Self::TextVCarve | Self::TextInlay)
     }
 
     pub(crate) fn uses_image(self) -> bool {
-        matches!(self, Self::ImageEngrave | Self::ImageVCarve)
+        matches!(
+            self,
+            Self::ImageEngrave | Self::ImageVCarve | Self::ImageInlay
+        )
     }
 
     pub(crate) fn uses_vcarve(self) -> bool {
-        matches!(self, Self::TextVCarve | Self::ImageVCarve)
+        matches!(
+            self,
+            Self::TextVCarve | Self::ImageVCarve | Self::TextInlay | Self::ImageInlay
+        )
+    }
+
+    pub(crate) fn uses_inlay(self) -> bool {
+        matches!(self, Self::TextInlay | Self::ImageInlay)
     }
 
     pub(crate) fn cut_type(self) -> CutTypeChoice {
@@ -152,16 +172,21 @@ impl ToolView {
 
     pub(crate) fn with_input_kind(self, kind: InputCatalogKind) -> Self {
         let vcarve = self.uses_vcarve();
+        let inlay = self.uses_inlay();
         match kind {
             InputCatalogKind::CxfFont | InputCatalogKind::TtfFont => {
-                if vcarve {
+                if inlay {
+                    Self::TextInlay
+                } else if vcarve {
                     Self::TextVCarve
                 } else {
                     Self::TextEngrave
                 }
             }
             InputCatalogKind::Dxf | InputCatalogKind::Svg | InputCatalogKind::Bitmap => {
-                if vcarve {
+                if inlay {
+                    Self::ImageInlay
+                } else if vcarve {
                     Self::ImageVCarve
                 } else {
                     Self::ImageEngrave
@@ -170,8 +195,24 @@ impl ToolView {
         }
     }
 
+    pub(crate) fn with_inlay(self, inlay: bool) -> Self {
+        match (
+            self.uses_text(),
+            self.uses_image(),
+            self.uses_vcarve(),
+            inlay,
+        ) {
+            (true, _, true, true) => Self::TextInlay,
+            (true, _, true, false) => Self::TextVCarve,
+            (_, true, true, true) => Self::ImageInlay,
+            (_, true, true, false) => Self::ImageVCarve,
+            _ => self,
+        }
+    }
+
     pub(crate) fn from_settings_and_path(settings: &LegacySettings, path: Option<&Path>) -> Self {
         let cut_type = CutTypeChoice::parse(settings.get_last("cut_type").unwrap_or("engrave"));
+        let inlay = get_legacy_bool(settings, "inlay", false);
         let image_input = path
             .and_then(InputCatalogKind::from_path)
             .is_some_and(|kind| {
@@ -180,11 +221,13 @@ impl ToolView {
                     InputCatalogKind::Dxf | InputCatalogKind::Svg | InputCatalogKind::Bitmap
                 )
             });
-        match (cut_type, image_input) {
-            (CutTypeChoice::VCarve, true) => Self::ImageVCarve,
-            (CutTypeChoice::VCarve, false) => Self::TextVCarve,
-            (CutTypeChoice::Engrave, true) => Self::ImageEngrave,
-            (CutTypeChoice::Engrave, false) => Self::TextEngrave,
+        match (cut_type, image_input, inlay) {
+            (CutTypeChoice::VCarve, true, true) => Self::ImageInlay,
+            (CutTypeChoice::VCarve, false, true) => Self::TextInlay,
+            (CutTypeChoice::VCarve, true, false) => Self::ImageVCarve,
+            (CutTypeChoice::VCarve, false, false) => Self::TextVCarve,
+            (CutTypeChoice::Engrave, true, _) => Self::ImageEngrave,
+            (CutTypeChoice::Engrave, false, _) => Self::TextEngrave,
         }
     }
 }
