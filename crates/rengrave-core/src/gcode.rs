@@ -306,7 +306,10 @@ pub fn write_cleanup_gcode(
     lines.extend(split_gcode_lines(&gcode_options.preamble));
 
     let paths = cleanup_paths(points);
-    for depth in cleanup_pass_depths(gcode_options.depth_z, vcarve_options) {
+    for depth in cleanup_pass_depths(
+        cleanup_depth(gcode_options.depth_z, vcarve_options),
+        vcarve_options,
+    ) {
         let depth_value = format_number(depth, dp);
         let mut feed_current = String::new();
         for path in sort_paths(paths.clone()) {
@@ -517,6 +520,14 @@ fn cleanup_pass_depths(depth: f64, vcarve_options: &VCarveOptions) -> Vec<f64> {
     }
 
     depths
+}
+
+fn cleanup_depth(depth: f64, vcarve_options: &VCarveOptions) -> f64 {
+    if vcarve_options.inlay {
+        vcarve_options.inlay_depth + vcarve_options.allowance
+    } else {
+        depth
+    }
 }
 
 fn sort_paths(mut paths: Vec<Vec<crate::geometry::Point>>) -> Vec<Vec<crate::geometry::Point>> {
@@ -1403,6 +1414,53 @@ mod tests {
         assert!(lines.contains(&"G1 Z-0.2000".to_owned()));
         assert!(lines.contains(&"G1 Z-0.2500".to_owned()));
         assert!(lines.contains(&"G1 Z-0.3000".to_owned()));
+    }
+
+    #[test]
+    fn inlay_cleanup_depth_matches_f_engrave_maxcut_plus_allowance() {
+        let options = GcodeOptions {
+            safe_z: 0.25,
+            depth_z: -0.005,
+            feed: 5.0,
+            plunge: 0.0,
+            accuracy: 0.001,
+            units: Units::Inch,
+            preamble: DEFAULT_GCODE_PREAMBLE.to_owned(),
+            postamble: "M5|M2".to_owned(),
+            variables_disabled: true,
+            arc_fit: ArcFit::None,
+        };
+        let cleanup = crate::cleanup::CleanupOptions::from_legacy(
+            &crate::settings::default_legacy_settings(),
+        );
+        let mut settings = crate::settings::default_legacy_settings();
+        settings.set_or_push("inlay", "1", false);
+        settings.set_or_push("allowance", "-0.1", false);
+        let vcarve = VCarveOptions::from_legacy(&settings);
+
+        assert!((cleanup_depth(options.depth_z, &vcarve) + 0.533).abs() < 1e-9);
+
+        let lines = write_cleanup_gcode(
+            &[
+                CleanupPoint {
+                    position: Point::new(0.0, 0.0),
+                    radius: 0.125,
+                    loop_id: 1,
+                },
+                CleanupPoint {
+                    position: Point::new(1.0, 0.0),
+                    radius: 0.125,
+                    loop_id: 1,
+                },
+            ],
+            &options,
+            &cleanup,
+            &vcarve,
+            CleanupBit::Straight,
+        );
+
+        assert!(lines.contains(&"G1 Z-0.5330".to_owned()));
+        assert!(!lines.contains(&"G1 Z-0.0050".to_owned()));
     }
 
     fn shallow_circle_segments() -> Vec<EngraveSegment> {

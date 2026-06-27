@@ -30,22 +30,31 @@ impl VCarveOptions {
         } else {
             step_len = step_len.max(0.0005);
         }
+        let bit_shape = BitShape::parse(settings.get_last("bit_shape").unwrap_or("VBIT"));
+        let bit_angle_degrees = get_f64(settings, "v_bit_angle", 60.0);
+        let bit_diameter = get_f64(settings, "v_bit_dia", 0.5);
+        let depth_limit = get_f64(settings, "v_depth_lim", 0.0);
 
         Self {
             step_len,
-            bit_shape: BitShape::parse(settings.get_last("bit_shape").unwrap_or("VBIT")),
-            bit_angle_degrees: get_f64(settings, "v_bit_angle", 60.0),
-            bit_diameter: get_f64(settings, "v_bit_dia", 0.5),
-            depth_limit: get_f64(settings, "v_depth_lim", 0.0),
+            bit_shape,
+            bit_angle_degrees,
+            bit_diameter,
+            depth_limit,
             inlay: get_legacy_bool(settings, "inlay", false),
             allowance: get_f64(settings, "allowance", 0.0),
-            inlay_depth: get_f64(settings, "v_depth_lim", 0.0),
+            inlay_depth: f_engrave_max_cut_depth(
+                bit_shape,
+                bit_angle_degrees,
+                bit_diameter,
+                depth_limit,
+            ),
             rough_stock: get_f64(settings, "v_rough_stk", 0.0),
             max_cut: get_f64(settings, "v_max_cut", -1.0),
             drive_corner_angle: get_f64(settings, "v_drv_crner", 135.0),
             step_corner_angle: get_f64(settings, "v_stp_crner", 200.0),
             check_mode: VCarveCheckMode::parse(settings.get_last("v_check_all").unwrap_or("all")),
-            v_flop: get_legacy_bool(settings, "v_flop", false),
+            v_flop: f_engrave_v_flop(settings),
         }
     }
 
@@ -130,6 +139,53 @@ impl VCarveOptions {
     fn half_angle(&self) -> f64 {
         (self.bit_angle_degrees / 2.0).to_radians()
     }
+}
+
+fn f_engrave_max_cut_depth(
+    bit_shape: BitShape,
+    bit_angle_degrees: f64,
+    bit_diameter: f64,
+    depth_limit: f64,
+) -> f64 {
+    let bit_depth = match bit_shape {
+        BitShape::VBit => {
+            let tangent = (bit_angle_degrees / 2.0).to_radians().tan();
+            if tangent == 0.0 {
+                f64::NAN
+            } else {
+                -bit_diameter / 2.0 / tangent
+            }
+        }
+        BitShape::Ball | BitShape::Flat => -bit_diameter / 2.0,
+    };
+    let depth = if bit_shape != BitShape::Flat {
+        if depth_limit < 0.0 {
+            bit_depth.max(depth_limit)
+        } else {
+            bit_depth
+        }
+    } else if depth_limit < 0.0 {
+        depth_limit
+    } else {
+        bit_depth
+    };
+    if depth.is_finite() {
+        format!("{depth:.3}").parse().unwrap_or(0.0)
+    } else {
+        0.0
+    }
+}
+
+fn f_engrave_v_flop(settings: &LegacySettings) -> bool {
+    let mut v_flop = get_legacy_bool(settings, "v_flop", false);
+    if settings.get_last("input_type") == Some("text") {
+        for key in ["plotbox", "mirror", "flip"] {
+            if get_legacy_bool(settings, key, false) {
+                v_flop = !v_flop;
+            }
+        }
+    }
+    v_flop
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1190,6 +1246,48 @@ mod tests {
         let options = VCarveOptions::from_legacy(&settings);
 
         assert!((options.effective_bit_diameter() - 0.1154700538).abs() < 1e-9);
+    }
+
+    #[test]
+    fn inlay_depth_uses_f_engrave_rounded_maxcut() {
+        let mut settings = default_legacy_settings();
+        settings.set_or_push("inlay", "1", false);
+        settings.set_or_push("allowance", "-0.1", false);
+        let options = VCarveOptions::from_legacy(&settings);
+
+        assert!((options.inlay_depth + 0.433).abs() < 1e-9);
+        assert!((options.depth_for_radius(0.0) + 0.433).abs() < 1e-9);
+        assert!((options.depth_for_radius(options.max_radius()) + 0.533).abs() < 1e-9);
+    }
+
+    #[test]
+    fn inlay_depth_honors_f_engrave_depth_limit_maxcut() {
+        let mut settings = default_legacy_settings();
+        settings.set_or_push("inlay", "1", false);
+        settings.set_or_push("v_depth_lim", "-0.2", false);
+        let options = VCarveOptions::from_legacy(&settings);
+
+        assert!((options.inlay_depth + 0.2).abs() < 1e-9);
+        assert!((options.depth_for_radius(0.0) + 0.2).abs() < 1e-9);
+    }
+
+    #[test]
+    fn v_flop_matches_f_engrave_text_transform_rules() {
+        let mut settings = default_legacy_settings();
+        settings.set_or_push("input_type", "text", false);
+        assert!(!VCarveOptions::from_legacy(&settings).v_flop);
+
+        settings.set_or_push("plotbox", "1", false);
+        assert!(VCarveOptions::from_legacy(&settings).v_flop);
+
+        settings.set_or_push("mirror", "1", false);
+        assert!(!VCarveOptions::from_legacy(&settings).v_flop);
+
+        settings.set_or_push("v_flop", "1", false);
+        assert!(VCarveOptions::from_legacy(&settings).v_flop);
+
+        settings.set_or_push("input_type", "image", false);
+        assert!(VCarveOptions::from_legacy(&settings).v_flop);
     }
 
     #[test]
