@@ -8,6 +8,7 @@ pub mod font;
 pub mod gcode;
 pub mod geometry;
 pub mod layout;
+pub mod profile;
 pub mod project;
 pub mod settings;
 pub mod svg;

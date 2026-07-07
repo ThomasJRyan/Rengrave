@@ -1,5 +1,6 @@
 use crate::cleanup::{CleanupBit, CleanupOptions, CleanupPoint};
 use crate::layout::{EngraveCircle, EngraveSegment};
+use crate::profile::{ProfileOperation, ProfileTab, ProfileTool};
 use crate::settings::{
     DEFAULT_GCODE_POSTAMBLE, DEFAULT_GCODE_PREAMBLE, LegacySettings, get_legacy_bool,
 };
@@ -7,6 +8,7 @@ use crate::vcarve::{VCarveOptions, VCarvePoint};
 
 const ZERO: f64 = 0.00001;
 const MAX_RADIUS: f64 = 1.0e30;
+const PROFILE_TAB_RAMP_ANGLE_DEGREES: f64 = 45.0;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct GcodeOptions {
@@ -18,6 +20,7 @@ pub struct GcodeOptions {
     pub units: Units,
     pub preamble: String,
     pub postamble: String,
+    pub return_to_origin: bool,
     pub variables_disabled: bool,
     pub arc_fit: ArcFit,
 }
@@ -39,6 +42,7 @@ impl GcodeOptions {
                 .get_last("gpost")
                 .unwrap_or(DEFAULT_GCODE_POSTAMBLE)
                 .to_owned(),
+            return_to_origin: get_legacy_bool(settings, "return_to_origin", true),
             variables_disabled: get_legacy_bool(settings, "var_dis", true),
             arc_fit: ArcFit::parse(settings.get_last("arc_fit").unwrap_or("none")),
         }
@@ -176,8 +180,7 @@ pub fn write_engrave_gcode_with_circle(
         );
     }
 
-    lines.push(format!("G0 Z{safe_value}"));
-    lines.extend(split_gcode_lines(&options.postamble));
+    finish_gcode(&mut lines, options, &safe_value, dp);
     lines
 }
 
@@ -256,8 +259,7 @@ pub fn write_vcarve_gcode(
         );
     }
 
-    lines.push(format!("G0 Z{safe_value}"));
-    lines.extend(split_gcode_lines(&gcode_options.postamble));
+    finish_gcode(&mut lines, gcode_options, &safe_value, dp);
     lines
 }
 
@@ -351,9 +353,215 @@ pub fn write_cleanup_gcode(
         }
     }
 
-    lines.push(format!("G0 Z{safe_value}"));
-    lines.extend(split_gcode_lines(&gcode_options.postamble));
+    finish_gcode(&mut lines, gcode_options, &safe_value, dp);
     lines
+}
+
+pub fn write_profile_gcode(
+    operation: &ProfileOperation,
+    gcode_options: &GcodeOptions,
+) -> Vec<String> {
+    let Some(first) = operation.path.first() else {
+        return Vec::new();
+    };
+    if operation.path.len() < 2 || operation.depths.is_empty() {
+        return Vec::new();
+    }
+
+    let dp = gcode_options.coord_digits();
+    let dpfeed = gcode_options.feed_digits();
+    let safe_number = format_number(gcode_options.safe_z, dp);
+    let safe_value = if gcode_options.variables_disabled {
+        safe_number.clone()
+    } else {
+        "#1".to_owned()
+    };
+    let feed = format_number(gcode_options.feed, dpfeed);
+    let mut plunge = format_number(gcode_options.plunge, dpfeed);
+    let zero_feed = format_number(0.0, dpfeed);
+    if plunge == zero_feed {
+        plunge = feed.clone();
+    }
+
+    let mut lines = Vec::new();
+    lines.push(format!("( {} )", operation.tool.comment()));
+    lines.push(format!(
+        "( Profile offset: {} )",
+        format_number(operation.offset, dp)
+    ));
+    lines.push(format!(
+        "( Profile corner radius: {} )",
+        format_number(operation.corner_radius, dp)
+    ));
+    if operation.tool == ProfileTool::StraightEndmill {
+        lines.push(format!("( Profile passes: {} )", operation.depths.len()));
+        if !operation.tabs.is_empty() {
+            lines.push(format!("( Profile tabs: {} )", operation.tabs.len()));
+            lines.push(format!(
+                "( Profile tab height: {} )",
+                format_number(operation.tab_height, dp)
+            ));
+        }
+    }
+    if gcode_options.arc_fit.enabled() {
+        lines.push("G17".to_owned());
+    }
+    if !gcode_options.variables_disabled {
+        lines.push(format!("#1 = {}  ( Safe Z )", safe_number));
+    }
+    lines.push("G90".to_owned());
+    if gcode_options.arc_fit == ArcFit::Center {
+        lines.push("G91.1".to_owned());
+    }
+    lines.push(gcode_options.units.gcode().to_owned());
+    lines.extend(split_gcode_lines(&gcode_options.preamble));
+    lines.push(format!("F{feed}"));
+
+    for depth in &operation.depths {
+        let depth_value = format_number(*depth, dp);
+        lines.push(format!("G0 Z{safe_value}"));
+        lines.push(format!(
+            "G0 X{} Y{}",
+            format_number(first.x, dp),
+            format_number(first.y, dp)
+        ));
+        if plunge == feed {
+            lines.push(format!("G1 Z{depth_value}"));
+        } else {
+            lines.push(format!("G1 Z{depth_value} F{plunge}"));
+            lines.push(format!("F{feed}"));
+        }
+        if operation.tabs.is_empty() {
+            emit_cut_path(&mut lines, &operation.path, gcode_options, dp);
+        } else {
+            emit_profile_path_with_tabs(&mut lines, operation, *depth, dp);
+        }
+    }
+
+    finish_gcode(&mut lines, gcode_options, &safe_value, dp);
+    lines
+}
+
+fn emit_profile_path_with_tabs(
+    lines: &mut Vec<String>,
+    operation: &ProfileOperation,
+    depth: f64,
+    digits: usize,
+) {
+    let tab_depth = tab_depth(depth, operation);
+    let tab_delta = (tab_depth - depth).abs();
+    let mut distance_cursor = 0.0;
+    let mut current_z = depth;
+    for pair in operation.path.windows(2) {
+        let start = pair[0];
+        let end = pair[1];
+        let segment_length = distance(start, end);
+        if segment_length <= f64::EPSILON {
+            continue;
+        }
+
+        let mut splits = vec![0.0, segment_length];
+        for tab in &operation.tabs {
+            let ramp_length = profile_tab_ramp_length(tab, tab_delta);
+            let start_ramp = tab.start_distance - ramp_length - distance_cursor;
+            let end_ramp = tab.end_distance + ramp_length - distance_cursor;
+            if start_ramp > 0.0 && start_ramp < segment_length {
+                splits.push(start_ramp);
+            }
+            let start_t = tab.start_distance - distance_cursor;
+            let end_t = tab.end_distance - distance_cursor;
+            if start_t > 0.0 && start_t < segment_length {
+                splits.push(start_t);
+            }
+            if end_t > 0.0 && end_t < segment_length {
+                splits.push(end_t);
+            }
+            if end_ramp > 0.0 && end_ramp < segment_length {
+                splits.push(end_ramp);
+            }
+        }
+        splits.sort_by(|left, right| left.total_cmp(right));
+        splits.dedup_by(|left, right| (*left - *right).abs() <= f64::EPSILON);
+
+        for split in splits.windows(2) {
+            let sub_start = split[0];
+            let sub_end = split[1];
+            if sub_end - sub_start <= f64::EPSILON {
+                continue;
+            }
+            let target_distance = distance_cursor + sub_end;
+            let target_z = profile_tab_z(target_distance, depth, tab_depth, operation);
+            if (target_z - current_z).abs() > f64::EPSILON {
+                let point = lerp_point(start, end, sub_end / segment_length);
+                lines.push(format!(
+                    "G1 X{} Y{} Z{}",
+                    format_number(point.x, digits),
+                    format_number(point.y, digits),
+                    format_number(target_z, digits)
+                ));
+                current_z = target_z;
+            } else {
+                let point = lerp_point(start, end, sub_end / segment_length);
+                lines.push(format!(
+                    "G1 X{} Y{}",
+                    format_number(point.x, digits),
+                    format_number(point.y, digits)
+                ));
+            }
+        }
+        distance_cursor += segment_length;
+    }
+}
+
+fn tab_depth(depth: f64, operation: &ProfileOperation) -> f64 {
+    let final_depth = operation.depths.last().copied().unwrap_or(depth).min(depth);
+    let tab_floor = final_depth + operation.tab_height.max(0.0);
+    depth.max(tab_floor)
+}
+
+fn profile_tab_z(distance: f64, depth: f64, tab_depth: f64, operation: &ProfileOperation) -> f64 {
+    let ramp_delta = (tab_depth - depth).abs();
+    operation
+        .tabs
+        .iter()
+        .map(|tab| {
+            let ramp_length = profile_tab_ramp_length(tab, ramp_delta);
+            if ramp_length <= f64::EPSILON {
+                return depth;
+            }
+
+            if distance < tab.start_distance - ramp_length
+                || distance > tab.end_distance + ramp_length
+            {
+                depth
+            } else if distance < tab.start_distance {
+                let progress = (distance - (tab.start_distance - ramp_length)) / ramp_length;
+                depth + (tab_depth - depth) * progress
+            } else if distance <= tab.end_distance {
+                tab_depth
+            } else {
+                let progress = (distance - tab.end_distance) / ramp_length;
+                tab_depth + (depth - tab_depth) * progress
+            }
+        })
+        .fold(depth, f64::max)
+}
+
+fn profile_tab_ramp_length(tab: &ProfileTab, z_delta: f64) -> f64 {
+    let angle = PROFILE_TAB_RAMP_ANGLE_DEGREES.to_radians();
+    let rise_run = z_delta / angle.tan();
+    rise_run.min((tab.end_distance - tab.start_distance).abs() / 2.0)
+}
+
+fn lerp_point(
+    start: crate::geometry::Point,
+    end: crate::geometry::Point,
+    t: f64,
+) -> crate::geometry::Point {
+    crate::geometry::Point::new(
+        start.x + (end.x - start.x) * t,
+        start.y + (end.y - start.y) * t,
+    )
 }
 
 fn emit_cut_path(
@@ -1053,6 +1261,15 @@ fn format_number(value: f64, digits: usize) -> String {
     format!("{value:.digits$}")
 }
 
+fn finish_gcode(lines: &mut Vec<String>, options: &GcodeOptions, safe_value: &str, digits: usize) {
+    lines.push(format!("G0 Z{safe_value}"));
+    if options.return_to_origin {
+        let origin = format_number(0.0, digits);
+        lines.push(format!("G0 X{origin} Y{origin}"));
+    }
+    lines.extend(split_gcode_lines(&options.postamble));
+}
+
 fn get_f64(settings: &LegacySettings, key: &str, default: f64) -> f64 {
     settings
         .get_last(key)
@@ -1076,6 +1293,7 @@ mod tests {
             units: Units::Inch,
             preamble: DEFAULT_GCODE_PREAMBLE.to_owned(),
             postamble: "M5|M2".to_owned(),
+            return_to_origin: true,
             variables_disabled: true,
             arc_fit: ArcFit::None,
         };
@@ -1105,6 +1323,7 @@ mod tests {
             units: Units::Inch,
             preamble: DEFAULT_GCODE_PREAMBLE.to_owned(),
             postamble: "M5|M2".to_owned(),
+            return_to_origin: true,
             variables_disabled: true,
             arc_fit: ArcFit::None,
         };
@@ -1137,6 +1356,7 @@ mod tests {
             units: Units::Inch,
             preamble: DEFAULT_GCODE_PREAMBLE.to_owned(),
             postamble: "M5|M2".to_owned(),
+            return_to_origin: true,
             variables_disabled: true,
             arc_fit: ArcFit::Center,
         };
@@ -1160,6 +1380,7 @@ mod tests {
             units: Units::Inch,
             preamble: DEFAULT_GCODE_PREAMBLE.to_owned(),
             postamble: "M5|M2".to_owned(),
+            return_to_origin: true,
             variables_disabled: true,
             arc_fit: ArcFit::Radius,
         };
@@ -1181,6 +1402,7 @@ mod tests {
             units: Units::Inch,
             preamble: DEFAULT_GCODE_PREAMBLE.to_owned(),
             postamble: "M5|M2".to_owned(),
+            return_to_origin: true,
             variables_disabled: false,
             arc_fit: ArcFit::None,
         };
@@ -1209,6 +1431,7 @@ mod tests {
             units: Units::Inch,
             preamble: DEFAULT_GCODE_PREAMBLE.to_owned(),
             postamble: "M5|M2".to_owned(),
+            return_to_origin: true,
             variables_disabled: true,
             arc_fit: ArcFit::None,
         };
@@ -1245,6 +1468,7 @@ mod tests {
             units: Units::Inch,
             preamble: DEFAULT_GCODE_PREAMBLE.to_owned(),
             postamble: "M5|M2".to_owned(),
+            return_to_origin: true,
             variables_disabled: true,
             arc_fit: ArcFit::None,
         };
@@ -1277,7 +1501,7 @@ mod tests {
                 .iter()
                 .filter(|line| *line == "G0 X0.0000 Y0.0000")
                 .count(),
-            3
+            4
         );
     }
 
@@ -1292,6 +1516,7 @@ mod tests {
             units: Units::Inch,
             preamble: DEFAULT_GCODE_PREAMBLE.to_owned(),
             postamble: "M5|M2".to_owned(),
+            return_to_origin: true,
             variables_disabled: true,
             arc_fit: ArcFit::None,
         };
@@ -1333,6 +1558,7 @@ mod tests {
             units: Units::Inch,
             preamble: DEFAULT_GCODE_PREAMBLE.to_owned(),
             postamble: "M5|M2".to_owned(),
+            return_to_origin: true,
             variables_disabled: true,
             arc_fit: ArcFit::None,
         };
@@ -1380,6 +1606,7 @@ mod tests {
             units: Units::Inch,
             preamble: DEFAULT_GCODE_PREAMBLE.to_owned(),
             postamble: "M5|M2".to_owned(),
+            return_to_origin: true,
             variables_disabled: true,
             arc_fit: ArcFit::None,
         };
@@ -1427,6 +1654,7 @@ mod tests {
             units: Units::Inch,
             preamble: DEFAULT_GCODE_PREAMBLE.to_owned(),
             postamble: "M5|M2".to_owned(),
+            return_to_origin: true,
             variables_disabled: true,
             arc_fit: ArcFit::None,
         };
@@ -1461,6 +1689,163 @@ mod tests {
 
         assert!(lines.contains(&"G1 Z-0.5330".to_owned()));
         assert!(!lines.contains(&"G1 Z-0.0050".to_owned()));
+    }
+
+    #[test]
+    fn writes_stepped_profile_gcode() {
+        let options = GcodeOptions {
+            safe_z: 0.25,
+            depth_z: -0.005,
+            feed: 5.0,
+            plunge: 1.0,
+            accuracy: 0.001,
+            units: Units::Inch,
+            preamble: DEFAULT_GCODE_PREAMBLE.to_owned(),
+            postamble: "M5|M2".to_owned(),
+            return_to_origin: true,
+            variables_disabled: true,
+            arc_fit: ArcFit::None,
+        };
+        let operation = ProfileOperation {
+            tool: ProfileTool::StraightEndmill,
+            path: vec![
+                Point::new(0.0, 0.0),
+                Point::new(1.0, 0.0),
+                Point::new(1.0, 1.0),
+                Point::new(0.0, 1.0),
+                Point::new(0.0, 0.0),
+            ],
+            depths: vec![-0.1, -0.2],
+            offset: 0.125,
+            corner_radius: 0.0,
+            tabs: Vec::new(),
+            tab_height: 0.0,
+        };
+
+        let lines = write_profile_gcode(&operation, &options);
+
+        assert!(lines.iter().any(|line| line.contains("profile cut")));
+        assert!(lines.contains(&"( Profile passes: 2 )".to_owned()));
+        assert!(lines.contains(&"G1 Z-0.1000 F1.00".to_owned()));
+        assert!(lines.contains(&"G1 Z-0.2000 F1.00".to_owned()));
+        assert_eq!(
+            lines
+                .iter()
+                .filter(|line| *line == "G0 X0.0000 Y0.0000")
+                .count(),
+            3
+        );
+        assert!(lines.contains(&"G1 X1.0000 Y0.0000".to_owned()));
+    }
+
+    #[test]
+    fn writes_profile_chamfer_gcode_as_separate_operation() {
+        let options = GcodeOptions {
+            safe_z: 3.0,
+            depth_z: -0.1,
+            feed: 120.0,
+            plunge: 60.0,
+            accuracy: 0.01,
+            units: Units::Mm,
+            preamble: DEFAULT_GCODE_PREAMBLE.to_owned(),
+            postamble: "M5|M2".to_owned(),
+            return_to_origin: true,
+            variables_disabled: true,
+            arc_fit: ArcFit::None,
+        };
+        let operation = ProfileOperation {
+            tool: ProfileTool::VBitChamfer,
+            path: vec![
+                Point::new(-1.0, -1.0),
+                Point::new(2.0, -1.0),
+                Point::new(2.0, 2.0),
+                Point::new(-1.0, 2.0),
+                Point::new(-1.0, -1.0),
+            ],
+            depths: vec![-0.5],
+            offset: 0.5,
+            corner_radius: 0.0,
+            tabs: Vec::new(),
+            tab_height: 0.0,
+        };
+
+        let lines = write_profile_gcode(&operation, &options);
+
+        assert!(lines.iter().any(|line| line.contains("profile chamfer")));
+        assert!(!lines.iter().any(|line| line.contains("Profile passes")));
+        assert!(lines.contains(&"G21".to_owned()));
+        assert!(lines.contains(&"G1 Z-0.500 F60.0".to_owned()));
+        assert!(lines.contains(&"G1 X2.000 Y-1.000".to_owned()));
+    }
+
+    #[test]
+    fn writes_profile_tabs_as_raised_bottom_segments() {
+        let options = GcodeOptions {
+            safe_z: 0.25,
+            depth_z: -0.005,
+            feed: 5.0,
+            plunge: 0.0,
+            accuracy: 0.001,
+            units: Units::Inch,
+            preamble: DEFAULT_GCODE_PREAMBLE.to_owned(),
+            postamble: "M5|M2".to_owned(),
+            return_to_origin: true,
+            variables_disabled: true,
+            arc_fit: ArcFit::None,
+        };
+        let operation = ProfileOperation {
+            tool: ProfileTool::StraightEndmill,
+            path: vec![
+                Point::new(0.0, 0.0),
+                Point::new(4.0, 0.0),
+                Point::new(4.0, 4.0),
+                Point::new(0.0, 4.0),
+                Point::new(0.0, 0.0),
+            ],
+            depths: vec![-0.1],
+            offset: 0.125,
+            corner_radius: 0.0,
+            tabs: vec![ProfileTab {
+                start_distance: 1.0,
+                end_distance: 2.0,
+            }],
+            tab_height: 0.025,
+        };
+
+        let lines = write_profile_gcode(&operation, &options);
+
+        assert!(lines.contains(&"( Profile tabs: 1 )".to_owned()));
+        assert!(lines.contains(&"( Profile tab height: 0.0250 )".to_owned()));
+        assert!(lines.contains(&"G1 X0.9750 Y0.0000".to_owned()));
+        assert!(lines.contains(&"G1 X1.0000 Y0.0000 Z-0.0750".to_owned()));
+        assert!(lines.contains(&"G1 X2.0000 Y0.0000".to_owned()));
+        assert!(lines.contains(&"G1 X2.0250 Y0.0000 Z-0.1000".to_owned()));
+        assert_eq!(
+            lines.iter().filter(|line| *line == "G1 Z-0.1000").count(),
+            1
+        );
+        assert!(lines.contains(&"G1 X4.0000 Y0.0000".to_owned()));
+    }
+
+    #[test]
+    fn return_to_origin_setting_defaults_on_and_can_be_disabled() {
+        let settings = crate::settings::default_legacy_settings();
+        assert!(GcodeOptions::from_legacy(&settings).return_to_origin);
+
+        let mut disabled = settings;
+        disabled.set_or_push("return_to_origin", "0", false);
+        let options = GcodeOptions::from_legacy(&disabled);
+        let lines = write_engrave_gcode(
+            &[EngraveSegment {
+                start: Point::new(1.0, 1.0),
+                end: Point::new(2.0, 1.0),
+                loop_id: 1,
+            }],
+            &options,
+        );
+
+        assert!(!lines.iter().any(|line| line == "G0 X0.0000 Y0.0000"));
+        assert_eq!(lines.last(), Some(&"M2".to_owned()));
     }
 
     fn shallow_circle_segments() -> Vec<EngraveSegment> {

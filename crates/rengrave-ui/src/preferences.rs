@@ -16,6 +16,7 @@ pub(crate) struct UiPreferences {
     pub(crate) show_rapids: bool,
     pub(crate) show_grid: bool,
     pub(crate) show_cleanup: bool,
+    pub(crate) show_tabs: bool,
     pub(crate) viewport_rotation_degrees: f64,
     pub(crate) auto_recalculate: bool,
     pub(crate) show_input_overlay: bool,
@@ -33,6 +34,7 @@ impl Default for UiPreferences {
             show_rapids: true,
             show_grid: true,
             show_cleanup: true,
+            show_tabs: true,
             viewport_rotation_degrees: 0.0,
             auto_recalculate: false,
             show_input_overlay: true,
@@ -77,6 +79,7 @@ impl UiPreferences {
                 "show_rapids" => preferences.show_rapids = value != "0" && value != "false",
                 "show_grid" => preferences.show_grid = value != "0" && value != "false",
                 "show_cleanup" => preferences.show_cleanup = value != "0" && value != "false",
+                "show_tabs" => preferences.show_tabs = value != "0" && value != "false",
                 "viewport_rotation_degrees" => {
                     if let Ok(rotation) = value.parse::<f64>() {
                         preferences.viewport_rotation_degrees = rotation.clamp(-180.0, 180.0);
@@ -106,6 +109,7 @@ impl UiPreferences {
             ("show_rapids", if self.show_rapids { "1" } else { "0" }),
             ("show_grid", if self.show_grid { "1" } else { "0" }),
             ("show_cleanup", if self.show_cleanup { "1" } else { "0" }),
+            ("show_tabs", if self.show_tabs { "1" } else { "0" }),
             (
                 "viewport_rotation_degrees",
                 viewport_rotation_degrees.as_str(),

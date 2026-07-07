@@ -3,7 +3,9 @@ use std::io::{self, Write};
 use std::path::PathBuf;
 
 use clap::Parser;
-use rengrave_core::batch::{BatchOutput, BatchRequest, SecondaryGcode, prepare_batch_output};
+use rengrave_core::batch::{
+    BatchOutput, BatchRequest, SecondaryGcode, prepare_batch_output, secondary_output_path,
+};
 use rengrave_ui::UiLaunchOptions;
 use serde_json::{Value, json};
 
@@ -238,20 +240,6 @@ fn write_secondary_outputs(
         paths.push(output_path);
     }
     Ok(paths)
-}
-
-fn secondary_output_path(path: &PathBuf, suffix: &str) -> PathBuf {
-    let stem = path
-        .file_stem()
-        .and_then(|value| value.to_str())
-        .unwrap_or("output");
-    let extension = path.extension().and_then(|value| value.to_str());
-    let mut file_name = format!("{stem}_{suffix}");
-    if let Some(extension) = extension {
-        file_name.push('.');
-        file_name.push_str(extension);
-    }
-    path.with_file_name(file_name)
 }
 
 #[cfg(test)]

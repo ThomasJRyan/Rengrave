@@ -6,7 +6,9 @@
 *.jpeg
 *.jpg
 *.svg
+*.rgrv
 !crates/rengrave-core/tests/fixtures/**/*.dxf
 !crates/rengrave-core/tests/fixtures/**/*.svg
 
 *_source/
+.dmux/

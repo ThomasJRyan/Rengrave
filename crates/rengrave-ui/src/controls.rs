@@ -45,6 +45,23 @@ pub(crate) struct UiControls {
     pub(crate) clean_step: f64,
     pub(crate) clean_v: f64,
     pub(crate) clean_paths: String,
+    pub(crate) profile_enabled: bool,
+    pub(crate) profile_margin: f64,
+    pub(crate) profile_radius: f64,
+    pub(crate) profile_depth: f64,
+    pub(crate) profile_steps: f64,
+    pub(crate) profile_endmill_dia: f64,
+    pub(crate) profile_tabs: f64,
+    pub(crate) profile_tab_height: f64,
+    pub(crate) profile_tab_width: f64,
+    pub(crate) profile_chamfer: bool,
+    pub(crate) profile_chamfer_depth: f64,
+    pub(crate) profile_chamfer_angle: f64,
+    pub(crate) profile_width: f64,
+    pub(crate) profile_height: f64,
+    pub(crate) profile_aspect: f64,
+    pub(crate) profile_trace: f64,
+    pub(crate) profile_alignment: OriginChoice,
     pub(crate) bmp_turn_policy: BitmapTurnPolicy,
     pub(crate) bmp_turds: f64,
     pub(crate) bmp_alpha: f64,
@@ -52,6 +69,7 @@ pub(crate) struct UiControls {
     pub(crate) bitmap_backend: BitmapBackend,
     pub(crate) gpre: String,
     pub(crate) gpost: String,
+    pub(crate) return_to_origin: bool,
     pub(crate) flip: bool,
     pub(crate) mirror: bool,
     pub(crate) outer: bool,
@@ -282,6 +300,25 @@ impl UiControls {
                 .get_last("clean_paths")
                 .unwrap_or("1,1,0,1,0,1,0,0")
                 .to_owned(),
+            profile_enabled: get_legacy_bool(settings, "profile_cut", false),
+            profile_margin: setting_f64(settings, "profile_margin", 0.25),
+            profile_radius: setting_f64(settings, "profile_radius", 0.0),
+            profile_depth: setting_f64(settings, "profile_depth", 0.125),
+            profile_steps: setting_f64(settings, "profile_steps", 1.0),
+            profile_endmill_dia: setting_f64(settings, "profile_endmill_dia", 0.25),
+            profile_tabs: setting_f64(settings, "profile_tabs", 0.0),
+            profile_tab_height: setting_f64(settings, "profile_tab_height", 1.0 / 25.4),
+            profile_tab_width: setting_f64(settings, "profile_tab_width", 0.0),
+            profile_chamfer: get_legacy_bool(settings, "profile_chamfer", false),
+            profile_chamfer_depth: setting_f64(settings, "profile_chamfer_depth", 0.02),
+            profile_chamfer_angle: setting_f64(settings, "profile_chamfer_angle", 60.0),
+            profile_width: setting_f64(settings, "profile_width", 0.0),
+            profile_height: setting_f64(settings, "profile_height", 0.0),
+            profile_aspect: setting_f64(settings, "profile_aspect", 0.0),
+            profile_trace: setting_f64(settings, "profile_trace", 0.0),
+            profile_alignment: OriginChoice::parse(
+                settings.get_last("profile_align").unwrap_or("Mid-Center"),
+            ),
             bmp_turn_policy: BitmapTurnPolicy::parse(
                 settings.get_last("bmp_turnp").unwrap_or("minority"),
             ),
@@ -297,6 +334,7 @@ impl UiControls {
                 .get_last("gpost")
                 .unwrap_or(DEFAULT_GCODE_POSTAMBLE)
                 .to_owned(),
+            return_to_origin: get_legacy_bool(settings, "return_to_origin", true),
             flip: get_legacy_bool(settings, "flip", false),
             mirror: get_legacy_bool(settings, "mirror", false),
             outer: get_legacy_bool(settings, "outer", true),
@@ -346,6 +384,15 @@ impl UiControls {
         self.v_depth_lim *= factor;
         self.clean_dia *= factor;
         self.clean_v *= factor;
+        self.profile_margin *= factor;
+        self.profile_radius *= factor;
+        self.profile_depth *= factor;
+        self.profile_endmill_dia *= factor;
+        self.profile_tab_height *= factor;
+        self.profile_tab_width *= factor;
+        self.profile_chamfer_depth *= factor;
+        self.profile_width *= factor;
+        self.profile_height *= factor;
     }
 
     pub(crate) fn overrides(&self) -> Vec<LegacySetting> {
@@ -533,6 +580,98 @@ impl UiControls {
             false,
         );
         push_setting(&mut entries, "clean_paths", self.clean_paths.trim(), false);
+        push_bool(&mut entries, "profile_cut", self.profile_enabled);
+        push_setting(
+            &mut entries,
+            "profile_margin",
+            format_setting_number(self.profile_margin),
+            false,
+        );
+        push_setting(
+            &mut entries,
+            "profile_radius",
+            format_setting_number(self.profile_radius),
+            false,
+        );
+        push_setting(
+            &mut entries,
+            "profile_depth",
+            format_setting_number(self.profile_depth),
+            false,
+        );
+        push_setting(
+            &mut entries,
+            "profile_steps",
+            format_setting_number(self.profile_steps.round().max(1.0)),
+            false,
+        );
+        push_setting(
+            &mut entries,
+            "profile_endmill_dia",
+            format_setting_number(self.profile_endmill_dia),
+            false,
+        );
+        push_setting(
+            &mut entries,
+            "profile_tabs",
+            format_setting_number(self.profile_tabs.round().max(0.0)),
+            false,
+        );
+        push_setting(
+            &mut entries,
+            "profile_tab_height",
+            format_setting_number(self.profile_tab_height),
+            false,
+        );
+        push_setting(
+            &mut entries,
+            "profile_tab_width",
+            format_setting_number(self.profile_tab_width.max(0.0)),
+            false,
+        );
+        push_bool(&mut entries, "profile_chamfer", self.profile_chamfer);
+        push_setting(
+            &mut entries,
+            "profile_chamfer_depth",
+            format_setting_number(self.profile_chamfer_depth),
+            false,
+        );
+        push_setting(
+            &mut entries,
+            "profile_chamfer_angle",
+            format_setting_number(self.profile_chamfer_angle),
+            false,
+        );
+        push_setting(
+            &mut entries,
+            "profile_width",
+            format_setting_number(self.profile_width.max(0.0)),
+            false,
+        );
+        push_setting(
+            &mut entries,
+            "profile_height",
+            format_setting_number(self.profile_height.max(0.0)),
+            false,
+        );
+        push_setting(
+            &mut entries,
+            "profile_aspect",
+            format_setting_number(self.profile_aspect.max(0.0)),
+            false,
+        );
+        push_setting(
+            &mut entries,
+            "profile_trace",
+            format_setting_number(self.profile_trace.clamp(0.0, 100.0)),
+            false,
+        );
+        push_setting(
+            &mut entries,
+            "profile_align",
+            self.profile_alignment.value(),
+            false,
+        );
         push_setting(
             &mut entries,
             "bmp_turnp",
@@ -565,6 +704,7 @@ impl UiControls {
         );
         push_setting(&mut entries, "gpre", self.gpre.trim(), false);
         push_setting(&mut entries, "gpost", self.gpost.trim(), false);
+        push_bool(&mut entries, "return_to_origin", self.return_to_origin);
         push_bool(&mut entries, "flip", self.flip);
         push_bool(&mut entries, "mirror", self.mirror);
         push_bool(&mut entries, "outer", self.outer);

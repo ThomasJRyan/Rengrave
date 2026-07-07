@@ -14,7 +14,7 @@ use eframe::egui;
 use rengrave_core::batch::prepare_batch_output;
 use rengrave_core::batch::{
     BatchOutput, BatchProgress, BatchRequest, SecondaryGcode, layout_text_outline,
-    prepare_batch_output_with_cancel_and_progress,
+    prepare_batch_output_with_cancel_and_progress, secondary_output_path,
 };
 use rengrave_core::bitmap::{BitmapBackend, BitmapTraceStats, bitmap_trace_mask_and_stats};
 use rengrave_core::dxf::read_dxf_font;
@@ -112,6 +112,7 @@ struct RengraveApp {
     preview_segments: Vec<PreviewSegment>,
     preview_rapids: Vec<PreviewSegment>,
     preview_cleanup_segments: Vec<PreviewSegment>,
+    preview_tab_segments: Vec<PreviewSegment>,
     preview_bounds: Option<PreviewBounds>,
     gcode_path: String,
     svg_path: String,
@@ -119,6 +120,7 @@ struct RengraveApp {
     show_toolpath: bool,
     show_rapids: bool,
     show_cleanup: bool,
+    show_tabs: bool,
     show_bounds: bool,
     show_axes: bool,
     show_grid: bool,
@@ -233,6 +235,7 @@ impl RengraveApp {
             preview_segments: Vec::new(),
             preview_rapids: Vec::new(),
             preview_cleanup_segments: Vec::new(),
+            preview_tab_segments: Vec::new(),
             preview_bounds: None,
             gcode_path: if preferences.gcode_path.trim().is_empty() {
                 default_gcode_path
@@ -252,6 +255,7 @@ impl RengraveApp {
             show_toolpath: get_legacy_bool(&document.settings, "show_v_path", true),
             show_rapids: preferences.show_rapids,
             show_cleanup: preferences.show_cleanup,
+            show_tabs: preferences.show_tabs,
             show_bounds: get_legacy_bool(&document.settings, "show_box", true),
             show_axes: get_legacy_bool(&document.settings, "show_axis", true),
             show_grid: preferences.show_grid,
@@ -480,6 +484,7 @@ impl RengraveApp {
         self.show_toolpath = get_legacy_bool(&defaults, "show_v_path", true);
         self.show_rapids = true;
         self.show_cleanup = true;
+        self.show_tabs = true;
         self.show_bounds = get_legacy_bool(&defaults, "show_box", true);
         self.show_axes = get_legacy_bool(&defaults, "show_axis", true);
         self.show_grid = true;
@@ -665,6 +670,7 @@ impl RengraveApp {
                 self.preview_segments.clear();
                 self.preview_rapids.clear();
                 self.preview_cleanup_segments.clear();
+                self.preview_tab_segments.clear();
                 self.preview_bounds = None;
                 self.input_overlay_outline.clear();
                 self.last_output_request = None;
@@ -679,10 +685,12 @@ impl RengraveApp {
         self.preview_segments = preview_motion.cuts;
         self.preview_rapids = preview_motion.rapids;
         self.preview_cleanup_segments = cleanup_preview_segments(&output.secondary_gcode);
+        self.preview_tab_segments = profile_tab_preview_segments(&output.secondary_gcode);
         self.preview_bounds = PreviewBounds::from_segment_layers(&[
             &self.preview_segments,
             &self.preview_rapids,
             &self.preview_cleanup_segments,
+            &self.preview_tab_segments,
         ]);
         if self.preview_bounds.is_some() {
             self.fit_preview_requested = true;
@@ -705,9 +713,21 @@ impl RengraveApp {
             return;
         }
 
-        match write_text_file(&self.gcode_path, &self.gcode) {
-            Ok(path) => {
-                self.status = format!("G-code exported: {}", path.display());
+        match write_gcode_files(&self.gcode_path, &self.gcode, &self.secondary_gcode) {
+            Ok(paths) => {
+                let Some(primary_path) = paths.first() else {
+                    self.status = "G-code export failed".to_owned();
+                    return;
+                };
+                self.status = if paths.len() > 1 {
+                    format!(
+                        "G-code exported: {} (+{} companion files)",
+                        primary_path.display(),
+                        paths.len() - 1
+                    )
+                } else {
+                    format!("G-code exported: {}", primary_path.display())
+                };
                 self.save_preferences();
             }
             Err(err) => {
@@ -935,6 +955,10 @@ impl RengraveApp {
         }
 
         let _ = text_row(ui, "Search", &mut self.input_catalog_search);
+        if mode == CatalogPanelMode::Font && self.tool_view.uses_text() {
+            self.show_font_catalog_panel(ui);
+            return;
+        }
 
         let visible_entries = visible_input_catalog_entries_for_tool(
             &self.input_catalog.entries,
@@ -992,6 +1016,122 @@ impl RengraveApp {
         }
     }
 
+    fn show_font_catalog_panel(&mut self, ui: &mut egui::Ui) {
+        let rows = font_catalog_rows_for_tool(
+            &self.input_catalog.entries,
+            self.input_catalog_filter,
+            self.tool_view,
+        );
+        let query = self.input_catalog_search.trim().to_lowercase();
+        let filtered: Vec<FontCatalogRow> = rows
+            .into_iter()
+            .filter(|row| query.is_empty() || row.display_name.to_lowercase().contains(&query))
+            .collect();
+        if filtered.is_empty() {
+            ui.label("No compatible fonts found");
+            ui.add_space(8.0);
+            if full_width_button(ui, "Open custom font file\u{2026}", true) {
+                self.choose_path(FileBrowserTarget::Input, ui.ctx().clone());
+            }
+            return;
+        }
+
+        self.show_font_style_controls(ui);
+
+        let preview_catalog_fonts = filtered.len() <= CATALOG_FONT_PREVIEW_THRESHOLD;
+        let preview_entries = filtered
+            .iter()
+            .map(|row| row.entry.clone())
+            .collect::<Vec<_>>();
+        let catalog_fonts_changed = preview_catalog_fonts
+            && self
+                .catalog_font_registry
+                .refresh(ui.ctx(), &preview_entries);
+        if catalog_fonts_changed {
+            ui.ctx().request_repaint();
+        }
+        let catalog_width = ui.available_width();
+        let selected_input = path_from_text(&self.input_path);
+        let selected_style =
+            font_style_for_selected_path(&self.input_catalog.entries, selected_input.as_deref())
+                .map(|(style, _)| style)
+                .unwrap_or_default();
+        let mut chosen = None;
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .max_height(220.0)
+            .show(ui, |ui| {
+                ui.set_min_width(catalog_width);
+                for row in filtered {
+                    let selected = selected_input
+                        .as_deref()
+                        .is_some_and(|path| row.variants.contains_path(path));
+                    let mut label = egui::RichText::new(row.display_name.clone());
+                    if preview_catalog_fonts
+                        && !catalog_fonts_changed
+                        && let Some(family) =
+                            self.catalog_font_registry.family_for_path(&row.entry.path)
+                    {
+                        label = label.font(egui::FontId::new(13.0, family));
+                    }
+                    if ui.selectable_label(selected, label).clicked() {
+                        chosen = Some(
+                            row.variants
+                                .path_for(selected_style)
+                                .unwrap_or(&row.entry.path)
+                                .clone(),
+                        );
+                    }
+                }
+            });
+        if let Some(path) = chosen {
+            self.select_input_catalog_entry(path, ui.ctx().clone());
+        }
+        ui.add_space(8.0);
+        if full_width_button(ui, "Open custom font file\u{2026}", true) {
+            self.choose_path(FileBrowserTarget::Input, ui.ctx().clone());
+        }
+    }
+
+    fn show_font_style_controls(&mut self, ui: &mut egui::Ui) {
+        let selected_input = path_from_text(&self.input_path);
+        let selected =
+            font_style_for_selected_path(&self.input_catalog.entries, selected_input.as_deref());
+        let (style, variants) = selected.unwrap_or_default();
+        ui.horizontal(|ui| {
+            ui.label("Style");
+            let bold_target = style.toggled_bold();
+            let bold_path = variants.path_for(bold_target).cloned();
+            let bold_enabled = bold_path.is_some();
+            let bold_response = ui
+                .add_enabled(
+                    bold_enabled,
+                    egui::Button::new(egui::RichText::new("B").strong()).selected(style.bold),
+                )
+                .on_hover_text("Bold");
+            if bold_response.clicked()
+                && let Some(path) = bold_path
+            {
+                self.select_input_catalog_entry(path, ui.ctx().clone());
+            }
+
+            let italic_target = style.toggled_italic();
+            let italic_path = variants.path_for(italic_target).cloned();
+            let italic_enabled = italic_path.is_some();
+            let italic_response = ui
+                .add_enabled(
+                    italic_enabled,
+                    egui::Button::new(egui::RichText::new("I").italics()).selected(style.italic),
+                )
+                .on_hover_text("Italic");
+            if italic_response.clicked()
+                && let Some(path) = italic_path
+            {
+                self.select_input_catalog_entry(path, ui.ctx().clone());
+            }
+        });
+    }
+
     fn show_input_preview_panel(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.heading("Input preview");
@@ -1017,6 +1157,11 @@ impl RengraveApp {
             .default_open(true)
             .show(ui, |ui| {
                 self.show_machine_settings(ui);
+            });
+        egui::CollapsingHeader::new("Profile cut")
+            .default_open(self.controls.profile_enabled)
+            .show(ui, |ui| {
+                self.show_profile_settings(ui);
             });
 
         if self.tool_view.uses_image() && input_path_is_bitmap(&self.input_path) {
@@ -1166,6 +1311,116 @@ impl RengraveApp {
         }
     }
 
+    fn show_profile_settings(&mut self, ui: &mut egui::Ui) {
+        ui.checkbox(&mut self.controls.profile_enabled, "Enable profile cut")
+            .on_hover_text("Adds companion profile G-code around the final project bounds.");
+        ui.add_enabled_ui(self.controls.profile_enabled, |ui| {
+            number_row_with_help(
+                ui,
+                "Margin",
+                &mut self.controls.profile_margin,
+                0.1,
+                "Clearance between the generated artwork and the profile cut.",
+            );
+            number_row(ui, "Corner radius", &mut self.controls.profile_radius, 0.1);
+            number_row(ui, "Thickness", &mut self.controls.profile_depth, 0.1);
+            number_row(ui, "Steps", &mut self.controls.profile_steps, 1.0);
+            self.controls.profile_steps = self.controls.profile_steps.round().max(1.0);
+            number_row(
+                ui,
+                "Endmill dia",
+                &mut self.controls.profile_endmill_dia,
+                0.1,
+            );
+            number_row(ui, "Tabs", &mut self.controls.profile_tabs, 1.0);
+            self.controls.profile_tabs = self.controls.profile_tabs.round().max(0.0);
+            ui.add_enabled_ui(self.controls.profile_tabs > 0.0, |ui| {
+                number_row(ui, "Tab height", &mut self.controls.profile_tab_height, 0.1);
+                number_row(
+                    ui,
+                    "Max tab width",
+                    &mut self.controls.profile_tab_width,
+                    0.1,
+                );
+                self.controls.profile_tab_width = self.controls.profile_tab_width.max(0.0);
+            });
+            ui.checkbox(&mut self.controls.profile_chamfer, "V-bit chamfer")
+                .on_hover_text(
+                    "Writes a profile_chamfer companion file before the straight profile file.",
+                );
+            ui.add_enabled_ui(self.controls.profile_chamfer, |ui| {
+                number_row(
+                    ui,
+                    "Chamfer depth",
+                    &mut self.controls.profile_chamfer_depth,
+                    0.1,
+                );
+                number_row(
+                    ui,
+                    "Chamfer angle",
+                    &mut self.controls.profile_chamfer_angle,
+                    1.0,
+                );
+            });
+            ui.separator();
+            ui.label("Profile shape");
+            number_row(
+                ui,
+                "Width (0 = auto)",
+                &mut self.controls.profile_width,
+                0.1,
+            );
+            number_row(
+                ui,
+                "Height (0 = auto)",
+                &mut self.controls.profile_height,
+                0.1,
+            );
+            number_row(
+                ui,
+                "Aspect W/H (0 = free)",
+                &mut self.controls.profile_aspect,
+                0.05,
+            );
+            number_row(ui, "Trace detail %", &mut self.controls.profile_trace, 5.0);
+            combo_row(
+                ui,
+                "Profile alignment",
+                self.controls.profile_alignment.label(),
+                |ui| {
+                    for value in OriginChoice::ALL {
+                        if matches!(value, OriginChoice::Default | OriginChoice::ArcCenter) {
+                            continue;
+                        }
+                        ui.selectable_value(
+                            &mut self.controls.profile_alignment,
+                            value,
+                            value.label(),
+                        );
+                    }
+                },
+            );
+            self.controls.profile_width = self.controls.profile_width.max(0.0);
+            self.controls.profile_height = self.controls.profile_height.max(0.0);
+            self.controls.profile_aspect = self.controls.profile_aspect.max(0.0);
+            self.controls.profile_trace = self.controls.profile_trace.clamp(0.0, 100.0);
+            let (chamfer_offset, straight_offset) = profile_offsets(&self.controls);
+            if self.controls.profile_chamfer {
+                stat_row(ui, "Chamfer offset", &format_setting_number(chamfer_offset));
+            }
+            stat_row(
+                ui,
+                "Depth/pass",
+                &format_setting_number(profile_depth_per_step(&self.controls)),
+            );
+            stat_row(
+                ui,
+                "Straight offset",
+                &format_setting_number(straight_offset),
+            );
+        });
+    }
+
     fn show_bitmap_settings(&mut self, ui: &mut egui::Ui) {
         combo_row(
             ui,
@@ -1310,7 +1565,16 @@ impl RengraveApp {
         if ui
             .add_enabled(
                 !self.preview_cleanup_segments.is_empty(),
-                egui::Checkbox::new(&mut self.show_cleanup, "Show cleanup moves"),
+                egui::Checkbox::new(&mut self.show_cleanup, "Show secondary moves"),
+            )
+            .changed()
+        {
+            self.save_preferences();
+        }
+        if ui
+            .add_enabled(
+                !self.preview_tab_segments.is_empty(),
+                egui::Checkbox::new(&mut self.show_tabs, "Show profile tabs"),
             )
             .changed()
         {
@@ -1357,6 +1621,12 @@ impl RengraveApp {
         if gcode_path_action.value_changed {
             self.save_preferences();
         }
+        ui.add_space(4.0);
+        ui.checkbox(
+            &mut self.controls.return_to_origin,
+            "Return to origin X/Y after job",
+        )
+        .on_hover_text("Retract to safe Z, then rapid to X0 Y0 before the postamble.");
         ui.add_space(4.0);
         self.show_export_readiness(ui);
         ui.add_space(4.0);
@@ -1534,6 +1804,7 @@ impl RengraveApp {
             show_rapids: self.show_rapids,
             show_grid: self.show_grid,
             show_cleanup: self.show_cleanup,
+            show_tabs: self.show_tabs,
             viewport_rotation_degrees: self.transform.viewport_rotation_degrees,
             auto_recalculate: self.auto_recalculate,
             show_input_overlay: self.show_input_overlay,
@@ -1741,11 +2012,13 @@ impl RengraveApp {
             &self.preview_segments,
             &self.preview_rapids,
             &self.preview_cleanup_segments,
+            &self.preview_tab_segments,
             &self.input_overlay_outline,
             self.preview_bounds,
             self.show_toolpath,
             self.show_rapids,
             self.show_cleanup,
+            self.show_tabs,
             self.show_input_overlay && !self.input_overlay_outline.is_empty(),
             self.show_bounds,
             self.show_axes,
@@ -1808,7 +2081,16 @@ impl RengraveApp {
                 if ui
                     .add_enabled(
                         !self.preview_cleanup_segments.is_empty(),
-                        egui::Checkbox::new(&mut self.show_cleanup, "Cleanup layer"),
+                        egui::Checkbox::new(&mut self.show_cleanup, "Secondary layer"),
+                    )
+                    .changed()
+                {
+                    self.save_preferences();
+                }
+                if ui
+                    .add_enabled(
+                        !self.preview_tab_segments.is_empty(),
+                        egui::Checkbox::new(&mut self.show_tabs, "Profile tabs layer"),
                     )
                     .changed()
                 {
@@ -2266,6 +2548,22 @@ fn write_text_file(path_text: &str, contents: &str) -> Result<PathBuf, String> {
     Ok(path)
 }
 
+fn write_gcode_files(
+    path_text: &str,
+    primary: &str,
+    secondary: &[SecondaryGcode],
+) -> Result<Vec<PathBuf>, String> {
+    let primary_path = write_text_file(path_text, primary)?;
+    let mut paths = vec![primary_path.clone()];
+    for output in secondary {
+        let output_path = secondary_output_path(&primary_path, &output.suffix);
+        fs::write(&output_path, &output.gcode)
+            .map_err(|err| format!("unable to write `{}`: {err}", output_path.display()))?;
+        paths.push(output_path);
+    }
+    Ok(paths)
+}
+
 fn path_to_text(path: &Option<PathBuf>) -> String {
     path.as_ref()
         .map(|path| path.display().to_string())
@@ -2322,16 +2620,10 @@ fn first_available_text_font_path(
     if !tool_view.uses_text() {
         return None;
     }
-    entries
-        .iter()
-        .find(|entry| {
-            matches!(
-                entry.kind,
-                InputCatalogKind::CxfFont | InputCatalogKind::TtfFont
-            ) && filter.accepts(entry.kind)
-                && tool_view.accepts_kind(entry.kind)
-        })
-        .map(|entry| entry.path.clone())
+    font_catalog_rows_for_tool(entries, filter, tool_view)
+        .into_iter()
+        .next()
+        .map(|row| row.entry.path)
 }
 
 fn vcarve_multipass_enabled(finish_stock: f64) -> bool {
@@ -2350,6 +2642,24 @@ fn vcarve_multipass_summary(finish_stock: f64, max_depth_per_pass: f64) -> Strin
             format_setting_number(max_depth_per_pass)
         )
     }
+}
+
+fn profile_offsets(controls: &UiControls) -> (f64, f64) {
+    let chamfer_offset = if controls.profile_chamfer && controls.profile_chamfer_depth > 0.0 {
+        let angle = controls
+            .profile_chamfer_angle
+            .clamp(1.0, 179.0)
+            .to_radians();
+        controls.profile_chamfer_depth * (angle / 2.0).tan()
+    } else {
+        0.0
+    };
+    let straight_offset = controls.profile_endmill_dia.max(0.0) / 2.0 + chamfer_offset;
+    (chamfer_offset, straight_offset)
+}
+
+fn profile_depth_per_step(controls: &UiControls) -> f64 {
+    controls.profile_depth.abs() / controls.profile_steps.round().max(1.0)
 }
 
 fn input_source_summary(path_text: &str) -> String {
@@ -2627,11 +2937,11 @@ fn generated_gcode_summary(
     lines: usize,
     cut_moves: usize,
     rapid_moves: usize,
-    cleanup_moves: usize,
+    secondary_moves: usize,
     arc_moves: usize,
 ) -> String {
     format!(
-        "G-code: {lines} lines, {cut_moves} cut moves, {rapid_moves} rapid moves, {cleanup_moves} cleanup moves, {arc_moves} arcs"
+        "G-code: {lines} lines, {cut_moves} cut moves, {rapid_moves} rapid moves, {secondary_moves} secondary moves, {arc_moves} arcs"
     )
 }
 
@@ -2678,6 +2988,7 @@ mod tests {
             preview_segments: Vec::new(),
             preview_rapids: Vec::new(),
             preview_cleanup_segments: Vec::new(),
+            preview_tab_segments: Vec::new(),
             preview_bounds: None,
             gcode_path,
             svg_path,
@@ -2685,6 +2996,7 @@ mod tests {
             show_toolpath: true,
             show_rapids: true,
             show_cleanup: true,
+            show_tabs: true,
             show_bounds: true,
             show_axes: true,
             show_grid: true,
@@ -2721,24 +3033,16 @@ mod tests {
         }
     }
 
-    fn first_system_ttf_for_ui_test() -> Option<PathBuf> {
-        [
-            "/usr/share/fonts",
-            "/usr/local/share/fonts",
-            "/Library/Fonts",
-            "C:/Windows/Fonts",
-        ]
+    fn first_system_ttf_row_for_ui_test() -> Option<(InputCatalogEntry, String)> {
+        let entries = read_system_font_entries();
+        font_catalog_rows_for_tool(
+            &entries,
+            InputCatalogFilter::default(),
+            ToolView::TextEngrave,
+        )
         .into_iter()
-        .map(Path::new)
-        .find_map(|dir| {
-            if !dir.exists() {
-                return None;
-            }
-            read_system_font_entries()
-                .into_iter()
-                .find(|entry| entry.kind == InputCatalogKind::TtfFont)
-                .map(|entry| entry.path)
-        })
+        .find(|row| row.entry.kind == InputCatalogKind::TtfFont)
+        .map(|row| (row.entry, row.display_name))
     }
 
     #[test]
@@ -2810,9 +3114,15 @@ mod tests {
             end: Point::new(9.0, 5.0),
         }];
 
-        let bounds = PreviewBounds::from_segment_layers(&[&cuts, &rapids, &cleanup]).unwrap();
+        let tabs = vec![PreviewSegment {
+            start: Point::new(-4.0, 0.0),
+            end: Point::new(-3.0, 0.0),
+        }];
 
-        assert_eq!(bounds.min, Point::new(-2.0, -1.0));
+        let bounds =
+            PreviewBounds::from_segment_layers(&[&cuts, &rapids, &cleanup, &tabs]).unwrap();
+
+        assert_eq!(bounds.min, Point::new(-4.0, -1.0));
         assert_eq!(bounds.max, Point::new(9.0, 5.0));
     }
 
@@ -2836,12 +3146,26 @@ mod tests {
                 end: Point::new(-2.0, 1.0),
             },
         ];
+        let tabs = vec![PreviewSegment {
+            start: Point::new(2.0, 2.0),
+            end: Point::new(3.0, 2.0),
+        }];
         let bounds = PreviewBounds {
             min: Point::new(-2.0, -0.0000001),
             max: Point::new(2.0, 3.25),
         };
 
-        let items = preview_overlay_items(&cuts, &rapids, &cleanup, Some(bounds), true, true, true);
+        let items = preview_overlay_items(
+            &cuts,
+            &rapids,
+            &cleanup,
+            &tabs,
+            Some(bounds),
+            true,
+            true,
+            true,
+            true,
+        );
 
         assert_eq!(
             items
@@ -2852,12 +3176,14 @@ mod tests {
                 "Cut 1",
                 "Rapid 1",
                 "Cleanup 2",
+                "Profile tabs 1",
                 "X -2.0000..2.0000",
                 "Y 0.0000..3.2500"
             ]
         );
         assert!(items[0].swatch);
-        assert!(!items[3].swatch);
+        assert!(items[3].swatch);
+        assert!(!items[4].swatch);
     }
 
     #[test]
@@ -2871,7 +3197,7 @@ mod tests {
             end: Point::new(-1.0, 1.0),
         }];
 
-        let items = preview_overlay_items(&cuts, &[], &cleanup, None, false, true, true);
+        let items = preview_overlay_items(&cuts, &[], &cleanup, &[], None, false, true, true, true);
 
         assert_eq!(
             items
@@ -3644,6 +3970,35 @@ mod tests {
     }
 
     #[test]
+    fn profile_offsets_account_for_chamfer_width() {
+        let mut controls = default_ui_controls();
+        controls.profile_endmill_dia = 6.0;
+        controls.profile_chamfer = false;
+        controls.profile_chamfer_depth = 1.0;
+        controls.profile_chamfer_angle = 90.0;
+
+        assert_eq!(profile_offsets(&controls), (0.0, 3.0));
+
+        controls.profile_chamfer = true;
+        let (chamfer_offset, straight_offset) = profile_offsets(&controls);
+
+        assert_close(chamfer_offset, 1.0);
+        assert_close(straight_offset, 4.0);
+    }
+
+    #[test]
+    fn profile_depth_per_step_uses_step_count() {
+        let mut controls = default_ui_controls();
+        controls.profile_depth = 12.0;
+        controls.profile_steps = 4.0;
+
+        assert_close(profile_depth_per_step(&controls), 3.0);
+
+        controls.profile_steps = 0.0;
+        assert_close(profile_depth_per_step(&controls), 12.0);
+    }
+
+    #[test]
     fn job_summary_helpers_format_visible_state() {
         let mut controls = UiControls::from_settings(&LegacySettings::default());
         controls.cut_type = CutTypeChoice::VCarve;
@@ -3980,6 +4335,7 @@ mod tests {
         fs::write(dir.join("shape.dxf"), "0\nSECTION\n").unwrap();
         fs::write(dir.join("vector.svg"), "<svg/>").unwrap();
         fs::write(dir.join("image.PNG"), b"not really png").unwrap();
+        fs::write(dir.join("invalid.ttf"), b"not a font").unwrap();
         fs::write(dir.join("notes.txt"), "ignored").unwrap();
 
         let entries = read_input_catalog_entries(&dir).unwrap();
@@ -3991,6 +4347,7 @@ mod tests {
         assert_eq!(entries[2].kind, InputCatalogKind::Svg);
         assert_eq!(entries[3].kind, InputCatalogKind::Bitmap);
         assert!(entries.iter().all(|entry| entry.name != "notes.txt"));
+        assert!(entries.iter().all(|entry| entry.name != "invalid.ttf"));
     }
 
     #[test]
@@ -4552,10 +4909,39 @@ mod tests {
     }
 
     #[test]
+    fn profile_tab_preview_segments_split_raised_profile_moves() {
+        let outputs = [SecondaryGcode {
+            suffix: "profile".to_owned(),
+            gcode: "( Profile tabs: 1 )\nG0 X0 Y0\nG1 Z-0.1000\nG1 X1 Y0\nG1 X1 Y0 Z-0.0750\nG1 X2 Y0\nG1 X2 Y0 Z-0.1000\nG1 X3 Y0\n".to_owned(),
+        }];
+
+        assert_eq!(
+            cleanup_preview_segments(&outputs),
+            vec![
+                PreviewSegment {
+                    start: Point::new(0.0, 0.0),
+                    end: Point::new(1.0, 0.0),
+                },
+                PreviewSegment {
+                    start: Point::new(2.0, 0.0),
+                    end: Point::new(3.0, 0.0),
+                },
+            ]
+        );
+        assert_eq!(
+            profile_tab_preview_segments(&outputs),
+            vec![PreviewSegment {
+                start: Point::new(1.0, 0.0),
+                end: Point::new(2.0, 0.0),
+            }]
+        );
+    }
+
+    #[test]
     fn generated_gcode_summary_reports_compact_motion_counts() {
         assert_eq!(
             generated_gcode_summary(177, 35, 14, 2, 3),
-            "G-code: 177 lines, 35 cut moves, 14 rapid moves, 2 cleanup moves, 3 arcs"
+            "G-code: 177 lines, 35 cut moves, 14 rapid moves, 2 secondary moves, 3 arcs"
         );
     }
 
@@ -4579,7 +4965,7 @@ mod tests {
         assert!(
             harness
                 .query_by_label(
-                    "G-code: 177 lines, 2 cut moves, 1 rapid moves, 1 cleanup moves, 3 arcs"
+                    "G-code: 177 lines, 2 cut moves, 1 rapid moves, 1 secondary moves, 3 arcs"
                 )
                 .is_some()
         );
@@ -4589,19 +4975,9 @@ mod tests {
 
     #[test]
     fn kittest_opens_text_catalog_for_text_tools_with_ttf_entry_without_panicking() {
-        let Some(font_path) = first_system_ttf_for_ui_test() else {
+        let Some((font_entry, row_label)) = first_system_ttf_row_for_ui_test() else {
             return;
         };
-        let font_name = font_path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("font.ttf")
-            .to_owned();
-        let row_label = font_path
-            .file_stem()
-            .and_then(|name| name.to_str())
-            .unwrap_or(font_name.as_str())
-            .to_owned();
 
         for tool_view in [
             ToolView::TextEngrave,
@@ -4613,14 +4989,9 @@ mod tests {
             app.controls.cut_type = tool_view.cut_type();
             app.controls.inlay = tool_view.uses_inlay();
             app.input_catalog = InputCatalog {
-                dir: font_path.parent().map(Path::to_path_buf),
+                dir: font_entry.path.parent().map(Path::to_path_buf),
                 is_system_fonts: false,
-                entries: vec![InputCatalogEntry {
-                    path: font_path.clone(),
-                    name: font_name.clone(),
-                    kind: InputCatalogKind::TtfFont,
-                    size_bytes: 4096,
-                }],
+                entries: vec![font_entry.clone()],
                 error: None,
             };
 
@@ -4657,6 +5028,7 @@ mod tests {
             show_rapids: false,
             show_grid: false,
             show_cleanup: false,
+            show_tabs: false,
             viewport_rotation_degrees: 42.5,
             auto_recalculate: true,
             show_input_overlay: false,
@@ -4675,6 +5047,7 @@ mod tests {
         assert!(preferences.show_rapids);
         assert!(preferences.show_grid);
         assert!(preferences.show_cleanup);
+        assert!(preferences.show_tabs);
         assert_eq!(preferences.viewport_rotation_degrees, 0.0);
         assert!(!preferences.auto_recalculate);
         assert!(preferences.show_input_overlay);
@@ -4726,6 +5099,23 @@ mod tests {
         controls.plotbox = true;
         controls.inlay = true;
         controls.mirror = true;
+        controls.profile_enabled = true;
+        controls.profile_margin = 1.5;
+        controls.profile_radius = 2.0;
+        controls.profile_depth = 6.0;
+        controls.profile_steps = 3.0;
+        controls.profile_endmill_dia = 3.175;
+        controls.profile_tabs = 4.0;
+        controls.profile_tab_height = 1.0;
+        controls.profile_tab_width = 3.0;
+        controls.profile_chamfer = true;
+        controls.profile_chamfer_depth = 0.75;
+        controls.profile_chamfer_angle = 90.0;
+        controls.profile_width = 8.0;
+        controls.profile_height = 4.0;
+        controls.profile_aspect = 2.0;
+        controls.profile_trace = 75.0;
+        controls.profile_alignment = OriginChoice::TopLeft;
 
         let overrides = controls.overrides();
         let value_for = |key: &str| {
@@ -4745,6 +5135,23 @@ mod tests {
         assert_eq!(value_for("plotbox"), Some("1"));
         assert_eq!(value_for("inlay"), Some("1"));
         assert_eq!(value_for("mirror"), Some("1"));
+        assert_eq!(value_for("profile_cut"), Some("1"));
+        assert_eq!(value_for("profile_margin"), Some("1.5"));
+        assert_eq!(value_for("profile_radius"), Some("2"));
+        assert_eq!(value_for("profile_depth"), Some("6"));
+        assert_eq!(value_for("profile_steps"), Some("3"));
+        assert_eq!(value_for("profile_endmill_dia"), Some("3.175"));
+        assert_eq!(value_for("profile_tabs"), Some("4"));
+        assert_eq!(value_for("profile_tab_height"), Some("1"));
+        assert_eq!(value_for("profile_tab_width"), Some("3"));
+        assert_eq!(value_for("profile_chamfer"), Some("1"));
+        assert_eq!(value_for("profile_chamfer_depth"), Some("0.75"));
+        assert_eq!(value_for("profile_chamfer_angle"), Some("90"));
+        assert_eq!(value_for("profile_width"), Some("8"));
+        assert_eq!(value_for("profile_height"), Some("4"));
+        assert_eq!(value_for("profile_aspect"), Some("2"));
+        assert_eq!(value_for("profile_trace"), Some("75"));
+        assert_eq!(value_for("profile_align"), Some("Top-Left"));
     }
 
     #[test]
@@ -4762,6 +5169,18 @@ mod tests {
         assert_eq!(controls.v_drv_crner, 135.0);
         assert_eq!(controls.v_stp_crner, 200.0);
         assert_eq!(controls.clean_paths, "1,1,0,1,0,1,0,0");
+        assert!(!controls.profile_enabled);
+        assert_eq!(controls.profile_margin, 0.25);
+        assert_eq!(controls.profile_radius, 0.0);
+        assert_eq!(controls.profile_depth, 0.125);
+        assert_eq!(controls.profile_steps, 1.0);
+        assert_eq!(controls.profile_endmill_dia, 0.25);
+        assert_eq!(controls.profile_tabs, 0.0);
+        assert_eq!(controls.profile_tab_height, 0.0393701);
+        assert_eq!(controls.profile_tab_width, 0.0);
+        assert!(!controls.profile_chamfer);
+        assert_eq!(controls.profile_chamfer_depth, 0.02);
+        assert_eq!(controls.profile_chamfer_angle, 60.0);
         assert!(controls.recovery_comments);
         assert!(controls.var_dis);
         assert!(!controls.ext_char);
@@ -4790,6 +5209,15 @@ mod tests {
         assert_close(controls.v_max_cut, -25.4);
         assert_close(controls.clean_dia, 6.35);
         assert_close(controls.clean_v, 1.27);
+        assert_close(controls.profile_margin, 6.35);
+        assert_close(controls.profile_radius, 0.0);
+        assert_close(controls.profile_depth, 3.175);
+        assert_close(controls.profile_steps, 1.0);
+        assert_close(controls.profile_endmill_dia, 6.35);
+        assert_close(controls.profile_tabs, 0.0);
+        assert!((controls.profile_tab_height - 1.0).abs() < 1.0e-6);
+        assert_close(controls.profile_tab_width, 0.0);
+        assert_close(controls.profile_chamfer_depth, 0.508);
     }
 
     #[test]
@@ -4822,6 +5250,16 @@ mod tests {
         controls.clean_dia = 0.125;
         controls.clean_step = 45.0;
         controls.clean_v = 0.03;
+        controls.profile_margin = 0.25;
+        controls.profile_radius = 0.1;
+        controls.profile_depth = 0.5;
+        controls.profile_steps = 4.0;
+        controls.profile_endmill_dia = 0.25;
+        controls.profile_tabs = 5.0;
+        controls.profile_tab_height = 0.04;
+        controls.profile_tab_width = 0.2;
+        controls.profile_chamfer_depth = 0.02;
+        controls.profile_chamfer_angle = 82.0;
 
         controls.convert_units(UnitsChoice::Mm);
 
@@ -4845,6 +5283,15 @@ mod tests {
         assert_close(controls.v_depth_lim, -12.7);
         assert_close(controls.clean_dia, 3.175);
         assert_close(controls.clean_v, 0.762);
+        assert_close(controls.profile_margin, 6.35);
+        assert_close(controls.profile_radius, 2.54);
+        assert_close(controls.profile_depth, 12.7);
+        assert_close(controls.profile_steps, 4.0);
+        assert_close(controls.profile_endmill_dia, 6.35);
+        assert_close(controls.profile_tabs, 5.0);
+        assert_close(controls.profile_tab_height, 1.016);
+        assert_close(controls.profile_tab_width, 5.08);
+        assert_close(controls.profile_chamfer_depth, 0.508);
         assert_close(controls.xscale_percent, 111.0);
         assert_close(controls.line_space, 1.3);
         assert_close(controls.angle_degrees, 15.0);
@@ -4853,6 +5300,7 @@ mod tests {
         assert_close(controls.v_drv_crner, 120.0);
         assert_close(controls.v_stp_crner, 220.0);
         assert_close(controls.clean_step, 45.0);
+        assert_close(controls.profile_chamfer_angle, 82.0);
 
         controls.convert_units(UnitsChoice::Inch);
 
@@ -4876,6 +5324,15 @@ mod tests {
         assert_close(controls.v_depth_lim, -0.5);
         assert_close(controls.clean_dia, 0.125);
         assert_close(controls.clean_v, 0.03);
+        assert_close(controls.profile_margin, 0.25);
+        assert_close(controls.profile_radius, 0.1);
+        assert_close(controls.profile_depth, 0.5);
+        assert_close(controls.profile_steps, 4.0);
+        assert_close(controls.profile_endmill_dia, 0.25);
+        assert_close(controls.profile_tabs, 5.0);
+        assert_close(controls.profile_tab_height, 0.04);
+        assert_close(controls.profile_tab_width, 0.2);
+        assert_close(controls.profile_chamfer_depth, 0.02);
     }
 
     #[test]
@@ -5000,6 +5457,33 @@ mod tests {
         let err = write_text_file("  ", "G90").unwrap_err();
 
         assert_eq!(err, "output path is empty");
+    }
+
+    #[test]
+    fn write_gcode_files_writes_primary_and_companion_outputs() {
+        let path = std::env::temp_dir().join(format!(
+            "rengrave-ui-profile-export-{}-{}.ngc",
+            std::process::id(),
+            "test"
+        ));
+        let companion = secondary_output_path(&path, "profile");
+
+        let paths = write_gcode_files(
+            &path.display().to_string(),
+            "G90\n",
+            &[SecondaryGcode {
+                suffix: "profile".to_owned(),
+                gcode: "G90\nG1 X1\n".to_owned(),
+            }],
+        )
+        .unwrap();
+
+        assert_eq!(paths, vec![path.clone(), companion.clone()]);
+        assert_eq!(fs::read_to_string(&path).unwrap(), "G90\n");
+        assert_eq!(fs::read_to_string(&companion).unwrap(), "G90\nG1 X1\n");
+
+        let _ = fs::remove_file(path);
+        let _ = fs::remove_file(companion);
     }
 
     #[derive(Debug, Clone, Copy)]

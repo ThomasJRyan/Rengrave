@@ -57,6 +57,11 @@ pub struct LayoutSettings {
     pub upper: bool,
     pub plotbox: bool,
     pub boxgap: f64,
+    pub profile_origin_expand: f64,
+    pub profile_width: f64,
+    pub profile_height: f64,
+    pub profile_aspect: f64,
+    pub profile_alignment: Origin,
 }
 
 impl LayoutSettings {
@@ -84,6 +89,13 @@ impl LayoutSettings {
             upper: get_legacy_bool(settings, "upper", true),
             plotbox: get_legacy_bool(settings, "plotbox", false),
             boxgap: get_f64(settings, "boxgap", 0.25),
+            profile_origin_expand: profile_origin_expand(settings),
+            profile_width: get_f64(settings, "profile_width", 0.0),
+            profile_height: get_f64(settings, "profile_height", 0.0),
+            profile_aspect: get_f64(settings, "profile_aspect", 0.0),
+            profile_alignment: Origin::parse(
+                settings.get_last("profile_align").unwrap_or("Mid-Center"),
+            ),
         }
     }
 }
@@ -399,7 +411,8 @@ pub fn layout_text(font: &Font, text: &str, settings: &LayoutSettings) -> Layout
         });
     }
 
-    let zero = settings.origin.zero_point(bounds);
+    let origin_bounds = profile_origin_bounds(bounds, settings);
+    let zero = settings.origin.zero_point(origin_bounds);
     for segment in &mut segments {
         segment.start.x = segment.start.x - zero.x + settings.xorigin;
         segment.start.y = segment.start.y - zero.y + settings.yorigin;
@@ -481,6 +494,101 @@ fn get_f64(settings: &LegacySettings, key: &str, default: f64) -> f64 {
         .get_last(key)
         .and_then(|value| value.parse().ok())
         .unwrap_or(default)
+}
+
+fn profile_origin_expand(settings: &LegacySettings) -> f64 {
+    if !get_legacy_bool(settings, "profile_cut", false) {
+        return 0.0;
+    }
+
+    let depth = get_f64(settings, "profile_depth", 0.125).abs();
+    let endmill_diameter = get_f64(settings, "profile_endmill_dia", 0.25);
+    if depth <= f64::EPSILON || endmill_diameter <= 0.0 {
+        return 0.0;
+    }
+
+    let chamfer_width = if get_legacy_bool(settings, "profile_chamfer", false) {
+        let chamfer_depth = get_f64(settings, "profile_chamfer_depth", 0.02);
+        if chamfer_depth > 0.0 {
+            let angle = get_f64(settings, "profile_chamfer_angle", 60.0)
+                .clamp(1.0, 179.0)
+                .to_radians();
+            chamfer_depth * (angle / 2.0).tan()
+        } else {
+            0.0
+        }
+    } else {
+        0.0
+    };
+
+    get_f64(settings, "profile_margin", 0.25).max(0.0) + endmill_diameter / 2.0 + chamfer_width
+}
+
+fn profile_origin_bounds(bounds: Bounds, settings: &LayoutSettings) -> Bounds {
+    let expand = settings.profile_origin_expand;
+    let width = settings.profile_width;
+    let height = settings.profile_height;
+    let aspect = settings.profile_aspect;
+    if width <= 0.0 && height <= 0.0 && aspect <= 0.0 {
+        return expand_bounds(bounds, expand);
+    }
+
+    let mut target_width = if width > 0.0 {
+        width
+    } else {
+        bounds.max.x - bounds.min.x + 2.0 * expand
+    };
+    let mut target_height = if height > 0.0 {
+        height
+    } else {
+        bounds.max.y - bounds.min.y + 2.0 * expand
+    };
+    if aspect > 0.0 {
+        if width > 0.0 {
+            target_height = target_width / aspect;
+        } else if height > 0.0 {
+            target_width = target_height * aspect;
+        } else {
+            target_height = target_width / aspect;
+        }
+    }
+
+    let alignment = settings.profile_alignment;
+    let center_x = (bounds.min.x + bounds.max.x) / 2.0;
+    let center_y = (bounds.min.y + bounds.max.y) / 2.0;
+    let (min_x, max_x) = match alignment {
+        Origin::TopLeft | Origin::MidLeft | Origin::BotLeft => {
+            (bounds.min.x, bounds.min.x + target_width)
+        }
+        Origin::TopRight | Origin::MidRight | Origin::BotRight => {
+            (bounds.max.x - target_width, bounds.max.x)
+        }
+        _ => (center_x - target_width / 2.0, center_x + target_width / 2.0),
+    };
+    let (min_y, max_y) = match alignment {
+        Origin::BotLeft | Origin::BotCenter | Origin::BotRight => {
+            (bounds.min.y, bounds.min.y + target_height)
+        }
+        Origin::TopLeft | Origin::TopCenter | Origin::TopRight => {
+            (bounds.max.y - target_height, bounds.max.y)
+        }
+        _ => (
+            center_y - target_height / 2.0,
+            center_y + target_height / 2.0,
+        ),
+    };
+    Bounds {
+        min: Point::new(min_x, min_y),
+        max: Point::new(max_x, max_y),
+    }
+}
+
+fn expand_bounds(bounds: Bounds, amount: f64) -> Bounds {
+    let amount = amount.max(0.0);
+    Bounds {
+        min: Point::new(bounds.min.x - amount, bounds.min.y - amount),
+        max: Point::new(bounds.max.x + amount, bounds.max.y + amount),
+    }
 }
 
 fn scale_point(point: Point, xscale: f64, yscale: f64) -> Point {
@@ -631,6 +739,23 @@ mod tests {
 
         assert!(output.bounds.unwrap().min.x.abs() < 1e-9);
         assert!(output.bounds.unwrap().min.y.abs() < 1e-9);
+    }
+
+    #[test]
+    fn profile_cut_expands_origin_reference_bounds() {
+        let font = parse_cxf("[A] 1\nL 1,1,2,3\n", 5.0).unwrap();
+        let mut legacy = default_legacy_settings();
+        legacy.set_or_push("origin", "Top-Left", false);
+        legacy.set_or_push("profile_cut", "1", false);
+        legacy.set_or_push("profile_margin", "0", false);
+        legacy.set_or_push("profile_depth", "0.2", false);
+        legacy.set_or_push("profile_endmill_dia", "0.25", false);
+        let settings = LayoutSettings::from_legacy(&legacy);
+        let output = layout_text(&font, "A", &settings);
+
+        let bounds = output.bounds.unwrap();
+        assert!((bounds.min.x - 0.125).abs() < 1e-9);
+        assert!((bounds.max.y + 0.125).abs() < 1e-9);
     }
 
     #[test]

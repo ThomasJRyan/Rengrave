@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::bitmap::{BitmapError, vectorize_bitmap_to_dxf_with_cancel};
 use crate::cleanup::{CleanupBit, CleanupOptions, generate_cleanup_points_with_cancel};
@@ -8,10 +8,11 @@ use crate::external::is_bitmap_input;
 use crate::font::{Font, FontError, read_cxf_with_cancel, read_ttf_with_cancel};
 use crate::gcode::{
     GcodeOptions, write_cleanup_gcode, write_engrave_gcode, write_engrave_gcode_with_circle,
-    write_vcarve_gcode,
+    write_profile_gcode, write_vcarve_gcode,
 };
 use crate::geometry::Point;
 use crate::layout::{Bounds, EngraveCircle, EngraveSegment, LayoutSettings, layout_text};
+use crate::profile::{ProfileOptions, ProfileTool, generate_profile_operations_for_segments};
 use crate::project::{DocumentError, DocumentRequest, load_document};
 use crate::project::{InputKind, resolve_input_kind};
 use crate::settings::{LegacySetting, LegacySettings, get_legacy_bool};
@@ -51,6 +52,20 @@ pub struct SecondaryGcode {
     pub gcode: String,
 }
 
+pub fn secondary_output_path(path: &Path, suffix: &str) -> PathBuf {
+    let stem = path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("output");
+    let extension = path.extension().and_then(|value| value.to_str());
+    let mut file_name = format!("{stem}_{suffix}");
+    if let Some(extension) = extension {
+        file_name.push('.');
+        file_name.push_str(extension);
+    }
+    path.with_file_name(file_name)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BatchProgress {
     LoadingDocument,
@@ -66,6 +81,8 @@ pub enum BatchProgress {
     CalculatingStraightCleanup,
     CalculatingVBitCleanup,
     WritingVCarve,
+    WritingProfileChamfer,
+    WritingProfileCut,
     RenderingPrimary,
     RenderingSecondary,
     RenderingSettingsOnly,
@@ -88,6 +105,8 @@ impl BatchProgress {
             Self::CalculatingStraightCleanup => "Calculating straight cleanup",
             Self::CalculatingVBitCleanup => "Calculating V-bit cleanup",
             Self::WritingVCarve => "Writing V-carve toolpath",
+            Self::WritingProfileChamfer => "Writing profile chamfer",
+            Self::WritingProfileCut => "Writing profile cut",
             Self::RenderingPrimary => "Rendering primary G-code",
             Self::RenderingSecondary => "Rendering cleanup G-code",
             Self::RenderingSettingsOnly => "Rendering settings-only output",
@@ -376,6 +395,7 @@ fn generate_text_engrave_gcode(
     write_layout_gcode(
         settings,
         &layout.segments,
+        layout.bounds,
         layout.circle_border,
         include_secondary,
         include_svg,
@@ -463,6 +483,7 @@ fn generate_dxf_engrave_gcode(
     write_layout_gcode(
         settings,
         &layout.segments,
+        layout.bounds,
         layout.circle_border,
         include_secondary,
         include_svg,
@@ -539,6 +560,7 @@ struct GeneratedSecondary {
 fn write_layout_gcode(
     settings: &LegacySettings,
     segments: &[crate::layout::EngraveSegment],
+    bounds: Option<Bounds>,
     circle: Option<EngraveCircle>,
     include_secondary: bool,
     include_svg: bool,
@@ -554,9 +576,19 @@ fn write_layout_gcode(
     check_canceled(cancel)?;
     if settings.get_last("cut_type") != Some("v-carve") {
         progress(BatchProgress::WritingEngrave);
+        let secondary = profile_secondary_gcode(
+            settings,
+            &gcode_options,
+            bounds,
+            segments,
+            include_secondary,
+            warnings,
+            cancel,
+            progress,
+        )?;
         return Ok(Some(GeneratedToolpaths {
             primary: write_engrave_gcode_with_circle(segments, circle, &gcode_options),
-            secondary: Vec::new(),
+            secondary,
             svg: exports.svg,
             dxf: exports.dxf,
         }));
@@ -568,9 +600,19 @@ fn write_layout_gcode(
     }
     if vcarve_options.bit_shape == crate::vcarve::BitShape::Flat {
         progress(BatchProgress::WritingEngrave);
+        let secondary = profile_secondary_gcode(
+            settings,
+            &gcode_options,
+            bounds,
+            segments,
+            include_secondary,
+            warnings,
+            cancel,
+            progress,
+        )?;
         return Ok(Some(GeneratedToolpaths {
             primary: write_engrave_gcode(segments, &gcode_options),
-            secondary: Vec::new(),
+            secondary,
             svg: exports.svg,
             dxf: exports.dxf,
         }));
@@ -632,6 +674,16 @@ fn write_layout_gcode(
             });
         }
     }
+    secondary.extend(profile_secondary_gcode(
+        settings,
+        &gcode_options,
+        bounds,
+        segments,
+        include_secondary,
+        warnings,
+        cancel,
+        progress,
+    )?);
 
     check_canceled(cancel)?;
     progress(BatchProgress::WritingVCarve);
@@ -670,6 +722,66 @@ fn build_exports(
         }),
         dxf: include_dxf.then(|| write_dxf(segments)),
     }
+}
+
+fn profile_secondary_gcode(
+    settings: &LegacySettings,
+    gcode_options: &GcodeOptions,
+    bounds: Option<Bounds>,
+    segments: &[crate::layout::EngraveSegment],
+    include_secondary: bool,
+    warnings: &mut Vec<String>,
+    cancel: &dyn Fn() -> bool,
+    progress: &dyn Fn(BatchProgress),
+) -> Result<Vec<GeneratedSecondary>, BatchError> {
+    if !include_secondary {
+        return Ok(Vec::new());
+    }
+
+    let profile_options = ProfileOptions::from_legacy(settings);
+    if !profile_options.enabled {
+        return Ok(Vec::new());
+    }
+    if !profile_options.is_usable() {
+        warnings.push(
+            "profile cut skipped because material thickness and endmill diameter must be positive"
+                .to_owned(),
+        );
+        return Ok(Vec::new());
+    }
+    let Some(bounds) = bounds else {
+        warnings.push("profile cut skipped because project bounds are unavailable".to_owned());
+        return Ok(Vec::new());
+    };
+
+    let operations = generate_profile_operations_for_segments(
+        bounds,
+        segments,
+        &profile_options,
+        gcode_options.accuracy,
+    );
+    if operations.is_empty() {
+        warnings.push("profile cut skipped because no profile path could be generated".to_owned());
+        return Ok(Vec::new());
+    }
+
+    let mut secondary = Vec::new();
+    for operation in operations {
+        check_canceled(cancel)?;
+        progress(match operation.tool {
+            ProfileTool::VBitChamfer => BatchProgress::WritingProfileChamfer,
+            ProfileTool::StraightEndmill => BatchProgress::WritingProfileCut,
+        });
+        let lines = write_profile_gcode(&operation, gcode_options);
+        if lines.is_empty() {
+            continue;
+        }
+        secondary.push(GeneratedSecondary {
+            suffix: operation.tool.suffix().to_owned(),
+            lines,
+        });
+    }
+    Ok(secondary)
 }
 
 fn render_settings_only_gcode(settings: &LegacySettings, text: &str) -> String {
@@ -1567,6 +1679,165 @@ mod tests {
         assert!(output.warnings.is_empty());
         assert_eq!(output.secondary_gcode.len(), 1);
         assert_eq!(output.secondary_gcode[0].suffix, "clean");
+    }
+
+    #[test]
+    fn batch_prepares_profile_companion_gcode_for_engrave_jobs() {
+        let font_path = std::env::temp_dir().join(format!(
+            "rengrave-profile-{}-{}.cxf",
+            std::process::id(),
+            "batch"
+        ));
+        let output_path = std::env::temp_dir().join(format!(
+            "rengrave-profile-{}-{}.out.ngc",
+            std::process::id(),
+            "batch"
+        ));
+        fs::write(&font_path, "[A] 1\nL 0,0,10,0\n").unwrap();
+
+        let output = prepare_batch_output(&BatchRequest {
+            batch: true,
+            font_or_image: Some(font_path.clone()),
+            text: Some("A".to_owned()),
+            output: Some(output_path),
+            settings_overrides: vec![
+                LegacySetting::new("profile_cut", "1", false),
+                LegacySetting::new("profile_margin", "0", false),
+                LegacySetting::new("profile_depth", "0.2", false),
+                LegacySetting::new("profile_steps", "2", false),
+                LegacySetting::new("profile_endmill_dia", "0.25", false),
+                LegacySetting::new("profile_tabs", "2", false),
+                LegacySetting::new("profile_tab_height", "0.025", false),
+                LegacySetting::new("profile_tab_width", "0.5", false),
+            ],
+            ..BatchRequest::default()
+        })
+        .unwrap();
+
+        let _ = fs::remove_file(font_path);
+        assert!(output.warnings.is_empty());
+        assert_eq!(output.secondary_gcode.len(), 1);
+        assert_eq!(output.secondary_gcode[0].suffix, "profile");
+        assert!(output.secondary_gcode[0].gcode.contains("profile cut"));
+        assert!(output.secondary_gcode[0].gcode.contains("Profile tabs: 2"));
+        assert!(
+            output.secondary_gcode[0]
+                .gcode
+                .contains("Profile tab height: 0.0250")
+        );
+        assert!(output.secondary_gcode[0].gcode.contains("G1 Z-0.1000"));
+        assert!(output.secondary_gcode[0].gcode.contains("G1 Z-0.2000"));
+        assert!(
+            output.secondary_gcode[0]
+                .gcode
+                .lines()
+                .any(|line| line.contains(" Z-0.1750"))
+        );
+    }
+
+    #[test]
+    fn profile_cut_participates_in_origin_alignment() {
+        let font_path = std::env::temp_dir().join(format!(
+            "rengrave-profile-origin-{}-{}.cxf",
+            std::process::id(),
+            "batch"
+        ));
+        fs::write(&font_path, "[A] 2\nL 0,0,10,0\nL 0,0,10,10\n").unwrap();
+
+        let output = prepare_batch_output(&BatchRequest {
+            batch: true,
+            font_or_image: Some(font_path.clone()),
+            text: Some("A".to_owned()),
+            include_secondary: true,
+            settings_overrides: vec![
+                LegacySetting::new("origin", "Top-Left", false),
+                LegacySetting::new("profile_cut", "1", false),
+                LegacySetting::new("profile_margin", "0", false),
+                LegacySetting::new("profile_depth", "0.2", false),
+                LegacySetting::new("profile_steps", "1", false),
+                LegacySetting::new("profile_endmill_dia", "0.25", false),
+            ],
+            ..BatchRequest::default()
+        })
+        .unwrap();
+
+        let _ = fs::remove_file(font_path);
+        assert!(output.warnings.is_empty());
+        assert_eq!(output.secondary_gcode.len(), 1);
+        assert_eq!(output.secondary_gcode[0].suffix, "profile");
+        let points = profile_xy_points(&output.secondary_gcode[0].gcode);
+        let min_x = points.iter().map(|point| point.x).reduce(f64::min).unwrap();
+        let max_y = points.iter().map(|point| point.y).reduce(f64::max).unwrap();
+        assert!(min_x.abs() < 1.0e-9, "profile min X was {min_x}");
+        assert!(max_y.abs() < 1.0e-9, "profile max Y was {max_y}");
+    }
+
+    fn profile_xy_points(gcode: &str) -> Vec<Point> {
+        gcode
+            .lines()
+            .filter_map(|line| {
+                let mut x = None;
+                let mut y = None;
+                for token in line.split_whitespace() {
+                    if let Some(value) = token.strip_prefix('X') {
+                        x = value.parse().ok();
+                    } else if let Some(value) = token.strip_prefix('Y') {
+                        y = value.parse().ok();
+                    }
+                }
+                Some(Point::new(x?, y?))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn batch_splits_profile_chamfer_and_straight_profile_files() {
+        let font_path = std::env::temp_dir().join(format!(
+            "rengrave-profile-chamfer-{}-{}.cxf",
+            std::process::id(),
+            "batch"
+        ));
+        fs::write(&font_path, "[A] 1\nL 0,0,10,0\n").unwrap();
+
+        let output = prepare_batch_output(&BatchRequest {
+            batch: true,
+            font_or_image: Some(font_path.clone()),
+            text: Some("A".to_owned()),
+            include_secondary: true,
+            settings_overrides: vec![
+                LegacySetting::new("profile_cut", "1", false),
+                LegacySetting::new("profile_margin", "0", false),
+                LegacySetting::new("profile_depth", "0.2", false),
+                LegacySetting::new("profile_steps", "1", false),
+                LegacySetting::new("profile_endmill_dia", "0.25", false),
+                LegacySetting::new("profile_chamfer", "1", false),
+                LegacySetting::new("profile_chamfer_depth", "0.05", false),
+                LegacySetting::new("profile_chamfer_angle", "90", false),
+            ],
+            ..BatchRequest::default()
+        })
+        .unwrap();
+
+        let _ = fs::remove_file(font_path);
+        assert!(output.warnings.is_empty());
+        assert_eq!(
+            output
+                .secondary_gcode
+                .iter()
+                .map(|secondary| secondary.suffix.as_str())
+                .collect::<Vec<_>>(),
+            vec!["profile_chamfer", "profile"]
+        );
+        assert!(
+            output.secondary_gcode[0]
+                .gcode
+                .contains("profile chamfer operation")
+        );
+        assert!(
+            output.secondary_gcode[1]
+                .gcode
+                .contains("straight profile cut operation")
+        );
     }
 
     #[test]

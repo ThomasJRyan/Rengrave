@@ -75,6 +75,83 @@ pub(crate) struct InputCatalogEntry {
     pub(crate) size_bytes: u64,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct FontStyleChoice {
+    pub(crate) bold: bool,
+    pub(crate) italic: bool,
+}
+
+impl FontStyleChoice {
+    pub(crate) fn toggled_bold(self) -> Self {
+        Self {
+            bold: !self.bold,
+            italic: self.italic,
+        }
+    }
+
+    pub(crate) fn toggled_italic(self) -> Self {
+        Self {
+            bold: self.bold,
+            italic: !self.italic,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct FontStyleVariants {
+    pub(crate) regular: PathBuf,
+    pub(crate) bold: Option<PathBuf>,
+    pub(crate) italic: Option<PathBuf>,
+    pub(crate) bold_italic: Option<PathBuf>,
+}
+
+impl FontStyleVariants {
+    pub(crate) fn path_for(&self, style: FontStyleChoice) -> Option<&PathBuf> {
+        match (style.bold, style.italic) {
+            (false, false) => Some(&self.regular),
+            (true, false) => self.bold.as_ref(),
+            (false, true) => self.italic.as_ref(),
+            (true, true) => self.bold_italic.as_ref(),
+        }
+    }
+
+    pub(crate) fn contains_path(&self, path: &Path) -> bool {
+        self.style_for_path(path).is_some()
+    }
+
+    pub(crate) fn style_for_path(&self, path: &Path) -> Option<FontStyleChoice> {
+        if self.regular == path {
+            return Some(FontStyleChoice::default());
+        }
+        if self.bold.as_deref() == Some(path) {
+            return Some(FontStyleChoice {
+                bold: true,
+                italic: false,
+            });
+        }
+        if self.italic.as_deref() == Some(path) {
+            return Some(FontStyleChoice {
+                bold: false,
+                italic: true,
+            });
+        }
+        if self.bold_italic.as_deref() == Some(path) {
+            return Some(FontStyleChoice {
+                bold: true,
+                italic: true,
+            });
+        }
+        None
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FontCatalogRow {
+    pub(crate) entry: InputCatalogEntry,
+    pub(crate) display_name: String,
+    pub(crate) variants: FontStyleVariants,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum InputCatalogKind {
     CxfFont,
@@ -294,6 +371,24 @@ pub(crate) fn read_system_font_entries() -> Vec<InputCatalogEntry> {
     entries
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ParsedFontStyle {
+    Regular,
+    Bold,
+    Italic,
+    BoldItalic,
+    Other,
+}
+
+#[derive(Debug, Default)]
+struct TtfFamilyBuilder {
+    display_name: String,
+    regular: Option<InputCatalogEntry>,
+    bold: Option<PathBuf>,
+    italic: Option<PathBuf>,
+    bold_italic: Option<PathBuf>,
+}
+
 fn collect_font_entries(
     dir: &Path,
     depth: usize,
@@ -333,6 +428,9 @@ fn collect_font_entries(
         if !seen.insert(path.clone()) {
             continue;
         }
+        if kind == InputCatalogKind::TtfFont && !is_valid_catalog_ttf(&path) {
+            continue;
+        }
         let size_bytes = entry.metadata().map(|metadata| metadata.len()).unwrap_or(0);
         entries.push(InputCatalogEntry {
             path,
@@ -359,6 +457,9 @@ pub(crate) fn read_input_catalog_entries(dir: &Path) -> Result<Vec<InputCatalogE
         let Some(kind) = InputCatalogKind::from_path(&path) else {
             continue;
         };
+        if kind == InputCatalogKind::TtfFont && !is_valid_catalog_ttf(&path) {
+            continue;
+        }
         let Some(name) = path
             .file_name()
             .and_then(|name| name.to_str())
@@ -383,6 +484,12 @@ pub(crate) fn read_input_catalog_entries(dir: &Path) -> Result<Vec<InputCatalogE
     Ok(entries)
 }
 
+fn is_valid_catalog_ttf(path: &Path) -> bool {
+    read_ttf(path, 5.0, false)
+        .map(|font| !font.glyphs.is_empty() && "Text".chars().all(|ch| font.get_char(ch).is_some()))
+        .unwrap_or(false)
+}
+
 pub(crate) fn visible_input_catalog_entries_for_tool(
     entries: &[InputCatalogEntry],
     filter: InputCatalogFilter,
@@ -393,6 +500,191 @@ pub(crate) fn visible_input_catalog_entries_for_tool(
         .filter(|entry| filter.accepts(entry.kind) && tool_view.accepts_kind(entry.kind))
         .cloned()
         .collect()
+}
+
+pub(crate) fn font_catalog_rows_for_tool(
+    entries: &[InputCatalogEntry],
+    filter: InputCatalogFilter,
+    tool_view: ToolView,
+) -> Vec<FontCatalogRow> {
+    let mut rows = Vec::new();
+    let mut families = std::collections::BTreeMap::<String, TtfFamilyBuilder>::new();
+
+    for entry in visible_input_catalog_entries_for_tool(entries, filter, tool_view) {
+        match entry.kind {
+            InputCatalogKind::CxfFont => {
+                let display_name = catalog_font_stem(&entry);
+                rows.push(FontCatalogRow {
+                    variants: FontStyleVariants {
+                        regular: entry.path.clone(),
+                        bold: None,
+                        italic: None,
+                        bold_italic: None,
+                    },
+                    entry,
+                    display_name,
+                });
+            }
+            InputCatalogKind::TtfFont => {
+                let (display_name, style) = parse_font_style(&catalog_font_stem(&entry));
+                let key = display_name.to_lowercase();
+                let family = families.entry(key).or_insert_with(|| TtfFamilyBuilder {
+                    display_name,
+                    ..TtfFamilyBuilder::default()
+                });
+                match style {
+                    ParsedFontStyle::Regular => {
+                        if family.regular.is_none() {
+                            family.regular = Some(entry);
+                        }
+                    }
+                    ParsedFontStyle::Bold => {
+                        family.bold.get_or_insert(entry.path);
+                    }
+                    ParsedFontStyle::Italic => {
+                        family.italic.get_or_insert(entry.path);
+                    }
+                    ParsedFontStyle::BoldItalic => {
+                        family.bold_italic.get_or_insert(entry.path);
+                    }
+                    ParsedFontStyle::Other => {}
+                }
+            }
+            _ => {}
+        }
+    }
+
+    rows.extend(families.into_values().filter_map(|family| {
+        let entry = family.regular?;
+        Some(FontCatalogRow {
+            display_name: family.display_name,
+            variants: FontStyleVariants {
+                regular: entry.path.clone(),
+                bold: family.bold,
+                italic: family.italic,
+                bold_italic: family.bold_italic,
+            },
+            entry,
+        })
+    }));
+    rows.sort_by(|left, right| {
+        left.display_name
+            .to_lowercase()
+            .cmp(&right.display_name.to_lowercase())
+    });
+    rows
+}
+
+pub(crate) fn font_style_for_selected_path(
+    entries: &[InputCatalogEntry],
+    selected_path: Option<&Path>,
+) -> Option<(FontStyleChoice, FontStyleVariants)> {
+    let selected_path = selected_path?;
+    font_catalog_rows_for_tool(
+        entries,
+        InputCatalogFilter::default(),
+        ToolView::TextEngrave,
+    )
+    .into_iter()
+    .find_map(|row| {
+        row.variants
+            .style_for_path(selected_path)
+            .map(|style| (style, row.variants))
+    })
+}
+
+fn catalog_font_stem(entry: &InputCatalogEntry) -> String {
+    entry
+        .path
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.trim().is_empty())
+        .map(str::to_owned)
+        .unwrap_or_else(|| entry.name.clone())
+}
+
+fn parse_font_style(stem: &str) -> (String, ParsedFontStyle) {
+    for (suffixes, style) in [
+        (
+            &[
+                "BoldItalic",
+                "Bold Italic",
+                "Bold-Italic",
+                "Bold_Italic",
+                "BoldOblique",
+                "Bold Oblique",
+                "Bold-Oblique",
+                "Bold_Oblique",
+            ][..],
+            ParsedFontStyle::BoldItalic,
+        ),
+        (&["Italic", "Oblique"][..], ParsedFontStyle::Italic),
+        (&["Bold"][..], ParsedFontStyle::Bold),
+        (
+            &["Regular", "Roman", "Normal", "Book"][..],
+            ParsedFontStyle::Regular,
+        ),
+        (
+            &[
+                "ThinItalic",
+                "ThinOblique",
+                "ExtraLightItalic",
+                "ExtraLightOblique",
+                "UltraLightItalic",
+                "UltraLightOblique",
+                "LightItalic",
+                "LightOblique",
+                "MediumItalic",
+                "MediumOblique",
+                "SemiBoldItalic",
+                "SemiBoldOblique",
+                "DemiBoldItalic",
+                "DemiBoldOblique",
+                "ExtraBoldItalic",
+                "ExtraBoldOblique",
+                "UltraBoldItalic",
+                "UltraBoldOblique",
+                "BlackItalic",
+                "BlackOblique",
+                "HeavyItalic",
+                "HeavyOblique",
+                "Thin",
+                "ExtraLight",
+                "UltraLight",
+                "Light",
+                "Medium",
+                "SemiBold",
+                "DemiBold",
+                "ExtraBold",
+                "UltraBold",
+                "Black",
+                "Heavy",
+            ][..],
+            ParsedFontStyle::Other,
+        ),
+    ] {
+        for suffix in suffixes {
+            if let Some(base) = strip_font_style_suffix(stem, suffix) {
+                return (base, style);
+            }
+        }
+    }
+    (stem.to_owned(), ParsedFontStyle::Regular)
+}
+
+fn strip_font_style_suffix(stem: &str, suffix: &str) -> Option<String> {
+    let start = stem.len().checked_sub(suffix.len())?;
+    if !stem[start..].eq_ignore_ascii_case(suffix) {
+        return None;
+    }
+    if start > 0 {
+        let previous = stem[..start].chars().next_back()?;
+        if !matches!(previous, '-' | '_' | ' ') {
+            return None;
+        }
+    }
+    let base = stem[..start].trim_end_matches(['-', '_', ' ']).trim();
+    (!base.is_empty()).then(|| base.to_owned())
 }
 
 pub(crate) fn format_bytes(bytes: u64) -> String {
@@ -408,6 +700,19 @@ pub(crate) fn format_bytes(bytes: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn catalog_entry(path: &str, kind: InputCatalogKind) -> InputCatalogEntry {
+        InputCatalogEntry {
+            path: PathBuf::from(path),
+            name: Path::new(path)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or(path)
+                .to_owned(),
+            kind,
+            size_bytes: 1,
+        }
+    }
 
     #[test]
     fn catalog_font_registry_tracks_ttf_entries_only_with_limit() {
@@ -440,5 +745,101 @@ mod tests {
             catalog_ttf_font_paths(&entries, 8),
             vec![PathBuf::from("/tmp/b.ttf"), PathBuf::from("/tmp/c.ttf")]
         );
+    }
+
+    #[test]
+    fn font_catalog_rows_group_ttf_style_variants_under_regular_face() {
+        let entries = vec![
+            catalog_entry("/fonts/AdwaitaMono-Regular.ttf", InputCatalogKind::TtfFont),
+            catalog_entry("/fonts/AdwaitaMono-Bold.ttf", InputCatalogKind::TtfFont),
+            catalog_entry("/fonts/AdwaitaMono-Italic.ttf", InputCatalogKind::TtfFont),
+            catalog_entry(
+                "/fonts/AdwaitaMono-BoldItalic.ttf",
+                InputCatalogKind::TtfFont,
+            ),
+            catalog_entry(
+                "/fonts/AdwaitaMono-ExtraLight.ttf",
+                InputCatalogKind::TtfFont,
+            ),
+            catalog_entry(
+                "/fonts/AdwaitaMono-LightItalic.ttf",
+                InputCatalogKind::TtfFont,
+            ),
+            catalog_entry("/fonts/Solo.ttf", InputCatalogKind::TtfFont),
+            catalog_entry("/fonts/romanc.cxf", InputCatalogKind::CxfFont),
+        ];
+
+        let rows = font_catalog_rows_for_tool(
+            &entries,
+            InputCatalogFilter::default(),
+            ToolView::TextEngrave,
+        );
+
+        assert_eq!(
+            rows.iter()
+                .map(|row| row.display_name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["AdwaitaMono", "romanc", "Solo"]
+        );
+        let adwaita = rows
+            .iter()
+            .find(|row| row.display_name == "AdwaitaMono")
+            .unwrap();
+        assert_eq!(
+            adwaita.entry.path,
+            PathBuf::from("/fonts/AdwaitaMono-Regular.ttf")
+        );
+        assert_eq!(
+            adwaita.variants.path_for(FontStyleChoice {
+                bold: true,
+                italic: false,
+            }),
+            Some(&PathBuf::from("/fonts/AdwaitaMono-Bold.ttf"))
+        );
+        assert_eq!(
+            adwaita.variants.path_for(FontStyleChoice {
+                bold: false,
+                italic: true,
+            }),
+            Some(&PathBuf::from("/fonts/AdwaitaMono-Italic.ttf"))
+        );
+        assert_eq!(
+            adwaita.variants.path_for(FontStyleChoice {
+                bold: true,
+                italic: true,
+            }),
+            Some(&PathBuf::from("/fonts/AdwaitaMono-BoldItalic.ttf"))
+        );
+        assert!(
+            rows.iter()
+                .all(|row| row.display_name != "AdwaitaMono-ExtraLight")
+        );
+    }
+
+    #[test]
+    fn font_style_for_selected_path_finds_family_variant_state() {
+        let entries = vec![
+            catalog_entry("/fonts/Example-Regular.ttf", InputCatalogKind::TtfFont),
+            catalog_entry("/fonts/Example-BoldItalic.ttf", InputCatalogKind::TtfFont),
+        ];
+
+        let (style, variants) = font_style_for_selected_path(
+            &entries,
+            Some(Path::new("/fonts/Example-BoldItalic.ttf")),
+        )
+        .unwrap();
+
+        assert_eq!(
+            style,
+            FontStyleChoice {
+                bold: true,
+                italic: true,
+            }
+        );
+        assert_eq!(
+            variants.regular,
+            PathBuf::from("/fonts/Example-Regular.ttf")
+        );
+        assert!(variants.path_for(style.toggled_italic()).is_none());
     }
 }

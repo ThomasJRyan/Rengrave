@@ -205,14 +205,22 @@ pub(crate) fn draw_preview_cursor_readout(
 pub(crate) struct PreviewMotion {
     pub(crate) cuts: Vec<PreviewSegment>,
     pub(crate) rapids: Vec<PreviewSegment>,
+    pub(crate) tabs: Vec<PreviewSegment>,
 }
 
 pub(crate) fn parse_preview_motion(gcode: &str) -> PreviewMotion {
     let mut current = None;
+    let mut current_z = None;
+    let mut current_tab_z = None;
+    let mut has_profile_tabs = false;
     let mut motion = PreviewMotion::default();
 
     for line in gcode.lines() {
         let trimmed = line.trim();
+        if trimmed.starts_with("( Profile tabs:") {
+            has_profile_tabs = true;
+            continue;
+        }
         if trimmed.starts_with('(') || trimmed.is_empty() {
             continue;
         }
@@ -227,8 +235,19 @@ pub(crate) fn parse_preview_motion(gcode: &str) -> PreviewMotion {
         }
 
         let params = motion_params(trimmed);
+        if has_profile_tabs {
+            if let Some(z) = params.z {
+                if current_z.is_some_and(|previous| z > previous + 0.00001) {
+                    current_tab_z = Some(z);
+                } else if current_tab_z.is_some_and(|tab_z| (z - tab_z).abs() > 0.00001) {
+                    current_tab_z = None;
+                }
+            }
+        }
+        let target_z = params.z.or(current_z);
         if matches!(command, "G0" | "G00") {
             let Some(next) = params.point(current) else {
+                current_z = target_z;
                 continue;
             };
             if let Some(start) = current {
@@ -237,6 +256,7 @@ pub(crate) fn parse_preview_motion(gcode: &str) -> PreviewMotion {
                 }
             }
             current = Some(next);
+            current_z = target_z;
             continue;
         }
 
@@ -253,6 +273,7 @@ pub(crate) fn parse_preview_motion(gcode: &str) -> PreviewMotion {
                         matches!(command, "G2" | "G02"),
                     );
                     current = Some(end);
+                    current_z = target_z;
                     continue;
                 }
                 if let Some(radius) = params.r {
@@ -265,6 +286,7 @@ pub(crate) fn parse_preview_motion(gcode: &str) -> PreviewMotion {
                             matches!(command, "G2" | "G02"),
                         );
                         current = Some(end);
+                        current_z = target_z;
                         continue;
                     }
                 }
@@ -277,11 +299,20 @@ pub(crate) fn parse_preview_motion(gcode: &str) -> PreviewMotion {
         if matches!(command, "G1" | "G01" | "G2" | "G02" | "G3" | "G03") {
             if let Some(start) = current {
                 if point_distance(start, next) > 0.00001 {
-                    motion.cuts.push(PreviewSegment { start, end: next });
+                    let segment = PreviewSegment { start, end: next };
+                    if current_tab_z
+                        .zip(target_z)
+                        .is_some_and(|(tab_z, z)| (tab_z - z).abs() <= 0.00001)
+                    {
+                        motion.tabs.push(segment);
+                    } else {
+                        motion.cuts.push(segment);
+                    }
                 }
             }
         }
         current = Some(next);
+        current_z = target_z;
     }
 
     motion
@@ -294,6 +325,13 @@ pub(crate) fn cleanup_preview_segments(outputs: &[SecondaryGcode]) -> Vec<Previe
         .collect()
 }
 
+pub(crate) fn profile_tab_preview_segments(outputs: &[SecondaryGcode]) -> Vec<PreviewSegment> {
+    outputs
+        .iter()
+        .flat_map(|output| parse_preview_motion(&output.gcode).tabs)
+        .collect()
+}
+
 #[derive(Debug, Default)]
 struct MotionParams {
     x: Option<f64>,
@@ -301,6 +339,7 @@ struct MotionParams {
     i: Option<f64>,
     j: Option<f64>,
     r: Option<f64>,
+    z: Option<f64>,
     saw_xy: bool,
 }
 
@@ -337,6 +376,8 @@ fn motion_params(line: &str) -> MotionParams {
             params.j = Some(value);
         } else if let Some(value) = axis_value(token, 'R') {
             params.r = Some(value);
+        } else if let Some(value) = axis_value(token, 'Z') {
+            params.z = Some(value);
         }
     }
 
@@ -484,11 +525,13 @@ pub(crate) fn draw_preview(
     segments: &[PreviewSegment],
     rapids: &[PreviewSegment],
     cleanup_segments: &[PreviewSegment],
+    tab_segments: &[PreviewSegment],
     input_overlay: &[PreviewSegment],
     bounds: Option<PreviewBounds>,
     show_toolpath: bool,
     show_rapids: bool,
     show_cleanup: bool,
+    show_tabs: bool,
     show_input_overlay: bool,
     show_bounds: bool,
     show_axes: bool,
@@ -547,6 +590,15 @@ pub(crate) fn draw_preview(
             painter.line_segment(
                 [to_screen(segment.start), to_screen(segment.end)],
                 egui::Stroke::new(1.2, egui::Color32::from_rgb(118, 164, 190)),
+            );
+        }
+    }
+
+    if show_tabs {
+        for segment in tab_segments {
+            painter.line_segment(
+                [to_screen(segment.start), to_screen(segment.end)],
+                egui::Stroke::new(2.2, profile_tab_color()),
             );
         }
     }
@@ -617,10 +669,12 @@ pub(crate) fn draw_preview(
             segments,
             rapids,
             cleanup_segments,
+            tab_segments,
             bounds,
             show_toolpath,
             show_rapids,
             show_cleanup,
+            show_tabs,
         ),
     );
     draw_preview_scale_bar(painter, rect, transform.zoom, unit_label);
@@ -825,10 +879,12 @@ pub(crate) fn preview_overlay_items(
     segments: &[PreviewSegment],
     rapids: &[PreviewSegment],
     cleanup_segments: &[PreviewSegment],
+    tab_segments: &[PreviewSegment],
     bounds: Option<PreviewBounds>,
     show_toolpath: bool,
     show_rapids: bool,
     show_cleanup: bool,
+    show_tabs: bool,
 ) -> Vec<PreviewOverlayItem> {
     let mut items = Vec::new();
     if show_toolpath && !segments.is_empty() {
@@ -849,6 +905,13 @@ pub(crate) fn preview_overlay_items(
         items.push(PreviewOverlayItem {
             text: format!("Cleanup {}", cleanup_segments.len()),
             color: egui::Color32::from_rgb(118, 164, 190),
+            swatch: true,
+        });
+    }
+    if show_tabs && !tab_segments.is_empty() {
+        items.push(PreviewOverlayItem {
+            text: format!("Profile tabs {}", tab_segments.len()),
+            color: profile_tab_color(),
             swatch: true,
         });
     }
@@ -873,6 +936,10 @@ pub(crate) fn preview_overlay_items(
         });
     }
     items
+}
+
+fn profile_tab_color() -> egui::Color32 {
+    egui::Color32::from_rgb(206, 126, 202)
 }
 
 fn draw_preview_overlay(painter: &egui::Painter, rect: egui::Rect, items: &[PreviewOverlayItem]) {
