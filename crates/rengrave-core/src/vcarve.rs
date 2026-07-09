@@ -1,6 +1,7 @@
 use crate::geometry::Point;
 use crate::layout::EngraveSegment;
 use crate::settings::{LegacySettings, get_legacy_bool};
+use rayon::prelude::*;
 
 const ZERO: f64 = 0.00001;
 
@@ -244,13 +245,12 @@ pub fn generate_vcarve_points_with_cancel(
     segments: &[EngraveSegment],
     options: &VCarveOptions,
     accuracy: f64,
-    cancel: &dyn Fn() -> bool,
+    cancel: &(dyn Fn() -> bool + Sync),
 ) -> Result<Vec<VCarvePoint>, VCarveCanceled> {
     let Some(grid) = PartitionGrid::new(segments, options.max_radius(), options.step_len) else {
         return Ok(Vec::new());
     };
 
-    let mut output = Vec::new();
     let drive_corner_angle = if options.inlay {
         360.0 - options.step_corner_angle
     } else {
@@ -264,6 +264,107 @@ pub fn generate_vcarve_points_with_cancel(
     let not_ball_carve = options.bit_shape != BitShape::Ball;
     let bit_angle_enabled = options.bit_angle_degrees != 0.0;
 
+    let groups = vcarve_groups(segments, options.v_flop);
+    let generated = if groups.len() > 1 {
+        groups
+            .par_iter()
+            .map(|(loop_id, range)| {
+                generate_vcarve_group(
+                    segments,
+                    range,
+                    *loop_id,
+                    options,
+                    &grid,
+                    drive_corner_angle,
+                    delta_angle,
+                    max_radius,
+                    not_ball_carve,
+                    bit_angle_enabled,
+                    cancel,
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?
+    } else {
+        groups
+            .iter()
+            .map(|(loop_id, range)| {
+                generate_vcarve_group(
+                    segments,
+                    range,
+                    *loop_id,
+                    options,
+                    &grid,
+                    drive_corner_angle,
+                    delta_angle,
+                    max_radius,
+                    not_ball_carve,
+                    bit_angle_enabled,
+                    cancel,
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?
+    };
+
+    let mut output = Vec::new();
+    for group in generated {
+        output.extend(group);
+    }
+    Ok(reorder_loops(output, accuracy))
+}
+
+fn vcarve_groups(
+    segments: &[EngraveSegment],
+    v_flop: bool,
+) -> Vec<(usize, std::ops::Range<usize>)> {
+    let mut groups = Vec::new();
+    let mut group_start = None;
+    let mut previous_end = None;
+    let mut previous_char_num = None;
+
+    for line_index in 0..segments.len() {
+        let segment = traversal_segment(segments, line_index, v_flop);
+        let dx = segment.end.x - segment.start.x;
+        let dy = segment.end.y - segment.start.y;
+        if (dx * dx + dy * dy).sqrt() < ZERO {
+            continue;
+        }
+
+        let new_group = previous_end
+            .map(|end: Point| {
+                (segment.start.x - end.x).abs() > ZERO
+                    || (segment.start.y - end.y).abs() > ZERO
+                    || previous_char_num != Some(segment.loop_id)
+            })
+            .unwrap_or(true);
+        if new_group {
+            if let Some(start) = group_start.replace(line_index) {
+                groups.push((groups.len() + 1, start..line_index));
+            }
+        }
+        previous_end = Some(segment.end);
+        previous_char_num = Some(segment.loop_id);
+    }
+
+    if let Some(start) = group_start {
+        groups.push((groups.len() + 1, start..segments.len()));
+    }
+    groups
+}
+
+fn generate_vcarve_group(
+    segments: &[EngraveSegment],
+    range: &std::ops::Range<usize>,
+    loop_id: usize,
+    options: &VCarveOptions,
+    grid: &PartitionGrid,
+    drive_corner_angle: f64,
+    delta_angle: f64,
+    max_radius: f64,
+    not_ball_carve: bool,
+    bit_angle_enabled: bool,
+    cancel: &(dyn Fn() -> bool + Sync),
+) -> Result<Vec<VCarvePoint>, VCarveCanceled> {
+    let mut output = Vec::new();
     let mut xa = 9999.0;
     let mut ya = 9999.0;
     let mut xb = 9999.0;
@@ -274,9 +375,8 @@ pub fn generate_vcarve_points_with_cancel(
     let mut previous_seg_cos = 2.0;
     let mut previous_char_num = None;
     let mut theta = 9999.0;
-    let mut loop_id = 0usize;
 
-    for line_index in 0..segments.len() {
+    for line_index in range.clone() {
         check_canceled(cancel)?;
         let segment = traversal_segment(segments, line_index, options.v_flop);
         let start = segment.start;
@@ -299,7 +399,6 @@ pub fn generate_vcarve_points_with_cancel(
             || previous_char_num != Some(char_num)
         {
             new_loop = true;
-            loop_id += 1;
             xa = start.x;
             ya = start.y;
             xb = end.x;
@@ -432,7 +531,7 @@ pub fn generate_vcarve_points_with_cancel(
         }
     }
 
-    Ok(reorder_loops(output, accuracy))
+    Ok(output)
 }
 
 pub fn sort_image_segments_for_vcarve(
@@ -1235,7 +1334,7 @@ fn get_f64(settings: &LegacySettings, key: &str, default: f64) -> f64 {
 mod tests {
     use super::*;
     use crate::settings::default_legacy_settings;
-    use std::cell::Cell;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
     fn vbit_depth_uses_included_angle() {
@@ -1347,22 +1446,38 @@ mod tests {
     }
 
     #[test]
+    fn vcarve_groups_preserve_disconnected_loop_ranges() {
+        let mut segments = square_segments();
+        segments.extend(square_segments().into_iter().map(|mut segment| {
+            segment.start.x += 4.0;
+            segment.end.x += 4.0;
+            segment.loop_id = 2;
+            segment
+        }));
+
+        let groups = vcarve_groups(&segments, false);
+
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0], (1, 0..4));
+        assert_eq!(groups[1], (2, 4..8));
+    }
+
+    #[test]
     fn vcarve_generation_can_cancel_inside_sampling_loop() {
         let segments = square_segments();
         let mut settings = default_legacy_settings();
         settings.set_or_push("v_step_len", "0.01", false);
         let options = VCarveOptions::from_legacy(&settings);
-        let calls = Cell::new(0usize);
+        let calls = AtomicUsize::new(0);
 
         let err = generate_vcarve_points_with_cancel(&segments, &options, 0.001, &|| {
-            let next = calls.get() + 1;
-            calls.set(next);
+            let next = calls.fetch_add(1, Ordering::Relaxed) + 1;
             next > 8
         })
         .unwrap_err();
 
         assert_eq!(err, VCarveCanceled);
-        assert!(calls.get() > 8);
+        assert!(calls.load(Ordering::Relaxed) > 8);
     }
 
     fn square_segments() -> Vec<EngraveSegment> {

@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use image::{DynamicImage, RgbaImage};
+use rayon::prelude::*;
 use rengrave_potrace::{Bitmap, Options as NativePotraceOptions, TurnPolicy};
 
 use crate::settings::{LegacySettings, get_legacy_bool};
@@ -63,21 +64,31 @@ impl BitmapBackend {
 pub fn bitmap_trace_mask_and_stats(image: &DynamicImage) -> (image::RgbaImage, BitmapTraceStats) {
     let rgba = image.to_rgba8();
     let (width, height) = rgba.dimensions();
-    let mut mask = image::RgbaImage::new(width, height);
-    let mut stats = BitmapTraceStats::default();
+    let source = rgba.into_raw();
+    let mut mask = vec![255; source.len()];
+    let (black_pixels, white_pixels) = mask
+        .par_chunks_mut(4)
+        .zip(source.par_chunks(4))
+        .map(|(destination, pixel)| {
+            let black = bitmap_pixel_is_black([pixel[0], pixel[1], pixel[2], pixel[3]]);
+            let value = if black { 0 } else { 255 };
+            destination.copy_from_slice(&[value, value, value, 255]);
+            if black { (1, 0) } else { (0, 1) }
+        })
+        .reduce(
+            || (0, 0),
+            |left, right| (left.0 + right.0, left.1 + right.1),
+        );
 
-    for (x, y, pixel) in rgba.enumerate_pixels() {
-        let value = if bitmap_pixel_is_black(pixel.0) {
-            stats.black_pixels += 1;
-            0
-        } else {
-            stats.white_pixels += 1;
-            255
-        };
-        mask.put_pixel(x, y, image::Rgba([value, value, value, 255]));
-    }
-
-    (mask, stats)
+    let mask = image::RgbaImage::from_raw(width, height, mask)
+        .expect("bitmap mask dimensions must match its pixel buffer");
+    (
+        mask,
+        BitmapTraceStats {
+            black_pixels,
+            white_pixels,
+        },
+    )
 }
 
 pub fn vectorize_bitmap_to_dxf(

@@ -1,5 +1,7 @@
 use std::path::{Path, PathBuf};
 
+use rayon::join;
+
 use crate::bitmap::{BitmapError, vectorize_bitmap_to_dxf_with_cancel};
 use crate::cleanup::{CleanupBit, CleanupOptions, generate_cleanup_points_with_cancel};
 use crate::dxf::{DxfError, dxf_font_from_str_with_cancel, read_dxf_font_with_cancel};
@@ -129,14 +131,14 @@ pub fn prepare_batch_output(request: &BatchRequest) -> Result<BatchOutput, Batch
 
 pub fn prepare_batch_output_with_cancel(
     request: &BatchRequest,
-    cancel: impl Fn() -> bool,
+    cancel: impl Fn() -> bool + Sync,
 ) -> Result<BatchOutput, BatchError> {
     prepare_batch_output_with_cancel_and_progress(request, cancel, |_| {})
 }
 
 pub fn prepare_batch_output_with_cancel_and_progress(
     request: &BatchRequest,
-    cancel: impl Fn() -> bool,
+    cancel: impl Fn() -> bool + Sync,
     progress: impl Fn(BatchProgress),
 ) -> Result<BatchOutput, BatchError> {
     check_canceled(&cancel)?;
@@ -305,7 +307,7 @@ fn generate_engrave_gcode(
     include_svg: bool,
     include_dxf: bool,
     warnings: &mut Vec<String>,
-    cancel: &dyn Fn() -> bool,
+    cancel: &(dyn Fn() -> bool + Sync),
     progress: &dyn Fn(BatchProgress),
 ) -> Result<Option<GeneratedToolpaths>, BatchError> {
     check_canceled(cancel)?;
@@ -340,7 +342,7 @@ fn generate_text_engrave_gcode(
     include_svg: bool,
     include_dxf: bool,
     warnings: &mut Vec<String>,
-    cancel: &dyn Fn() -> bool,
+    cancel: &(dyn Fn() -> bool + Sync),
     progress: &dyn Fn(BatchProgress),
 ) -> Result<Option<GeneratedToolpaths>, BatchError> {
     check_canceled(cancel)?;
@@ -412,7 +414,7 @@ fn generate_dxf_engrave_gcode(
     include_svg: bool,
     include_dxf: bool,
     warnings: &mut Vec<String>,
-    cancel: &dyn Fn() -> bool,
+    cancel: &(dyn Fn() -> bool + Sync),
     progress: &dyn Fn(BatchProgress),
 ) -> Result<Option<GeneratedToolpaths>, BatchError> {
     check_canceled(cancel)?;
@@ -497,7 +499,7 @@ fn generate_dxf_engrave_gcode(
 fn bitmap_font_from_dxf_with_cancel(
     dxf: &str,
     segarc: f64,
-    cancel: &dyn Fn() -> bool,
+    cancel: &(dyn Fn() -> bool + Sync),
 ) -> Result<Font, DxfError> {
     let mut font = dxf_font_from_str_with_cancel(dxf, segarc, cancel)?;
     normalize_bitmap_font_to_content_origin(&mut font);
@@ -566,7 +568,7 @@ fn write_layout_gcode(
     include_svg: bool,
     include_dxf: bool,
     warnings: &mut Vec<String>,
-    cancel: &dyn Fn() -> bool,
+    cancel: &(dyn Fn() -> bool + Sync),
     progress: &dyn Fn(BatchProgress),
 ) -> Result<Option<GeneratedToolpaths>, BatchError> {
     check_canceled(cancel)?;
@@ -643,21 +645,37 @@ fn write_layout_gcode(
     let mut secondary = Vec::new();
     if include_secondary {
         let cleanup_options = CleanupOptions::from_legacy(settings);
-        for bit in [CleanupBit::Straight, CleanupBit::VBit] {
-            check_canceled(cancel)?;
-            progress(match bit {
-                CleanupBit::Straight => BatchProgress::CalculatingStraightCleanup,
-                CleanupBit::VBit => BatchProgress::CalculatingVBitCleanup,
-            });
-            let cleanup_points = generate_cleanup_points_with_cancel(
-                vcarve_segments,
-                &cleanup_options,
-                &vcarve_options,
-                bit,
-                gcode_options.accuracy,
-                cancel,
-            )
-            .map_err(|_| BatchError::Canceled)?;
+        check_canceled(cancel)?;
+        progress(BatchProgress::CalculatingStraightCleanup);
+        progress(BatchProgress::CalculatingVBitCleanup);
+        let (straight_result, vbit_result) = join(
+            || {
+                generate_cleanup_points_with_cancel(
+                    vcarve_segments,
+                    &cleanup_options,
+                    &vcarve_options,
+                    CleanupBit::Straight,
+                    gcode_options.accuracy,
+                    cancel,
+                )
+            },
+            || {
+                generate_cleanup_points_with_cancel(
+                    vcarve_segments,
+                    &cleanup_options,
+                    &vcarve_options,
+                    CleanupBit::VBit,
+                    gcode_options.accuracy,
+                    cancel,
+                )
+            },
+        );
+
+        for (bit, cleanup_result) in [
+            (CleanupBit::Straight, straight_result),
+            (CleanupBit::VBit, vbit_result),
+        ] {
+            let cleanup_points = cleanup_result.map_err(|_| BatchError::Canceled)?;
             check_canceled(cancel)?;
             if cleanup_points.is_empty() {
                 continue;
@@ -695,7 +713,7 @@ fn write_layout_gcode(
     }))
 }
 
-fn check_canceled(cancel: &dyn Fn() -> bool) -> Result<(), BatchError> {
+fn check_canceled(cancel: &(dyn Fn() -> bool + Sync)) -> Result<(), BatchError> {
     if cancel() {
         Err(BatchError::Canceled)
     } else {
@@ -716,12 +734,27 @@ fn build_exports(
     include_svg: bool,
     include_dxf: bool,
 ) -> GeneratedExports {
-    GeneratedExports {
-        svg: include_svg.then(|| {
-            write_svg_with_circle(segments, circle, &ExportOptions::from_legacy(settings))
-        }),
-        dxf: include_dxf.then(|| write_dxf(segments)),
-    }
+    let (svg, dxf) = match (include_svg, include_dxf) {
+        (true, true) => {
+            let (svg, dxf) = join(
+                || write_svg_with_circle(segments, circle, &ExportOptions::from_legacy(settings)),
+                || write_dxf(segments),
+            );
+            (Some(svg), Some(dxf))
+        }
+        (true, false) => (
+            Some(write_svg_with_circle(
+                segments,
+                circle,
+                &ExportOptions::from_legacy(settings),
+            )),
+            None,
+        ),
+        (false, true) => (None, Some(write_dxf(segments))),
+        (false, false) => (None, None),
+    };
+
+    GeneratedExports { svg, dxf }
 }
 
 fn profile_secondary_gcode(
@@ -731,7 +764,7 @@ fn profile_secondary_gcode(
     segments: &[crate::layout::EngraveSegment],
     include_secondary: bool,
     warnings: &mut Vec<String>,
-    cancel: &dyn Fn() -> bool,
+    cancel: &(dyn Fn() -> bool + Sync),
     progress: &dyn Fn(BatchProgress),
 ) -> Result<Vec<GeneratedSecondary>, BatchError> {
     if !include_secondary {
@@ -843,8 +876,9 @@ fn sanitized_text_comment(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::cell::{Cell, RefCell};
+    use std::cell::RefCell;
     use std::fs;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     #[test]
     fn batch_cancel_hook_stops_before_document_load() {
@@ -855,35 +889,34 @@ mod tests {
 
     #[test]
     fn batch_cancel_hook_stops_at_stage_boundaries() {
-        let calls = Cell::new(0usize);
+        let calls = AtomicUsize::new(0);
         let err = prepare_batch_output_with_cancel(&BatchRequest::default(), || {
-            let next = calls.get() + 1;
-            calls.set(next);
+            let next = calls.fetch_add(1, Ordering::Relaxed) + 1;
             next >= 2
         })
         .unwrap_err();
 
         assert_eq!(err.to_string(), "generation canceled");
-        assert_eq!(calls.get(), 2);
+        assert_eq!(calls.load(Ordering::Relaxed), 2);
     }
 
     #[test]
     fn batch_cancel_hook_allows_normal_generation_when_clear() {
-        let calls = Cell::new(0usize);
+        let calls = AtomicUsize::new(0);
         let output = prepare_batch_output_with_cancel(
             &BatchRequest {
                 batch: true,
                 ..BatchRequest::default()
             },
             || {
-                calls.set(calls.get() + 1);
+                calls.fetch_add(1, Ordering::Relaxed);
                 false
             },
         )
         .unwrap();
 
         assert!(output.gcode.contains("settings-only output"));
-        assert!(calls.get() > 2);
+        assert!(calls.load(Ordering::Relaxed) > 2);
     }
 
     #[test]
@@ -936,8 +969,8 @@ mod tests {
             "batch"
         ));
         fs::write(&path, "[A] 4\nL 0,0,2,0\nL 2,0,2,2\nL 2,2,0,2\nL 0,2,0,0\n").unwrap();
-        let in_vcarve = Cell::new(false);
-        let vcarve_checks = Cell::new(0usize);
+        let in_vcarve = AtomicBool::new(false);
+        let vcarve_checks = AtomicUsize::new(0);
 
         let err = prepare_batch_output_with_cancel_and_progress(
             &BatchRequest {
@@ -951,9 +984,8 @@ mod tests {
                 ..BatchRequest::default()
             },
             || {
-                if in_vcarve.get() {
-                    let next = vcarve_checks.get() + 1;
-                    vcarve_checks.set(next);
+                if in_vcarve.load(Ordering::Relaxed) {
+                    let next = vcarve_checks.fetch_add(1, Ordering::Relaxed) + 1;
                     next > 4
                 } else {
                     false
@@ -961,7 +993,7 @@ mod tests {
             },
             |event| {
                 if event == BatchProgress::CalculatingVCarve {
-                    in_vcarve.set(true);
+                    in_vcarve.store(true, Ordering::Relaxed);
                 }
             },
         )
@@ -969,7 +1001,7 @@ mod tests {
 
         let _ = fs::remove_file(path);
         assert_eq!(err.to_string(), "generation canceled");
-        assert!(vcarve_checks.get() > 4);
+        assert!(vcarve_checks.load(Ordering::Relaxed) > 4);
     }
 
     #[test]
@@ -980,8 +1012,8 @@ mod tests {
             "batch"
         ));
         fs::write(&path, "[A] 4\nL 0,0,2,0\nL 2,0,2,2\nL 2,2,0,2\nL 0,2,0,0\n").unwrap();
-        let in_cleanup = Cell::new(false);
-        let cleanup_checks = Cell::new(0usize);
+        let in_cleanup = AtomicBool::new(false);
+        let cleanup_checks = AtomicUsize::new(0);
 
         let err = prepare_batch_output_with_cancel_and_progress(
             &BatchRequest {
@@ -999,9 +1031,8 @@ mod tests {
                 ..BatchRequest::default()
             },
             || {
-                if in_cleanup.get() {
-                    let next = cleanup_checks.get() + 1;
-                    cleanup_checks.set(next);
+                if in_cleanup.load(Ordering::Relaxed) {
+                    let next = cleanup_checks.fetch_add(1, Ordering::Relaxed) + 1;
                     next > 4
                 } else {
                     false
@@ -1009,7 +1040,7 @@ mod tests {
             },
             |event| {
                 if event == BatchProgress::CalculatingStraightCleanup {
-                    in_cleanup.set(true);
+                    in_cleanup.store(true, Ordering::Relaxed);
                 }
             },
         )
@@ -1017,12 +1048,12 @@ mod tests {
 
         let _ = fs::remove_file(path);
         assert_eq!(err.to_string(), "generation canceled");
-        assert!(cleanup_checks.get() > 4);
+        assert!(cleanup_checks.load(Ordering::Relaxed) > 4);
     }
 
     #[test]
     fn batch_cancel_hook_stops_before_bitmap_vectorization_work() {
-        let in_vectorization = Cell::new(false);
+        let in_vectorization = AtomicBool::new(false);
 
         let err = prepare_batch_output_with_cancel_and_progress(
             &BatchRequest {
@@ -1030,17 +1061,17 @@ mod tests {
                 font_or_image: Some(PathBuf::from("/tmp/rengrave-cancel-image.png")),
                 ..BatchRequest::default()
             },
-            || in_vectorization.get(),
+            || in_vectorization.load(Ordering::Relaxed),
             |event| {
                 if event == BatchProgress::VectorizingBitmap {
-                    in_vectorization.set(true);
+                    in_vectorization.store(true, Ordering::Relaxed);
                 }
             },
         )
         .unwrap_err();
 
         assert_eq!(err.to_string(), "generation canceled");
-        assert!(in_vectorization.get());
+        assert!(in_vectorization.load(Ordering::Relaxed));
     }
 
     #[test]
@@ -1055,8 +1086,8 @@ mod tests {
             contents.push_str("A 0,0,1,0,360\n");
         }
         fs::write(&path, contents).unwrap();
-        let in_font_load = Cell::new(false);
-        let font_checks = Cell::new(0usize);
+        let in_font_load = AtomicBool::new(false);
+        let font_checks = AtomicUsize::new(0);
 
         let err = prepare_batch_output_with_cancel_and_progress(
             &BatchRequest {
@@ -1067,9 +1098,8 @@ mod tests {
                 ..BatchRequest::default()
             },
             || {
-                if in_font_load.get() {
-                    let next = font_checks.get() + 1;
-                    font_checks.set(next);
+                if in_font_load.load(Ordering::Relaxed) {
+                    let next = font_checks.fetch_add(1, Ordering::Relaxed) + 1;
                     next > 4
                 } else {
                     false
@@ -1077,7 +1107,7 @@ mod tests {
             },
             |event| {
                 if event == BatchProgress::LoadingTextFont {
-                    in_font_load.set(true);
+                    in_font_load.store(true, Ordering::Relaxed);
                 }
             },
         )
@@ -1085,7 +1115,7 @@ mod tests {
 
         let _ = fs::remove_file(path);
         assert_eq!(err.to_string(), "generation canceled");
-        assert!(font_checks.get() > 4);
+        assert!(font_checks.load(Ordering::Relaxed) > 4);
     }
 
     #[test]
@@ -1100,8 +1130,8 @@ mod tests {
             "0\nSECTION\n2\nENTITIES\n0\nARC\n10\n0\n20\n0\n40\n1\n50\n0\n51\n360\n0\nENDSEC\n0\nEOF\n",
         )
         .unwrap();
-        let in_dxf = Cell::new(false);
-        let dxf_checks = Cell::new(0usize);
+        let in_dxf = AtomicBool::new(false);
+        let dxf_checks = AtomicUsize::new(0);
 
         let err = prepare_batch_output_with_cancel_and_progress(
             &BatchRequest {
@@ -1111,9 +1141,8 @@ mod tests {
                 ..BatchRequest::default()
             },
             || {
-                if in_dxf.get() {
-                    let next = dxf_checks.get() + 1;
-                    dxf_checks.set(next);
+                if in_dxf.load(Ordering::Relaxed) {
+                    let next = dxf_checks.fetch_add(1, Ordering::Relaxed) + 1;
                     next > 50
                 } else {
                     false
@@ -1121,7 +1150,7 @@ mod tests {
             },
             |event| {
                 if event == BatchProgress::LoadingDxf {
-                    in_dxf.set(true);
+                    in_dxf.store(true, Ordering::Relaxed);
                 }
             },
         )
@@ -1129,7 +1158,7 @@ mod tests {
 
         let _ = fs::remove_file(path);
         assert_eq!(err.to_string(), "generation canceled");
-        assert!(dxf_checks.get() > 50);
+        assert!(dxf_checks.load(Ordering::Relaxed) > 50);
     }
 
     #[test]

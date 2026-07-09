@@ -53,6 +53,11 @@ feels slow after calculation completes, turn off **Show input outline** in the
 Preview panel: that display-only layer can contain tens of thousands of source
 segments even when the generated G-code is much smaller.
 
+For the fastest calculation, use a release build or packaged binary. Development
+builds retain debug checks and can be several times slower on geometry-heavy
+jobs. Advanced users can set ``RAYON_NUM_THREADS`` before launching R-Engrave
+to reserve CPU cores for other applications.
+
 Cleanup has no visible paths
 ----------------------------
 

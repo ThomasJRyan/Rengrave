@@ -125,7 +125,7 @@ pub fn generate_cleanup_points_with_cancel(
     vcarve: &VCarveOptions,
     bit: CleanupBit,
     accuracy: f64,
-    cancel: &dyn Fn() -> bool,
+    cancel: &(dyn Fn() -> bool + Sync),
 ) -> Result<Vec<CleanupPoint>, CleanupCanceled> {
     check_canceled(cancel)?;
     let selection = cleanup.selection(bit);
@@ -657,7 +657,7 @@ fn get_f64(settings: &LegacySettings, key: &str, default: f64) -> f64 {
 mod tests {
     use super::*;
     use crate::settings::default_legacy_settings;
-    use std::cell::Cell;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
     fn parses_legacy_clean_paths_vbit_xy_order() {
@@ -736,7 +736,7 @@ mod tests {
         settings.set_or_push("clean_step", "10", false);
         let cleanup = CleanupOptions::from_legacy(&settings);
         let vcarve = VCarveOptions::from_legacy(&settings);
-        let calls = Cell::new(0usize);
+        let calls = AtomicUsize::new(0);
 
         let err = generate_cleanup_points_with_cancel(
             &square_segments(),
@@ -745,15 +745,14 @@ mod tests {
             CleanupBit::Straight,
             0.001,
             &|| {
-                let next = calls.get() + 1;
-                calls.set(next);
+                let next = calls.fetch_add(1, Ordering::Relaxed) + 1;
                 next > 12
             },
         )
         .unwrap_err();
 
         assert_eq!(err, CleanupCanceled);
-        assert!(calls.get() > 12);
+        assert!(calls.load(Ordering::Relaxed) > 12);
     }
 
     fn square_segments() -> Vec<EngraveSegment> {

@@ -164,13 +164,27 @@ retracts, emits the postamble, and optionally returns to ``X0 Y0``.
 Performance notes for dense bitmap inputs
 ------------------------------------------
 
-The V-carve solver is intentionally sequential across each ordered loop, but
-each sampled point performs a spatial-grid query. This is the dominant cost for
-large bitmap contours. The query keeps the hot path allocation-free, compares
-squared center distances instead of taking a square root, caches each segment's
-axis-aligned bounds, and stops once an exact zero-radius result is reached.
-These changes preserve the candidate ordering and generated output while
-reducing work substantially on dense image paths.
+The V-carve solver is sequential *within* each ordered loop, but independent
+loops can be sampled concurrently against the shared read-only spatial grid.
+Results are collected by loop index before the existing deterministic loop
+reordering step. Each sampled point performs a spatial-grid query; the query
+keeps the hot path allocation-free, compares squared center distances instead
+of taking a square root, caches each segment's axis-aligned bounds, and stops
+once an exact zero-radius result is reached. These changes preserve the
+candidate ordering and generated output while reducing work substantially on
+dense image paths.
+
+The batch pipeline also uses Rayon for independent work: SVG and DXF exports
+can serialize concurrently, straight-bit and V-bit cleanup can calculate
+concurrently, and bitmap mask thresholding uses parallel pixel chunks. Cleanup
+results and export fields are merged in a fixed order. Cancellation callbacks
+used by parallel stages must be ``Sync`` because they may be queried from
+multiple worker threads.
+
+``RAYON_NUM_THREADS`` can limit the worker pool for machines where leaving cores
+available for other work matters. The default Rayon pool is normally the best
+choice for a dedicated calculation, while the UI calculation itself remains on
+its background worker rather than the egui render thread.
 
 The UI input-outline overlay is a separate display concern. It is simplified
 with a small model-space tolerance after the calculation returns; the
