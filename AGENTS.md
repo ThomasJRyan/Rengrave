@@ -1,35 +1,98 @@
-# Repository Guidelines
+# Agent Instructions
 
-## Project Structure & Module Organization
+## Change Discipline
+
+- Every completed feature, bug fix, or general code change must be committed.
+- Use one semantic commit per completed change. Use Conventional Commit subjects such as `feat: add profile alignment`, `fix: preserve top-left origin`, `docs: describe v-carve geometry`, `test: cover profile sizing`, or `chore: update documentation tooling`.
+- Keep commits focused. Do not combine unrelated cleanup, feature work, and documentation changes in one commit unless the documentation is required by the code change.
+- Before committing, inspect the diff, run the focused validation for the change, and run `git diff --check`.
+
+## Project Structure
 
 This repository is a Rust port of F-Engrave. Keep `f-engrave_source/` intact as the upstream behavior and licensing reference. New Rust code lives under `crates/`:
 
-- `crates/rengrave-core`: portable settings, geometry, parsers, toolpath logic, and tests.
-- `crates/rengrave-cli`: batch/command-line entry point.
-- `crates/rengrave-ui`: `eframe/egui` desktop UI.
+- `crates/rengrave-core`: portable settings, geometry, parsers, toolpath logic, exporters, and core tests.
+- `crates/rengrave-cli`: batch and command-line entry point.
+- `crates/rengrave-ui`: `eframe/egui` desktop UI and egui harness tests.
+- `docs/`: reStructuredText user documentation, developer documentation, algorithm notes, diagrams, screenshots, custom stylesheet, and generated documentation output.
 
 Use `PLAN.md` as the current porting roadmap. Add fixtures under a future `fixtures/` or crate-local `tests/` directory when golden F-Engrave outputs are created.
 
-## Build, Test, and Development Commands
+## Documentation Requirements
+
+Documentation is part of every feature, bug fix, and behavior-changing change.
+
+- Write documentation in reStructuredText (`.rst`) under `docs/`.
+- Update the user-facing documentation for every user-visible feature, setting, workflow, output change, and bug fix. Describe what the user sees, the controls involved, defaults, constraints, and expected output.
+- Update developer documentation for every feature and algorithmic or compatibility change. Describe the relevant modules, data flow, invariants, formulas, tolerances, coordinate systems, units, and compatibility decisions so another developer can implement or debug the behavior.
+- Every R-Engrave feature must have both a user explanation and a developer/algorithm explanation. Put algorithm notes in an appropriate `docs/developer/` or `docs/algorithms/` document and link them from the documentation index.
+- Include diagrams and application screenshots wherever they clarify geometry, coordinate systems, toolpaths, UI behavior, or a user workflow. Store source and raster assets under `docs/` in a descriptive subdirectory, and keep screenshots representative of the current UI.
+- Keep documentation accurate when behavior changes. Remove or rewrite stale instructions rather than leaving contradictory historical guidance.
+- Use a structure such as:
+
+  - `docs/index.rst`: documentation entry point and table of contents.
+  - `docs/user/`: workflows, settings, importing, previewing, and exporting.
+  - `docs/developer/`: architecture, compatibility, testing, and extension notes.
+  - `docs/algorithms/`: geometry, layout, tracing, v-carve, cleanup, and toolpath mathematics.
+  - `docs/_static/`: custom CSS and other documentation assets.
+  - `docs/_images/`: diagrams and screenshots.
+  - `docs/_build/`: generated HTML output; do not hand-edit generated files.
+
+## Documentation Build
+
+Build the documentation with `rst2html` and the repository stylesheet. The exact input/output paths may grow with the documentation tree, but the canonical entry-point build is:
+
+```sh
+mkdir -p docs/_build
+rst2html --stylesheet=docs/_static/rengrave.css docs/index.rst docs/_build/index.html
+```
+
+When the documentation uses multiple included files, rebuild from `docs/index.rst` and verify that the generated HTML contains the expected sections, links, images, and stylesheet reference. Keep custom styling in `docs/_static/rengrave.css`; do not embed one-off styling in generated HTML.
+
+## Build and Development Commands
 
 - `cargo fmt --all`: format every workspace crate.
-- `cargo test -p rengrave-core`: run focused core unit tests.
-- `cargo test --workspace`: run all Rust tests after broader changes.
+- `cargo run -p rengrave-ui`: launch the desktop UI shell for manual verification.
 - `cargo run -p rengrave-cli -- -b -t "Text"`: exercise batch-mode compatibility output.
-- `cargo run -p rengrave-ui`: launch the desktop UI shell.
+- `rst2html --stylesheet=docs/_static/rengrave.css docs/index.rst docs/_build/index.html`: build the documentation entry point.
 
-## Coding Style & Naming Conventions
+## Testing Requirements
 
-Use standard Rust formatting from `rustfmt`; do not hand-align large blocks. Prefer clear module boundaries over broad utility files. Name crates and modules with `snake_case` paths, Rust types with `PascalCase`, and functions/variables with `snake_case`. Keep compatibility-specific names close to F-Engrave terminology when they map to legacy settings such as `fengrave_set`, `TCODE`, or `v_bit_angle`.
+Every feature, bug fix, and general code change must include unit-test coverage appropriate to the changed behavior. Do not consider a change complete without tests.
 
-## Testing Guidelines
+- Add focused Rust unit tests beside the code they verify.
+- Add focused integration or golden-output tests when the change affects generated G-code, settings compatibility, geometry, parsers, exporters, or cross-crate behavior.
+- Add egui harness tests for every UI behavior that can be exercised through the harness, including controls, default values, rendering, interaction, stale/recalculation state, visible warnings, and relevant responsive/layout behavior.
+- For UI changes, include a screenshot or harness assertion when visual behavior is part of the contract.
+- Use tolerances for floating-point geometry and strict byte/text comparisons where formatting or compatibility is intentional.
+- Run focused tests relevant to the changed code. Do not run the full workspace suite by default; run `cargo test --workspace` only when the user explicitly requests it or when the change is sufficiently cross-cutting that focused tests cannot provide truthful coverage, and record that reason.
+- Before committing, run `cargo fmt --all --check` and `git diff --check` in addition to the focused tests.
 
-Write focused unit tests beside the code they verify. Use golden-output tests for F-Engrave parity once fixtures exist, with tolerances for floating-point coordinates and stricter byte checks where formatting is intentional. Agents should run focused tests relevant to the changed code unless the user explicitly requests the full suite.
+Typical focused commands are:
 
-## Commit & Pull Request Guidelines
+```sh
+cargo test -p rengrave-core profile::tests::profile_dimensions_and_ratio_resize_the_profile_envelope
+cargo test -p rengrave-core --test golden simple_cxf_text_matches_checked_golden_outputs
+cargo test -p rengrave-ui --lib ui_controls_emit_core_overrides
+cargo test -p rengrave-ui --lib kittest_renders_compact_gcode_status_strip
+```
 
-There is no existing commit history yet. Use Conventional Commit messages such as `feat: add settings parser`, `fix: preserve TCODE newlines`, or `test: add default text fixture`. Create one commit per completed feature, bug fix, or general change. PRs should describe the compatibility impact, list tests run, link related issues, and include screenshots for UI changes.
+Use the actual test filter that matches the changed behavior; the examples above are illustrative and should be updated as tests evolve.
 
-## Licensing & Compatibility Notes
+## Rust Style and Compatibility
 
-F-Engrave is GPLv3-or-later, while `f-engrave_source/TTF2CXF_STREAM/` is GPLv2-only. Do not copy the helper into the Rust binary; reimplement TTF behavior in Rust. Treat generated G-code/settings compatibility as the primary contract.
+- Use standard Rust formatting from `rustfmt`; do not hand-align large blocks.
+- Prefer clear module boundaries over broad utility files.
+- Name crates and modules with `snake_case` paths, Rust types with `PascalCase`, and functions/variables with `snake_case`.
+- Keep compatibility-specific names close to F-Engrave terminology when they map to legacy settings such as `fengrave_set`, `TCODE`, or `v_bit_angle`.
+- Prefer structured parsers and existing local helpers over ad hoc string manipulation.
+- Preserve generated G-code and settings compatibility as the primary contract. Document intentional compatibility differences.
+- Keep `f-engrave_source/` unchanged unless the task explicitly concerns the upstream reference or licensing material.
+
+## Licensing
+
+F-Engrave is GPLv3-or-later, while `f-engrave_source/TTF2CXF_STREAM/` is GPLv2-only. Do not copy the helper into the Rust binary; reimplement TTF behavior in Rust and preserve the applicable license boundaries.
+
+## Review and Delivery
+
+Before reporting completion, include the semantic commit created, the focused tests run, documentation files updated, and any documentation build or manual UI verification performed. Pull requests should describe compatibility impact, list tests and documentation builds, link related issues, and include screenshots for UI changes.
