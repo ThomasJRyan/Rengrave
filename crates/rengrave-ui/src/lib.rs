@@ -4938,6 +4938,23 @@ mod tests {
     }
 
     #[test]
+    fn input_overlay_simplification_preserves_connected_corners() {
+        let segments = vec![
+            test_segment((0.0, 0.0), (1.0, 0.0)),
+            test_segment((1.0, 0.0), (2.0, 0.0)),
+            test_segment((2.0, 0.0), (2.0, 1.0)),
+        ];
+
+        let simplified = simplify_preview_segments(&segments, 0.01);
+
+        assert_eq!(simplified.len(), 2);
+        assert_eq!(simplified[0].start, Point::new(0.0, 0.0));
+        assert_eq!(simplified[0].end, Point::new(2.0, 0.0));
+        assert_eq!(simplified[1].start, Point::new(2.0, 0.0));
+        assert_eq!(simplified[1].end, Point::new(2.0, 1.0));
+    }
+
+    #[test]
     fn generated_gcode_summary_reports_compact_motion_counts() {
         assert_eq!(
             generated_gcode_summary(177, 35, 14, 2, 3),

@@ -47,6 +47,12 @@ faster but can miss narrow transitions. Check the V-bit angle, effective
 diameter, depth limit, accuracy, and rough-stock settings together; the
 effective envelope and depth model are coupled.
 
+Large bitmap V-carves now avoid repeated temporary allocations and square-root
+distance checks in the hot spatial-query loop. If a very detailed job still
+feels slow after calculation completes, turn off **Show input outline** in the
+Preview panel: that display-only layer can contain tens of thousands of source
+segments even when the generated G-code is much smaller.
+
 Cleanup has no visible paths
 ----------------------------
 

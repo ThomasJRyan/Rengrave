@@ -10,6 +10,8 @@ pub(crate) struct PreviewSegment {
     pub(crate) end: Point,
 }
 
+const PREVIEW_INPUT_OUTLINE_TOLERANCE: f64 = 0.01;
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct PreviewBounds {
     pub(crate) min: Point,
@@ -505,16 +507,114 @@ fn point_distance(a: Point, b: Point) -> f64 {
 /// outline is available.
 pub(crate) fn input_outline_segments(request: &BatchRequest) -> Vec<PreviewSegment> {
     match layout_text_outline(request) {
-        Ok(Some(outline)) => outline
-            .segments
-            .iter()
-            .map(|segment| PreviewSegment {
-                start: segment.start,
-                end: segment.end,
-            })
-            .collect(),
+        Ok(Some(outline)) => {
+            let segments = outline
+                .segments
+                .iter()
+                .map(|segment| PreviewSegment {
+                    start: segment.start,
+                    end: segment.end,
+                })
+                .collect::<Vec<_>>();
+            simplify_preview_segments(&segments, PREVIEW_INPUT_OUTLINE_TOLERANCE)
+        }
         _ => Vec::new(),
     }
+}
+
+pub(crate) fn simplify_preview_segments(
+    segments: &[PreviewSegment],
+    tolerance: f64,
+) -> Vec<PreviewSegment> {
+    if segments.len() < 2 || tolerance <= 0.0 || !tolerance.is_finite() {
+        return segments.to_vec();
+    }
+
+    let mut output = Vec::new();
+    let mut path = Vec::new();
+    for segment in segments {
+        let starts_new_path = path
+            .last()
+            .is_some_and(|last: &Point| point_distance(*last, segment.start) > 0.00001);
+        if starts_new_path {
+            append_simplified_preview_path(&path, tolerance, &mut output);
+            path.clear();
+        }
+        if path.is_empty() {
+            path.push(segment.start);
+        }
+        path.push(segment.end);
+    }
+    append_simplified_preview_path(&path, tolerance, &mut output);
+    output
+}
+
+fn append_simplified_preview_path(
+    points: &[Point],
+    tolerance: f64,
+    output: &mut Vec<PreviewSegment>,
+) {
+    if points.len() < 2 {
+        return;
+    }
+
+    let tolerance_squared = tolerance * tolerance;
+    let mut keep = vec![false; points.len()];
+    keep[0] = true;
+    keep[points.len() - 1] = true;
+    let mut pending = vec![(0usize, points.len() - 1)];
+
+    while let Some((start, end)) = pending.pop() {
+        if end <= start + 1 {
+            continue;
+        }
+
+        let mut farthest = None;
+        let mut farthest_distance = tolerance_squared;
+        for index in start + 1..end {
+            let distance = point_line_distance_squared(points[index], points[start], points[end]);
+            if distance > farthest_distance {
+                farthest = Some(index);
+                farthest_distance = distance;
+            }
+        }
+
+        let Some(index) = farthest else {
+            continue;
+        };
+        keep[index] = true;
+        pending.push((start, index));
+        pending.push((index, end));
+    }
+
+    let mut previous = None;
+    for (index, point) in points.iter().copied().enumerate() {
+        if !keep[index] {
+            continue;
+        }
+        if let Some(start) = previous {
+            output.push(PreviewSegment { start, end: point });
+        }
+        previous = Some(point);
+    }
+}
+
+fn point_line_distance_squared(point: Point, start: Point, end: Point) -> f64 {
+    let dx = end.x - start.x;
+    let dy = end.y - start.y;
+    let length_squared = dx * dx + dy * dy;
+    if length_squared <= f64::EPSILON {
+        let dx = point.x - start.x;
+        let dy = point.y - start.y;
+        return dx * dx + dy * dy;
+    }
+
+    let projection = ((point.x - start.x) * dx + (point.y - start.y) * dy) / length_squared;
+    let projection = projection.clamp(0.0, 1.0);
+    let closest = Point::new(start.x + dx * projection, start.y + dy * projection);
+    let dx = point.x - closest.x;
+    let dy = point.y - closest.y;
+    dx * dx + dy * dy
 }
 
 pub(crate) fn draw_preview(

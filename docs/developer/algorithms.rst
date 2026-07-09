@@ -160,3 +160,21 @@ Arc fitting recognizes eligible line runs and emits either no arcs, center
 offset arcs using ``I/J`` (with ``G91.1``), or radius-format arcs using ``R``.
 Arc fitting changes serialization, not the source geometry. The shared trailer
 retracts, emits the postamble, and optionally returns to ``X0 Y0``.
+
+Performance notes for dense bitmap inputs
+------------------------------------------
+
+The V-carve solver is intentionally sequential across each ordered loop, but
+each sampled point performs a spatial-grid query. This is the dominant cost for
+large bitmap contours. The query keeps the hot path allocation-free, compares
+squared center distances instead of taking a square root, caches each segment's
+axis-aligned bounds, and stops once an exact zero-radius result is reached.
+These changes preserve the candidate ordering and generated output while
+reducing work substantially on dense image paths.
+
+The UI input-outline overlay is a separate display concern. It is simplified
+with a small model-space tolerance after the calculation returns; the
+simplification affects only the pink inspection layer, never the primary or
+secondary toolpaths. Keep this distinction explicit when optimizing preview
+rendering: output geometry must remain source-faithful, while an inspection
+overlay may be reduced to the screen's useful resolution.

@@ -812,6 +812,10 @@ struct PartitionLine {
     char_num: usize,
     center: Point,
     reach: f64,
+    min_x: f64,
+    max_x: f64,
+    min_y: f64,
+    max_y: f64,
 }
 
 #[derive(Debug, Clone)]
@@ -881,6 +885,10 @@ impl PartitionGrid {
                     (segment.start.y + segment.end.y) / 2.0,
                 ),
                 reach: length / 2.0 + max_radius,
+                min_x: segment.start.x.min(segment.end.x),
+                max_x: segment.start.x.max(segment.end.x),
+                min_y: segment.start.y.min(segment.end.y),
+                max_y: segment.start.y.max(segment.end.y),
             };
 
             for index in grid.active_indices(segment.start, segment.end) {
@@ -903,20 +911,22 @@ impl PartitionGrid {
     ) -> f64 {
         let x_index = self.x_index(point.x);
         let y_index = self.y_index(point.y);
+        // This query runs once per sampled point. Keep the hot path allocation
+        // free, compare squared distances to avoid sqrt, and cache segment
+        // bounds instead of recomputing them for every candidate.
         let candidate_reach = radius.abs();
-        let nearby: Vec<_> = self.cells[self.cell_index(x_index, y_index)]
-            .iter()
-            .copied()
-            .filter(|line| {
-                point_distance(line.center, point) < (candidate_reach + line.reach).abs()
-            })
-            .collect();
+        for line in &self.cells[self.cell_index(x_index, y_index)] {
+            let reach = (candidate_reach + line.reach).abs();
+            let center_dx = line.center.x - point.x;
+            let center_dy = line.center.y - point.y;
+            if center_dx * center_dx + center_dy * center_dy >= reach * reach {
+                continue;
+            }
 
-        for line in nearby {
-            let x_max = line.start.x.max(line.end.x) + radius * 2.0;
-            let x_min = line.start.x.min(line.end.x) - radius * 2.0;
-            let y_max = line.start.y.max(line.end.y) + radius * 2.0;
-            let y_min = line.start.y.min(line.end.y) - radius * 2.0;
+            let x_max = line.max_x + radius * 2.0;
+            let x_min = line.min_x - radius * 2.0;
+            let y_max = line.max_y + radius * 2.0;
+            let y_min = line.min_y - radius * 2.0;
             if point.x < x_min || point.x > x_max || point.y < y_min || point.y > y_max {
                 continue;
             }
@@ -985,6 +995,11 @@ impl PartitionGrid {
             }
             if yc2.abs() < ZERO && xc2.abs() < ZERO && yc1 > ZERO {
                 radius = 0.0;
+            }
+
+            // No later candidate can reduce an exact zero radius further.
+            if radius == 0.0 {
+                break;
             }
         }
 
