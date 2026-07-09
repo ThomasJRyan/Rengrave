@@ -7,6 +7,38 @@
 - Keep commits focused. Do not combine unrelated cleanup, feature work, and documentation changes in one commit unless the documentation is required by the code change.
 - Before committing, inspect the diff, run the focused validation for the change, and run `git diff --check`.
 
+## Performance and Parallelism
+
+R-Engrave should generate G-Code as quickly as practical without changing the
+quality, geometry, ordering, formatting, or compatibility of its output.
+
+- Parallelize independent CPU work wherever it is safe and beneficial,
+  including independent contours, toolpath operations, exports, parsing or
+  preprocessing chunks, and other read-only calculations. Prefer the existing
+  Rayon-based approach and keep parallel work in portable core code when
+  possible.
+- Preserve deterministic results. Collect parallel results in a defined order,
+  use stable reductions where ordering affects floating-point or text output,
+  and compare generated G-Code and companion outputs against existing golden
+  or byte-identical results whenever the implementation changes.
+- Do not trade machining quality for throughput. Preserve tolerances,
+  candidate selection, path ordering semantics, depth calculations, units,
+  cancellation behavior, and legacy F-Engrave compatibility unless a change is
+  explicitly requested and documented.
+- Avoid data races and oversubscription. Shared inputs must be immutable or
+  synchronized, cancellation and progress callbacks must satisfy the required
+  thread-safety bounds, and UI work must remain responsive rather than blocking
+  the render thread. Prefer coarse independent work units over fine-grained
+  tasks that add more scheduling overhead than useful computation.
+- Measure performance on representative dense image and vector workloads in
+  both normal and single-threaded configurations. Record meaningful timing or
+  allocation evidence, verify that parallelism improves the target workload,
+  and retain an appropriate way to limit worker threads such as
+  ``RAYON_NUM_THREADS`` when users need CPU headroom.
+- Add focused regression coverage for every parallelized algorithm, including
+  cancellation, empty or degenerate inputs, deterministic output, and any
+  quality-sensitive geometry or serialization behavior.
+
 ## Project Structure
 
 This repository is a Rust port of F-Engrave. Keep `f-engrave_source/` intact as the upstream behavior and licensing reference. New Rust code lives under `crates/`:
