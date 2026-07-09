@@ -44,7 +44,9 @@ The CLI also launches the same UI when no batch flag is supplied:
 The default window is sized for a 1280 by 800 desktop workbench. The central
 preview is the visual source of truth for the current generated toolpath. The
 left side is organized around input and geometry, the right side around tool,
-preview, and export controls, and the bottom area reports output and status.
+preview, and export controls. The top status row reports the current workflow
+state and, after calculation completes, the elapsed G-code generation time.
+The bottom area reports output and machine-facing status.
 
 Native UI screenshot placeholder
 --------------------------------

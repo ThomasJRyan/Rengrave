@@ -66,6 +66,11 @@ The desktop UI exposes the same core settings through compact panels:
 * **Output** exposes status, G-code, cleanup G-code, SVG, and DXF tabs with
   copy actions.
 
+The top status row displays ``Generating...`` while a calculation is running
+and reports ``Generated in ... s`` after a successful or failed generation.
+This is the elapsed background batch-generation time; it does not include time
+spent exporting files afterward.
+
 Output state is explicit: *none*, *calculating*, *stale*, or *ready*. A stale
 state names the changed area when possible. Copying or saving stale output is
 allowed by the current UI but is called out as a preflight caution; recalculate

@@ -139,6 +139,7 @@ struct RengraveApp {
     preferences_path: Option<PathBuf>,
     calculation: Option<CalculationJob>,
     next_calculation_id: u64,
+    last_generation_duration: Option<Duration>,
     warnings: Vec<String>,
     fit_preview_requested: bool,
     last_output_request: Option<BatchRequest>,
@@ -274,6 +275,7 @@ impl RengraveApp {
             preferences_path,
             calculation: None,
             next_calculation_id: 1,
+            last_generation_duration: None,
             warnings: document.warnings,
             fit_preview_requested: false,
             last_output_request: None,
@@ -537,6 +539,7 @@ impl RengraveApp {
         let cancel_flag = Arc::new(AtomicBool::new(false));
         let worker_cancel_flag = Arc::clone(&cancel_flag);
         thread::spawn(move || {
+            let started_at = Instant::now();
             let result = prepare_batch_output_with_cancel_and_progress(
                 &worker_request,
                 || worker_cancel_flag.load(Ordering::Relaxed),
@@ -551,6 +554,7 @@ impl RengraveApp {
                 id,
                 result,
                 canceled,
+                duration: started_at.elapsed(),
             });
             ctx.request_repaint();
         });
@@ -560,6 +564,7 @@ impl RengraveApp {
             receiver,
             cancel_flag,
         });
+        self.last_generation_duration = None;
         self.status = CalculationPhase::Queued.status_text().to_owned();
     }
 
@@ -585,7 +590,8 @@ impl RengraveApp {
                 id,
                 result,
                 canceled,
-            }) => self.apply_calculation_result(job, id, result, canceled),
+                duration,
+            }) => self.apply_calculation_result(job, id, result, canceled, duration),
             Err(TryRecvError::Empty) => {
                 self.calculation = Some(job);
             }
@@ -641,6 +647,7 @@ impl RengraveApp {
         id: u64,
         result: Result<BatchOutput, String>,
         canceled: bool,
+        duration: Duration,
     ) {
         if id != job.id || canceled {
             self.status = "Stale calculation ignored".to_owned();
@@ -651,6 +658,7 @@ impl RengraveApp {
             self.status = "Stale calculation ignored".to_owned();
             return;
         }
+        self.last_generation_duration = Some(duration);
         match result {
             Ok(output) => {
                 self.apply_batch_output(output);
@@ -1919,6 +1927,11 @@ impl RengraveApp {
                     self.cancel_calculation("Calculation canceled");
                 }
             }
+            ui.separator();
+            ui.monospace(generation_duration_label(
+                self.last_generation_duration,
+                self.calculation.is_some(),
+            ));
         });
         ui.horizontal(|ui| {
             ui.label("Status");
@@ -2339,6 +2352,7 @@ enum CalculationMessage {
         id: u64,
         result: Result<BatchOutput, String>,
         canceled: bool,
+        duration: Duration,
     },
 }
 
@@ -2933,6 +2947,16 @@ fn format_duration_minutes(minutes: f64) -> String {
     )
 }
 
+fn generation_duration_label(duration: Option<Duration>, calculating: bool) -> String {
+    if calculating {
+        return "Generating…".to_owned();
+    }
+    let Some(duration) = duration else {
+        return "Generation: —".to_owned();
+    };
+    format!("Generated in {:.3} s", duration.as_secs_f64())
+}
+
 fn generated_gcode_summary(
     lines: usize,
     cut_moves: usize,
@@ -3015,6 +3039,7 @@ mod tests {
             preferences_path: None,
             calculation: None,
             next_calculation_id: 1,
+            last_generation_duration: None,
             warnings: Vec::new(),
             fit_preview_requested: false,
             last_output_request: None,
@@ -3284,6 +3309,16 @@ mod tests {
         assert_eq!(
             count_arc_moves("G1 X0\nG2 X1 Y1 I1 J0\nG03 X2\n(comment)\n"),
             2
+        );
+    }
+
+    #[test]
+    fn generation_duration_label_reports_idle_active_and_completed_states() {
+        assert_eq!(generation_duration_label(None, false), "Generation: —");
+        assert_eq!(generation_duration_label(None, true), "Generating…");
+        assert_eq!(
+            generation_duration_label(Some(Duration::from_millis(437)), false),
+            "Generated in 0.437 s"
         );
     }
 
@@ -4988,6 +5023,19 @@ mod tests {
         );
         assert!(harness.query_by_label("Copy tab").is_none());
         assert!(harness.query_by_label("Status").is_none());
+    }
+
+    #[test]
+    fn kittest_renders_generation_duration_in_top_status_row() {
+        let mut app = test_app();
+        app.last_generation_duration = Some(Duration::from_millis(437));
+
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(900.0, 180.0))
+            .build_ui_state(|ui, app| app.show_toolbar_contents(ui), app);
+        harness.run();
+
+        assert!(harness.query_by_label("Generated in 0.437 s").is_some());
     }
 
     #[test]
