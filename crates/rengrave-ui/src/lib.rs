@@ -1256,12 +1256,12 @@ impl RengraveApp {
             number_row(ui, "Text angle", &mut self.controls.angle_degrees, 1.0);
             number_row(ui, "Text radius", &mut self.controls.text_radius, 0.05);
             ui.horizontal_wrapped(|ui| {
-                ui.checkbox(&mut self.controls.outer, "Outer");
-                ui.checkbox(&mut self.controls.upper, "Upper");
+                parameter_checkbox(ui, &mut self.controls.outer, "Outer");
+                parameter_checkbox(ui, &mut self.controls.upper, "Upper");
             });
         } else {
             let mut use_image_size = self.controls.use_image_size;
-            if ui.checkbox(&mut use_image_size, "Image size").changed() {
+            if parameter_checkbox(ui, &mut use_image_size, "Image size").changed() {
                 let input_path = path_from_text(&self.input_path);
                 let image_height =
                     image_preview_model_height(input_path.as_deref(), &self.input_preview.data);
@@ -1276,9 +1276,9 @@ impl RengraveApp {
         }
 
         ui.horizontal_wrapped(|ui| {
-            ui.checkbox(&mut self.controls.flip, "Flip");
-            ui.checkbox(&mut self.controls.mirror, "Mirror");
-            ui.checkbox(&mut self.controls.plotbox, "Box");
+            parameter_checkbox(ui, &mut self.controls.flip, "Flip");
+            parameter_checkbox(ui, &mut self.controls.mirror, "Mirror");
+            parameter_checkbox(ui, &mut self.controls.plotbox, "Box");
         });
         number_row(ui, "Box gap", &mut self.controls.boxgap, 0.01);
     }
@@ -1320,8 +1320,7 @@ impl RengraveApp {
     }
 
     fn show_profile_settings(&mut self, ui: &mut egui::Ui) {
-        ui.checkbox(&mut self.controls.profile_enabled, "Enable profile cut")
-            .on_hover_text("Adds companion profile G-code around the final project bounds.");
+        parameter_checkbox(ui, &mut self.controls.profile_enabled, "Enable profile cut");
         ui.add_enabled_ui(self.controls.profile_enabled, |ui| {
             number_row_with_help(
                 ui,
@@ -1352,10 +1351,7 @@ impl RengraveApp {
                 );
                 self.controls.profile_tab_width = self.controls.profile_tab_width.max(0.0);
             });
-            ui.checkbox(&mut self.controls.profile_chamfer, "V-bit chamfer")
-                .on_hover_text(
-                    "Writes a profile_chamfer companion file before the straight profile file.",
-                );
+            parameter_checkbox(ui, &mut self.controls.profile_chamfer, "V-bit chamfer");
             ui.add_enabled_ui(self.controls.profile_chamfer, |ui| {
                 number_row(
                     ui,
@@ -1461,7 +1457,7 @@ impl RengraveApp {
             0.01,
             "Higher values simplify traced curves more; lower values keep more detail.",
         );
-        ui.checkbox(&mut self.controls.bmp_long, "Long curves");
+        parameter_checkbox(ui, &mut self.controls.bmp_long, "Long curves");
     }
 
     fn show_vcarve_settings(&mut self, ui: &mut egui::Ui) {
@@ -1507,11 +1503,10 @@ impl RengraveApp {
             }
         });
         ui.horizontal_wrapped(|ui| {
-            if ui.checkbox(&mut self.controls.inlay, "Inlay").changed() {
+            if parameter_checkbox(ui, &mut self.controls.inlay, "Inlay").changed() {
                 self.tool_view = self.tool_view.with_inlay(self.controls.inlay);
             }
-            ui.checkbox(&mut self.controls.v_flop, "Flip normals")
-                .on_hover_text("Reverse the side used for V-carve normal calculations.");
+            parameter_checkbox(ui, &mut self.controls.v_flop, "Flip normals");
         });
     }
 
@@ -1630,11 +1625,11 @@ impl RengraveApp {
             self.save_preferences();
         }
         ui.add_space(4.0);
-        ui.checkbox(
+        parameter_checkbox(
+            ui,
             &mut self.controls.return_to_origin,
             "Return to origin X/Y after job",
-        )
-        .on_hover_text("Retract to safe Z, then rapid to X0 Y0 before the postamble.");
+        );
         ui.add_space(4.0);
         self.show_export_readiness(ui);
         ui.add_space(4.0);
@@ -1783,16 +1778,15 @@ impl RengraveApp {
                 ui.monospace(format!("Legacy keys: {}", self.settings_count))
                     .on_hover_text("Compatibility settings currently loaded from the project or legacy file.");
                 ui.horizontal_wrapped(|ui| {
-                    ui.checkbox(&mut self.controls.recovery_comments, "Recovery comments");
-                    ui.checkbox(&mut self.controls.var_dis, "Disable variables");
+                    parameter_checkbox(ui, &mut self.controls.recovery_comments, "Recovery comments");
+                    parameter_checkbox(ui, &mut self.controls.var_dis, "Disable variables");
                     if self.tool_view.uses_text() {
-                        ui.checkbox(&mut self.controls.ext_char, "Extended chars");
+                        parameter_checkbox(ui, &mut self.controls.ext_char, "Extended chars");
                     }
-                    ui.checkbox(&mut self.controls.show_thick, "Show thickness");
+                    parameter_checkbox(ui, &mut self.controls.show_thick, "Show thickness");
                     if self.tool_view.uses_vcarve() {
-                        ui.checkbox(&mut self.controls.show_v_area, "Show V area");
-                        ui.checkbox(&mut self.controls.v_pplot, "Plot during V-carve")
-                            .on_hover_text("Update the preview while V-carve paths are being calculated.");
+                        parameter_checkbox(ui, &mut self.controls.show_v_area, "Show V area");
+                        parameter_checkbox(ui, &mut self.controls.v_pplot, "Plot during V-carve");
                     }
                 });
             });
@@ -5036,6 +5030,25 @@ mod tests {
         harness.run();
 
         assert!(harness.query_by_label("Generated in 0.437 s").is_some());
+    }
+
+    #[test]
+    fn kittest_shows_parameter_tooltip_when_hovering_field() {
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(500.0, 900.0))
+            .build_ui_state(|ui, app| app.show_workflow_settings_panel(ui), test_app());
+        harness.run();
+
+        harness.get_by_label("Height").hover();
+        harness.run();
+
+        assert!(
+            harness
+                .query_by_label(
+                    "Set the target artwork height; width follows the selected width percentage."
+                )
+                .is_some()
+        );
     }
 
     #[test]

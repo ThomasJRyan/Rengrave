@@ -10,19 +10,142 @@ pub(crate) struct PathRowAction {
     pub(crate) value_changed: bool,
 }
 
+pub(crate) fn parameter_help(label: &str) -> Option<&'static str> {
+    Some(match label {
+        "Units" => "Choose the units used for dimensions, feeds, and generated G-code.",
+        "Origin" => "Choose the reference point used to place the artwork in the job coordinates.",
+        "Height" => "Set the target artwork height; width follows the selected width percentage.",
+        "Width %" => "Scale artwork width as a percentage of its height-based size.",
+        "X origin" => "Offset the artwork along X after the selected origin is applied.",
+        "Y origin" => "Offset the artwork along Y after the selected origin is applied.",
+        "Justify" => "Align each text line left, centered, or right within the layout.",
+        "Line space" => "Set the multiplier between lines of text.",
+        "Character space %" => "Adjust the spacing between adjacent characters as a percentage.",
+        "Word space %" => "Adjust the spacing used between words as a percentage.",
+        "Text angle" => "Rotate the text around the layout origin, in degrees.",
+        "Text radius" => "Wrap text around a circle with this radius; zero keeps it straight.",
+        "Outer" => "Use the outside of the text circle for the text baseline.",
+        "Upper" => "Place curved text on the upper half of the text circle.",
+        "Image size" => "Use the source image dimensions when converting the height scale.",
+        "Flip" => "Mirror the artwork across the horizontal axis.",
+        "Mirror" => "Mirror the artwork across the vertical axis.",
+        "Box" => "Add a rectangular box around the artwork to the generated output.",
+        "Box gap" => "Set the clearance between the artwork and the optional box.",
+        "Safe Z" => "Set the height the cutter retracts to for rapid travel between paths.",
+        "Cut Z" => "Set the constant cutting depth for engraving operations.",
+        "Stroke" => "Set the displayed and exported stroke thickness for engraving geometry.",
+        "Feed" => "Set the cutting feed rate used for XY tool motion.",
+        "Plunge" => "Set the Z plunge feed rate; zero uses the cutting feed.",
+        "Accuracy" => "Set the geometric tolerance used when simplifying and fitting toolpaths.",
+        "Arc fit" => "Replace suitable line runs with arcs to reduce G-code size.",
+        "Enable profile cut" => "Add a companion toolpath around the final project bounds.",
+        "Margin" => "Set the clearance between the artwork and the profile cut.",
+        "Corner radius" => "Round the corners of the generated profile path.",
+        "Thickness" => "Set the material thickness used to calculate profile depth.",
+        "Steps" => "Set the number of depth passes used for the straight profile cut.",
+        "Endmill dia" => "Set the straight endmill diameter used for the profile offset.",
+        "Tabs" => "Set how many uncut tabs hold the workpiece during the profile cut.",
+        "Tab height" => "Set the remaining material height at each profile tab.",
+        "Max tab width" => "Limit the width of each profile tab; zero uses the default width.",
+        "V-bit chamfer" => "Add a V-bit chamfer pass before the straight profile cut.",
+        "Chamfer depth" => "Set the depth of the V-bit profile chamfer.",
+        "Chamfer angle" => "Set the included angle of the V-bit profile chamfer.",
+        "Width (0 = auto)" => "Set a fixed profile width; zero derives it from the artwork bounds.",
+        "Height (0 = auto)" => {
+            "Set a fixed profile height; zero derives it from the artwork bounds."
+        }
+        "Aspect W/H (0 = free)" => {
+            "Constrain profile width divided by height; zero leaves it unconstrained."
+        }
+        "Trace detail %" => "Control how closely a traced profile follows the source artwork.",
+        "Profile alignment" => "Choose how a fixed-size profile is aligned to the artwork.",
+        "Turn policy" => "Choose how bitmap tracing resolves ambiguous path turns.",
+        "Turd size" => "Ignore bitmap regions smaller than this size before tracing.",
+        "Alpha max" => "Set the bitmap tracing threshold for transparent or anti-aliased pixels.",
+        "Opt tolerance" => {
+            "Simplify traced curves more at higher values; preserve detail at lower values."
+        }
+        "Long curves" => "Prefer longer continuous curves when tracing bitmap contours.",
+        "Bit" => "Choose the cutter shape used by the V-carve depth model.",
+        "V angle" => "Set the included angle of the V-bit.",
+        "V diameter" => "Set the maximum effective diameter of the V-bit.",
+        "V step" => "Set the sampling distance along V-carve paths.",
+        "Allowance" => "Add or remove the inlay allowance from the V-carve boundary.",
+        "Depth limit" => "Limit the maximum V-carve depth; zero disables the limit.",
+        "Drive corner" => "Set the corner angle below which the cutter drives through the turn.",
+        "Step corner" => "Set the corner angle above which intermediate V-carve samples are added.",
+        "Check scope" => {
+            "Choose whether V-carve clearance checks use all geometry or the current loop."
+        }
+        "Inlay" => "Use inlay toolpath depth and allowance rules for the selected geometry.",
+        "Flip normals" => "Reverse the side used for V-carve normal calculations.",
+        "Finish stock" => "Leave this much material for a final V-carve pass after roughing.",
+        "Max depth/pass" => "Limit the depth removed in each roughing pass.",
+        "Clean dia" => "Set the diameter of the straight cleanup cutter.",
+        "Clean step %" => "Set straight cleanup step-over as a percentage of cutter diameter.",
+        "Clean V" => "Set the diameter used for V-bit cleanup reach calculations.",
+        "Height calc" => {
+            "Choose whether text height uses only glyphs in use or the full font height."
+        }
+        "Arc segments" => "Set the maximum arc segmentation detail used when importing curves.",
+        "Preamble" => "Set G-code commands emitted before the toolpath begins.",
+        "Postamble" => "Set G-code commands emitted after the toolpath finishes.",
+        "G-code" => "Choose where the generated primary G-code file is written.",
+        "Return to origin X/Y after job" => {
+            "Retract to safe Z, then rapid to X0 Y0 before the postamble."
+        }
+        "Recovery comments" => "Include compatibility comments that help recover legacy settings.",
+        "Disable variables" => "Write numeric safe and cut values instead of controller variables.",
+        "Extended chars" => "Allow extended character ranges when reading TTF fonts.",
+        "Show thickness" => "Include stroke thickness when displaying the input geometry.",
+        "Show V area" => "Display the calculated V-carve area in the preview.",
+        "Plot during V-carve" => "Update the preview while V-carve paths are being calculated.",
+        _ => return None,
+    })
+}
+
+fn clean_path_help(index: usize) -> &'static str {
+    match index {
+        0 => "Generate straight-bit cleanup around the source profile.",
+        1 => "Generate straight-bit cleanup along horizontal spans.",
+        2 => "Generate straight-bit cleanup along vertical spans.",
+        3 => "Generate V-bit cleanup around the source profile.",
+        4 => "Generate V-bit cleanup along vertical spans.",
+        5 => "Generate V-bit cleanup along horizontal spans.",
+        6 => "Generate straight-bit cleanup along closed loop offsets.",
+        7 => "Generate V-bit cleanup along closed loop offsets.",
+        _ => "Choose whether this cleanup path family is generated.",
+    }
+}
+
+fn with_parameter_help(response: egui::Response, label: &str) -> egui::Response {
+    match parameter_help(label) {
+        Some(help) => response.on_hover_text(help),
+        None => response,
+    }
+}
+
+pub(crate) fn parameter_checkbox(
+    ui: &mut egui::Ui,
+    checked: &mut bool,
+    label: &str,
+) -> egui::Response {
+    with_parameter_help(ui.checkbox(checked, label), label)
+}
+
 pub(crate) fn path_row(ui: &mut egui::Ui, label: &str, value: &mut String) -> PathRowAction {
     let mut action = PathRowAction::default();
     ui.horizontal(|ui| {
         row_label(ui, label, 88.0);
         right_aligned_group(ui, PATH_CONTROL_WIDTH, |ui| {
             let text_width = (ui.available_width() - 74.0).max(80.0);
-            action.value_changed = ui
-                .add_sized(
-                    [text_width, 22.0],
-                    egui::TextEdit::singleline(value).horizontal_align(egui::Align::RIGHT),
-                )
-                .changed();
-            action.browse_clicked = ui.button("Browse").clicked();
+            let response = ui.add_sized(
+                [text_width, 22.0],
+                egui::TextEdit::singleline(value).horizontal_align(egui::Align::RIGHT),
+            );
+            action.value_changed = response.changed();
+            with_parameter_help(response, label);
+            action.browse_clicked = with_parameter_help(ui.button("Browse"), label).clicked();
         });
     });
     action
@@ -33,10 +156,11 @@ pub(crate) fn number_row(ui: &mut egui::Ui, label: &str, value: &mut f64, speed:
         row_label(ui, label, 124.0);
         right_aligned_group(ui, FORM_CONTROL_WIDTH, |ui| {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.add_sized(
+                let response = ui.add_sized(
                     [FORM_CONTROL_WIDTH, 22.0],
                     egui::DragValue::new(value).speed(speed).max_decimals(4),
                 );
+                with_parameter_help(response, label);
             });
         });
     });
@@ -68,12 +192,12 @@ pub(crate) fn text_row(ui: &mut egui::Ui, label: &str, value: &mut String) -> Pa
     ui.horizontal(|ui| {
         row_label(ui, label, 124.0);
         right_aligned_group(ui, FORM_CONTROL_WIDTH, |ui| {
-            action.value_changed = ui
-                .add_sized(
-                    [FORM_CONTROL_WIDTH, 22.0],
-                    egui::TextEdit::singleline(value).horizontal_align(egui::Align::RIGHT),
-                )
-                .changed();
+            let response = ui.add_sized(
+                [FORM_CONTROL_WIDTH, 22.0],
+                egui::TextEdit::singleline(value).horizontal_align(egui::Align::RIGHT),
+            );
+            action.value_changed = response.changed();
+            with_parameter_help(response, label);
         });
     });
     action
@@ -87,7 +211,10 @@ pub(crate) fn clean_path_checkbox(
 ) {
     let mut values = parse_clean_path_values(clean_paths);
     let mut checked = values[index];
-    if ui.checkbox(&mut checked, label).changed() {
+    let response = ui.checkbox(&mut checked, label);
+    let changed = response.changed();
+    with_parameter_help(response, label).on_hover_text(clean_path_help(index));
+    if changed {
         values[index] = checked;
         *clean_paths = format_clean_path_values(values);
     }
@@ -121,10 +248,12 @@ pub(crate) fn combo_row(
     ui.horizontal(|ui| {
         row_label(ui, label, 124.0);
         right_aligned_group(ui, FORM_CONTROL_WIDTH, |ui| {
-            egui::ComboBox::from_id_salt(label)
+            let response = egui::ComboBox::from_id_salt(label)
                 .selected_text(selected_text)
                 .width(FORM_CONTROL_WIDTH)
-                .show_ui(ui, body);
+                .show_ui(ui, body)
+                .response;
+            with_parameter_help(response, label);
         });
     });
 }
@@ -165,7 +294,8 @@ pub(crate) fn row_label(ui: &mut egui::Ui, label: &str, width: f32) {
         egui::vec2(width, 20.0),
         egui::Layout::left_to_right(egui::Align::Center),
         |ui| {
-            ui.label(label);
+            let response = ui.label(label);
+            with_parameter_help(response, label);
         },
     );
 }

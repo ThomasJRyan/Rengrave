@@ -64,6 +64,8 @@ Repository map
      - parsed G-code preview layers and transforms
    * - ``ui/src/controls.rs``
      - UI-to-legacy settings mapping
+   * - ``ui/src/widgets.rs``
+     - Shared parameter rows and the centralized tooltip copy catalog
    * - ``cli/src/main.rs``
      - clap options and artifact writing
 
@@ -113,6 +115,14 @@ worker. The worker returns ``BatchOutput``; the UI parses primary and secondary
 G-code into preview layers and derives extents, move counts, cut/rapid lengths,
 arc counts, and warnings. Manual settings edits persist through UI preferences
 and stale-output detection names the changed request areas.
+
+Parameter help is centralized in ``rengrave-ui/src/widgets.rs``. Numeric,
+combo, text, and path rows attach the matching explanation to both the label
+and interactive control; parameter checkboxes use the same catalog, while
+cleanup-path checkboxes add index-specific descriptions because labels such as
+``X`` and ``Profile`` occur for both cutter types. Keep tooltip copy brief and
+describe the effect on layout, tool motion, output, or compatibility rather
+than repeating the visible label.
 
 The native preview applies pan, zoom, model rotation, and viewport rotation at
 draw time. Cursor coordinates are converted back through the same view

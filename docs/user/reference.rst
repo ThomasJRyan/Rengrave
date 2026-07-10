@@ -71,6 +71,15 @@ and reports ``Generated in ... s`` after a successful or failed generation.
 This is the elapsed background batch-generation time; it does not include time
 spent exporting files afterward.
 
+Parameter tooltips
+------------------
+
+Hover over a geometry, tool, profile, cleanup, bitmap, or export parameter to
+see a brief explanation of what it controls. The tooltip is attached to both
+the parameter label and its input where possible, so it remains available when
+the value is being edited. Preview-only layer toggles are separate from
+machining parameters and keep their direct labels.
+
 Output state is explicit: *none*, *calculating*, *stale*, or *ready*. A stale
 state names the changed area when possible. Copying or saving stale output is
 allowed by the current UI but is called out as a preflight caution; recalculate
