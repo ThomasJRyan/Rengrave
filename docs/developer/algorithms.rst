@@ -131,6 +131,14 @@ the same with Y. Nearest-endpoint ordering reduces travel without changing
 cutting geometry. ``v_flop`` selects the opposite pairing parity for legacy
 orientation behavior.
 
+Cleanup emission uses the V-carve maximum depth
+``VCarveOptions::max_cut_depth()`` as its final target. For inlays, the
+allowance is added to that target. The ordinary engraving ``ZCUT`` value is
+not used because it describes constant-depth engraving, not the full depth of
+the V-carve surface. Cleanup G-code also emits an initial ``F`` command so a
+secondary file has an explicit modal cutting feed when run by itself; plunge
+and XY feed words are emitted as needed when those rates differ.
+
 Profile paths, corners, and tabs
 --------------------------------
 

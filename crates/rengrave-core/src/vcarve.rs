@@ -87,6 +87,11 @@ impl VCarveOptions {
         (self.effective_bit_diameter() / 2.0).max(0.0)
     }
 
+    /// Maximum depth used by the primary V-carve, before any inlay allowance.
+    pub fn max_cut_depth(&self) -> f64 {
+        self.inlay_depth
+    }
+
     pub fn depth_for_radius(&self, radius: f64) -> f64 {
         match self.bit_shape {
             BitShape::VBit => {

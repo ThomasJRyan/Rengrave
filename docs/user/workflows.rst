@@ -80,6 +80,12 @@ Cleanup is emitted as secondary G-code. It is selected independently for a
 straight bit and a V-bit. Each bit can request a profile pass, X scanlines, Y
 scanlines, and repeated loop offsets.
 
+Cleanup files are standalone operations: they write the configured feed rate
+before the first plunge and use the configured plunge rate when it differs.
+They cut to the primary V-carve's calculated maximum depth, including any
+roughing passes and inlay allowance, rather than the constant-depth engraving
+``Cut Z`` value.
+
 The straight-bit area is an offset of the source region by the sum of the
 cleanup radius and the primary cutter radius. V-bit cleanup constructs two
 offset regions and takes their difference to retain the area that the V-bit

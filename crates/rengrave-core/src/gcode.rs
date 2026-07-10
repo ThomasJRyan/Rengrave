@@ -313,14 +313,12 @@ pub fn write_cleanup_gcode(
     }
     lines.push(gcode_options.units.gcode().to_owned());
     lines.extend(split_gcode_lines(&gcode_options.preamble));
+    lines.push(format!("F{feed}"));
 
     let paths = cleanup_paths(points);
-    for depth in cleanup_pass_depths(
-        cleanup_depth(gcode_options.depth_z, vcarve_options),
-        vcarve_options,
-    ) {
+    for depth in cleanup_pass_depths(cleanup_depth(vcarve_options), vcarve_options) {
         let depth_value = format_number(depth, dp);
-        let mut feed_current = String::new();
+        let mut feed_current = feed.clone();
         for path in sort_paths(paths.clone()) {
             let Some(first) = path.first() else {
                 continue;
@@ -737,9 +735,10 @@ fn cleanup_pass_depths(depth: f64, vcarve_options: &VCarveOptions) -> Vec<f64> {
     depths
 }
 
-fn cleanup_depth(depth: f64, vcarve_options: &VCarveOptions) -> f64 {
+fn cleanup_depth(vcarve_options: &VCarveOptions) -> f64 {
+    let depth = vcarve_options.max_cut_depth();
     if vcarve_options.inlay {
-        vcarve_options.inlay_depth + vcarve_options.allowance
+        depth + vcarve_options.allowance
     } else {
         depth
     }
@@ -1555,7 +1554,7 @@ mod tests {
     }
 
     #[test]
-    fn writes_cleanup_gcode_with_fixed_depth_paths() {
+    fn writes_cleanup_gcode_at_vcarve_max_depth() {
         let options = GcodeOptions {
             safe_z: 0.25,
             depth_z: -0.1,
@@ -1598,8 +1597,61 @@ mod tests {
                 .iter()
                 .any(|line| line.contains("secondary cleanup operation"))
         );
-        assert!(lines.contains(&"G1 Z-0.1000 F1.00".to_owned()));
+        assert!(lines.contains(&"F5.00".to_owned()));
+        assert!(lines.contains(&"G1 Z-0.4330 F1.00".to_owned()));
         assert!(lines.contains(&"G1 X1.0000 Y0.0000 F5.00".to_owned()));
+    }
+
+    #[test]
+    fn cleanup_gcode_sets_feed_when_feed_and_plunge_match() {
+        let options = GcodeOptions {
+            safe_z: 0.25,
+            depth_z: -0.1,
+            feed: 5.0,
+            plunge: 5.0,
+            accuracy: 0.001,
+            units: Units::Inch,
+            preamble: DEFAULT_GCODE_PREAMBLE.to_owned(),
+            postamble: "M5|M2".to_owned(),
+            return_to_origin: true,
+            variables_disabled: true,
+            arc_fit: ArcFit::None,
+        };
+        let cleanup = crate::cleanup::CleanupOptions::from_legacy(
+            &crate::settings::default_legacy_settings(),
+        );
+        let vcarve = VCarveOptions::from_legacy(&crate::settings::default_legacy_settings());
+
+        let lines = write_cleanup_gcode(
+            &[
+                CleanupPoint {
+                    position: Point::new(0.0, 0.0),
+                    radius: 0.125,
+                    loop_id: 1,
+                },
+                CleanupPoint {
+                    position: Point::new(1.0, 0.0),
+                    radius: 0.125,
+                    loop_id: 1,
+                },
+            ],
+            &options,
+            &cleanup,
+            &vcarve,
+            CleanupBit::Straight,
+        );
+
+        let feed_index = lines.iter().position(|line| line == "F5.00").unwrap();
+        let plunge_index = lines
+            .iter()
+            .position(|line| line.starts_with("G1 Z"))
+            .unwrap();
+        assert!(feed_index < plunge_index);
+        assert!(
+            !lines
+                .iter()
+                .any(|line| line.starts_with("G1 Z") && line.contains(" F"))
+        );
     }
 
     #[test]
@@ -1646,8 +1698,9 @@ mod tests {
 
         assert!(lines.contains(&"G1 Z-0.1000".to_owned()));
         assert!(lines.contains(&"G1 Z-0.2000".to_owned()));
-        assert!(lines.contains(&"G1 Z-0.2500".to_owned()));
         assert!(lines.contains(&"G1 Z-0.3000".to_owned()));
+        assert!(lines.contains(&"G1 Z-0.3830".to_owned()));
+        assert!(lines.contains(&"G1 Z-0.4330".to_owned()));
     }
 
     #[test]
@@ -1673,7 +1726,7 @@ mod tests {
         settings.set_or_push("allowance", "-0.1", false);
         let vcarve = VCarveOptions::from_legacy(&settings);
 
-        assert!((cleanup_depth(options.depth_z, &vcarve) + 0.533).abs() < 1e-9);
+        assert!((cleanup_depth(&vcarve) + 0.533).abs() < 1e-9);
 
         let lines = write_cleanup_gcode(
             &[
