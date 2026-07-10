@@ -79,9 +79,21 @@ length and maximum radius and is clamped to a minimum of two degrees. The
 or the current character/loop.
 
 The generated points are reordered by loop and simplified during G-code
-emission. V-carve simplification uses a three-dimensional Douglas-Peucker pass
-over X/Y/Z samples so a change in depth cannot be simplified away as if it were
-only a planar deviation.
+emission. The first loop keeps its generated starting point for deterministic
+startup behavior. A bounded relocate pass then moves whole independent loops
+only when the connecting rapid distance becomes shorter. The generated
+direction and point sequence of each loop are preserved, including for open
+paths. When return-to-origin is enabled, the final origin move participates in
+the boundary comparison. This changes only independent loop traversal order:
+every sampled X/Y position, radius, and resulting Z value remains in the
+generated point set. V-carve simplification uses a three-dimensional
+Douglas-Peucker pass over X/Y/Z samples so a change in depth cannot be
+simplified away as if it were only a planar deviation.
+
+This is a deterministic local heuristic rather than a global travelling-
+salesperson solution. It avoids the quadratic memory cost of constructing a
+full distance matrix and leaves geometry-sensitive open paths in their source
+direction.
 
 Roughing and multipass
 ~~~~~~~~~~~~~~~~~~~~~~

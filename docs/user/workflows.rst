@@ -123,8 +123,11 @@ Output and return-to-origin
 
 G-code starts with absolute positioning, the selected ``G20`` or ``G21`` unit
 command, the configured preamble, and a feed rate. Each path rapids to safe Z,
-rapids to its first point, plunges, and emits cutting moves. Arc fitting can
-emit linearized paths, center-offset ``I/J`` arcs, or radius-format ``R`` arcs.
+rapids to its first point, plunges, and emits cutting moves. Independent
+V-carve paths are automatically rearranged when that reduces the connecting
+rapid distance; each path keeps its generated direction. This does not change
+the cut depths or geometry. Arc fitting can emit linearized paths, center-offset
+``I/J`` arcs, or radius-format ``R`` arcs.
 
 The shared trailer retracts to safe Z, writes the postamble, and, when
 ``return_to_origin`` is enabled, emits ``G0 X0 Y0``. The default is enabled in

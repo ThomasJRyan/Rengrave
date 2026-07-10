@@ -4,7 +4,7 @@ use crate::profile::{ProfileOperation, ProfileTab, ProfileTool};
 use crate::settings::{
     DEFAULT_GCODE_POSTAMBLE, DEFAULT_GCODE_PREAMBLE, LegacySettings, get_legacy_bool,
 };
-use crate::vcarve::{VCarveOptions, VCarvePoint};
+use crate::vcarve::{VCarveOptions, VCarvePoint, reorder_vcarve_points};
 
 const ZERO: f64 = 0.00001;
 const MAX_RADIUS: f64 = 1.0e30;
@@ -189,6 +189,13 @@ pub fn write_vcarve_gcode(
     gcode_options: &GcodeOptions,
     vcarve_options: &VCarveOptions,
 ) -> Vec<String> {
+    let points = reorder_vcarve_points(
+        points,
+        gcode_options.accuracy,
+        gcode_options
+            .return_to_origin
+            .then_some(crate::geometry::Point::new(0.0, 0.0)),
+    );
     let dp = gcode_options.coord_digits();
     let dpfeed = gcode_options.feed_digits();
     let safe_number = format_number(gcode_options.safe_z, dp);
@@ -223,7 +230,7 @@ pub fn write_vcarve_gcode(
         let mut current_loop = None;
         let mut loop_moves = Vec::new();
         let mut emit_state = VCarveEmitState::new(gcode_options.safe_z, dp);
-        for point in points {
+        for point in &points {
             let z = vcarve_options.pass_depth_for_radius(point.radius, rough_cap);
             if current_loop != Some(point.loop_id) {
                 flush_vcarve_moves(

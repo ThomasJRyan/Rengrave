@@ -244,7 +244,7 @@ pub fn generate_vcarve_points(
 pub fn generate_vcarve_points_with_cancel(
     segments: &[EngraveSegment],
     options: &VCarveOptions,
-    accuracy: f64,
+    _accuracy: f64,
     cancel: &(dyn Fn() -> bool + Sync),
 ) -> Result<Vec<VCarvePoint>, VCarveCanceled> {
     let Some(grid) = PartitionGrid::new(segments, options.max_radius(), options.step_len) else {
@@ -309,7 +309,7 @@ pub fn generate_vcarve_points_with_cancel(
     for group in generated {
         output.extend(group);
     }
-    Ok(reorder_loops(output, accuracy))
+    Ok(output)
 }
 
 fn vcarve_groups(
@@ -1261,7 +1261,19 @@ fn trunc_index(value: f64, count: usize) -> usize {
     }
 }
 
-fn reorder_loops(points: Vec<VCarvePoint>, accuracy: f64) -> Vec<VCarvePoint> {
+pub(crate) fn reorder_vcarve_points(
+    points: &[VCarvePoint],
+    accuracy: f64,
+    terminal: Option<Point>,
+) -> Vec<VCarvePoint> {
+    reorder_loops(points.to_vec(), accuracy, terminal)
+}
+
+fn reorder_loops(
+    points: Vec<VCarvePoint>,
+    accuracy: f64,
+    terminal: Option<Point>,
+) -> Vec<VCarvePoint> {
     if points.len() < 2 {
         return points;
     }
@@ -1270,11 +1282,11 @@ fn reorder_loops(points: Vec<VCarvePoint>, accuracy: f64) -> Vec<VCarvePoint> {
     let mut start = 0usize;
     for index in 1..points.len() {
         if points[index].loop_id != points[index - 1].loop_id {
-            loops.push((start, index - 1));
+            loops.push(points[start..index].to_vec());
             start = index;
         }
     }
-    loops.push((start, points.len() - 1));
+    loops.push(points[start..].to_vec());
     if loops.len() < 2 {
         return points;
     }
@@ -1282,25 +1294,92 @@ fn reorder_loops(points: Vec<VCarvePoint>, accuracy: f64) -> Vec<VCarvePoint> {
     let mut ordered = Vec::with_capacity(loops.len());
     ordered.push(loops.remove(0));
     while !loops.is_empty() {
-        let (_, current_end) = *ordered.last().unwrap();
-        let current = points[current_end].position;
+        let current = ordered
+            .last()
+            .and_then(|path| path.last())
+            .unwrap()
+            .position;
         let mut nearest = 0usize;
-        let mut nearest_distance = point_distance_squared(current, points[loops[0].0].position);
-        for (index, (loop_start, _)) in loops.iter().enumerate().skip(1) {
-            let distance = point_distance_squared(current, points[*loop_start].position);
-            if distance + accuracy * accuracy < nearest_distance {
-                nearest_distance = distance;
+        let mut nearest_distance = point_distance_squared(current, loops[0][0].position);
+        for (index, path) in loops.iter().enumerate().skip(1) {
+            let begin_distance = point_distance_squared(current, path[0].position);
+            if begin_distance + accuracy * accuracy < nearest_distance {
+                nearest_distance = begin_distance;
                 nearest = index;
             }
         }
+
         ordered.push(loops.remove(nearest));
     }
 
-    let mut output = Vec::with_capacity(points.len());
-    for (start, end) in ordered {
-        output.extend(points[start..=end].iter().copied());
+    improve_loop_order(&mut ordered, accuracy, terminal);
+    ordered.into_iter().flatten().collect()
+}
+
+fn improve_loop_order(paths: &mut Vec<Vec<VCarvePoint>>, accuracy: f64, terminal: Option<Point>) {
+    if paths.len() < 3 {
+        return;
     }
-    output
+
+    let tolerance = accuracy;
+    // A bounded best-improvement pass keeps the optimizer predictable for
+    // dense bitmap jobs while allowing several obvious route corrections.
+    for _ in 0..paths.len().min(8) {
+        let mut best_move = None;
+        let mut best_delta = -tolerance;
+
+        for from in 1..paths.len() {
+            let previous = paths[from - 1].last().unwrap().position;
+            let current = &paths[from];
+            let next = paths
+                .get(from + 1)
+                .map(|path| path[0].position)
+                .or(terminal);
+            let removed_cost = point_distance(previous, current[0].position)
+                + next
+                    .map(|next| point_distance(current.last().unwrap().position, next))
+                    .unwrap_or(0.0);
+            let joined_cost = next
+                .map(|next| point_distance(previous, next))
+                .unwrap_or(0.0);
+
+            for insert in 1..paths.len() {
+                if insert == from || insert == from + 1 {
+                    continue;
+                }
+
+                let original_index = |reduced_index: usize| {
+                    if reduced_index >= from {
+                        reduced_index + 1
+                    } else {
+                        reduced_index
+                    }
+                };
+                let before = paths[original_index(insert - 1)].last().unwrap().position;
+                let after = paths
+                    .get(original_index(insert))
+                    .map(|path| path[0].position);
+                let old_insert_cost = after
+                    .map(|after| point_distance(before, after))
+                    .unwrap_or(0.0);
+                let new_insert_cost = point_distance(before, current[0].position)
+                    + after
+                        .map(|after| point_distance(current.last().unwrap().position, after))
+                        .unwrap_or(0.0);
+                let delta = joined_cost + new_insert_cost - removed_cost - old_insert_cost;
+                if delta < best_delta {
+                    best_delta = delta;
+                    best_move = Some((from, insert));
+                }
+            }
+        }
+
+        let Some((from, insert)) = best_move else {
+            break;
+        };
+        let path = paths.remove(from);
+        paths.insert(insert, path);
+    }
 }
 
 fn point_distance_squared(a: Point, b: Point) -> f64 {
@@ -1460,6 +1539,56 @@ mod tests {
         assert_eq!(groups.len(), 2);
         assert_eq!(groups[0], (1, 0..4));
         assert_eq!(groups[1], (2, 4..8));
+    }
+
+    #[test]
+    fn vcarve_loop_order_preserves_path_direction() {
+        let points = vec![
+            VCarvePoint {
+                position: Point::new(0.0, 0.0),
+                radius: 0.1,
+                loop_id: 1,
+            },
+            VCarvePoint {
+                position: Point::new(10.0, 0.0),
+                radius: 0.2,
+                loop_id: 1,
+            },
+            VCarvePoint {
+                position: Point::new(20.0, 0.0),
+                radius: 0.3,
+                loop_id: 2,
+            },
+            VCarvePoint {
+                position: Point::new(11.0, 0.0),
+                radius: 0.4,
+                loop_id: 2,
+            },
+            VCarvePoint {
+                position: Point::new(30.0, 0.0),
+                radius: 0.5,
+                loop_id: 3,
+            },
+            VCarvePoint {
+                position: Point::new(21.0, 0.0),
+                radius: 0.6,
+                loop_id: 3,
+            },
+        ];
+
+        let ordered = reorder_loops(points, 0.001, None);
+
+        assert_eq!(
+            ordered
+                .iter()
+                .map(|point| point.loop_id)
+                .collect::<Vec<_>>(),
+            vec![1, 1, 3, 3, 2, 2]
+        );
+        assert_eq!(ordered[2].position, Point::new(30.0, 0.0));
+        assert_eq!(ordered[3].position, Point::new(21.0, 0.0));
+        assert_eq!(ordered[4].position, Point::new(20.0, 0.0));
+        assert_eq!(ordered[5].position, Point::new(11.0, 0.0));
     }
 
     #[test]
