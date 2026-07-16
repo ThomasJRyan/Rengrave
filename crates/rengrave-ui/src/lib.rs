@@ -4129,6 +4129,17 @@ mod tests {
     }
 
     #[test]
+    fn text_engrave_icon_decodes_with_a_readable_wood_workpiece() {
+        let (_, bytes) = tool_icon_bytes(ToolView::TextEngrave);
+        let image = image::load_from_memory(bytes).unwrap().to_rgba8();
+
+        assert_eq!(image.dimensions(), (128, 128));
+        assert!(image.pixels().any(|pixel| {
+            pixel[3] > 200 && pixel[0] > 150 && pixel[1] > 120 && pixel[2] < pixel[0]
+        }));
+    }
+
+    #[test]
     fn tool_views_map_to_cut_types_and_input_families() {
         assert_eq!(ToolView::TextEngrave.cut_type(), CutTypeChoice::Engrave);
         assert_eq!(ToolView::ImageEngrave.cut_type(), CutTypeChoice::Engrave);
