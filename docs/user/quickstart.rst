@@ -24,6 +24,15 @@ The normal loop is:
 #. Export G-code and, when useful, SVG, DXF, or secondary cleanup G-code.
 #. Verify the exported file in a simulator and on the machine's controller.
 
+Choosing a new project
+----------------------
+
+Choose **File > New project** to open the workbench picker. Each workbench is
+represented by a square icon grouped under text or image generation. Hover an
+icon to see its workbench name, then click the icon to start that project type.
+The six choices are Text Engrave, Text V-carve, Text Inlay, Image Engrave,
+Image V-carve, and Image Inlay.
+
 Launching the desktop application
 ----------------------------------
 

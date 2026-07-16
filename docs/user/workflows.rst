@@ -22,6 +22,11 @@ vector geometry. Bitmaps are thresholded, alpha-composited over white, traced
 to vector paths, and then sent through the same downstream geometry path as
 other image inputs.
 
+The **File > New project** picker presents these six workbenches as square
+icons rather than full-width text buttons. Hover an icon to reveal the exact
+workbench name; the icon remains clickable and the text and image groups keep
+the same ordering as the table above.
+
 Layout and coordinate choices
 -----------------------------
 

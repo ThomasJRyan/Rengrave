@@ -66,6 +66,8 @@ Repository map
      - UI-to-legacy settings mapping
    * - ``ui/src/widgets.rs``
      - Shared parameter rows and the centralized tooltip copy catalog
+   * - ``assets/icons/``
+     - Square generated workbench icons embedded by the desktop UI
    * - ``cli/src/main.rs``
      - clap options and artifact writing
 
@@ -92,6 +94,18 @@ The pipeline is intentionally staged:
 #. G-code is emitted with units, preamble, safe-Z/plunge/cut motion, optional
    arcs, postamble, and return-to-origin.
 #. SVG and DXF are rendered from the shared primary layout representation.
+
+Workbench picker
+----------------
+
+``rengrave-ui/src/lib.rs`` owns the New Project modal. ``ToolView::ALL`` is
+the single ordered list for the six workbenches and its ``category_label``
+keeps text and image choices grouped. ``tool_icon_image`` maps each enum value
+to a compile-time PNG in ``assets/icons`` and supplies the same workbench name
+as both accessible image text and hover tooltip. The modal intentionally keeps
+the labels out of the normal tile surface so the icon is the primary choice,
+while retaining the accessible name for keyboard, test, and assistive-technology
+consumers.
 
 Data ownership and invariants
 -----------------------------

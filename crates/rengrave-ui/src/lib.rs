@@ -2186,14 +2186,24 @@ impl RengraveApp {
             for category in ["Text generation", "Image generation"] {
                 ui.label(egui::RichText::new(category).strong());
                 ui.add_space(2.0);
-                for tool_view in ToolView::ALL
-                    .into_iter()
-                    .filter(|tool_view| tool_view.category_label() == category)
-                {
-                    if full_width_button(ui, tool_view.label(), true) {
-                        selected = Some(tool_view);
+                ui.horizontal_wrapped(|ui| {
+                    for tool_view in ToolView::ALL
+                        .into_iter()
+                        .filter(|tool_view| tool_view.category_label() == category)
+                    {
+                        let response = ui.add(
+                            egui::Button::image(
+                                tool_icon_image(tool_view)
+                                    .tint(egui::Color32::from_rgb(154, 219, 180))
+                                    .alt_text(tool_view.label()),
+                            )
+                            .min_size(egui::vec2(124.0, 124.0)),
+                        );
+                        if response.clone().on_hover_text(tool_view.label()).clicked() {
+                            selected = Some(tool_view);
+                        }
                     }
-                }
+                });
                 ui.add_space(8.0);
             }
             ui.separator();
@@ -2892,6 +2902,38 @@ fn full_width_button(ui: &mut egui::Ui, label: &str, enabled: bool) -> bool {
         egui::Button::new(label).min_size(egui::vec2(width, 26.0)),
     )
     .clicked()
+}
+
+fn tool_icon_image(tool_view: ToolView) -> egui::Image<'static> {
+    let (uri, bytes): (&'static str, &'static [u8]) = match tool_view {
+        ToolView::TextEngrave => (
+            "bytes://tool-icon/text-engrave",
+            include_bytes!("../../../assets/icons/text-engrave.png"),
+        ),
+        ToolView::TextVCarve => (
+            "bytes://tool-icon/text-v-carve",
+            include_bytes!("../../../assets/icons/text-v-carve.png"),
+        ),
+        ToolView::TextInlay => (
+            "bytes://tool-icon/text-inlay",
+            include_bytes!("../../../assets/icons/text-inlay.png"),
+        ),
+        ToolView::ImageEngrave => (
+            "bytes://tool-icon/image-engrave",
+            include_bytes!("../../../assets/icons/image-engrave.png"),
+        ),
+        ToolView::ImageVCarve => (
+            "bytes://tool-icon/image-v-carve",
+            include_bytes!("../../../assets/icons/image-v-carve.png"),
+        ),
+        ToolView::ImageInlay => (
+            "bytes://tool-icon/image-inlay",
+            include_bytes!("../../../assets/icons/image-inlay.png"),
+        ),
+    };
+    egui::Image::from_bytes(uri, bytes)
+        .fit_to_exact_size(egui::vec2(92.0, 92.0))
+        .alt_text(tool_view.label())
 }
 
 fn count_arc_moves(gcode: &str) -> usize {
@@ -5049,6 +5091,35 @@ mod tests {
                 )
                 .is_some()
         );
+    }
+
+    #[test]
+    fn kittest_renders_new_project_tool_icons_with_hover_labels() {
+        let mut app = test_app();
+        app.show_new_project_modal = true;
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(460.0, 520.0))
+            .build_ui_state(|ui, app| app.show_new_project_modal(ui.ctx()), app);
+        harness.run();
+
+        for tool_view in ToolView::ALL {
+            assert!(
+                harness
+                    .query_all_by_label(tool_view.label())
+                    .next()
+                    .is_some(),
+                "missing icon accessibility label for {}",
+                tool_view.label()
+            );
+        }
+
+        harness
+            .get_all_by_label("Text Engrave")
+            .next()
+            .expect("Text Engrave icon is present")
+            .hover();
+        harness.run();
+        assert!(harness.query_all_by_label("Text Engrave").next().is_some());
     }
 
     #[test]
