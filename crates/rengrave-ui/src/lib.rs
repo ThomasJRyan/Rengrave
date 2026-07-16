@@ -135,6 +135,7 @@ struct RengraveApp {
     input_catalog_filter: InputCatalogFilter,
     input_catalog_search: String,
     input_preview: InputPreview,
+    tool_icon_textures: Option<[egui::TextureHandle; 6]>,
     show_new_project_modal: bool,
     preferences_path: Option<PathBuf>,
     calculation: Option<CalculationJob>,
@@ -271,6 +272,7 @@ impl RengraveApp {
             input_catalog_filter: InputCatalogFilter::default(),
             input_catalog_search: String::new(),
             input_preview: InputPreview::default(),
+            tool_icon_textures: None,
             show_new_project_modal: false,
             preferences_path,
             calculation: None,
@@ -2178,6 +2180,11 @@ impl RengraveApp {
             return;
         }
 
+        if self.tool_icon_textures.is_none() {
+            self.tool_icon_textures =
+                Some(ToolView::ALL.map(|tool_view| load_tool_icon_texture(ctx, tool_view)));
+        }
+
         let mut selected = None;
         let response = egui::Modal::new(egui::Id::new("new_project_modal")).show(ctx, |ui| {
             ui.set_width(420.0);
@@ -2193,9 +2200,12 @@ impl RengraveApp {
                     {
                         let response = ui.add(
                             egui::Button::image(
-                                tool_icon_image(tool_view)
-                                    .tint(egui::Color32::from_rgb(154, 219, 180))
-                                    .alt_text(tool_view.label()),
+                                egui::Image::from_texture(
+                                    &self.tool_icon_textures.as_ref().expect("icons loaded")
+                                        [tool_view.index()],
+                                )
+                                .fit_to_exact_size(egui::vec2(92.0, 92.0))
+                                .alt_text(tool_view.label()),
                             )
                             .min_size(egui::vec2(124.0, 124.0)),
                         );
@@ -2904,8 +2914,8 @@ fn full_width_button(ui: &mut egui::Ui, label: &str, enabled: bool) -> bool {
     .clicked()
 }
 
-fn tool_icon_image(tool_view: ToolView) -> egui::Image<'static> {
-    let (uri, bytes): (&'static str, &'static [u8]) = match tool_view {
+fn tool_icon_bytes(tool_view: ToolView) -> (&'static str, &'static [u8]) {
+    match tool_view {
         ToolView::TextEngrave => (
             "bytes://tool-icon/text-engrave",
             include_bytes!("../../../assets/icons/text-engrave.png"),
@@ -2930,10 +2940,17 @@ fn tool_icon_image(tool_view: ToolView) -> egui::Image<'static> {
             "bytes://tool-icon/image-inlay",
             include_bytes!("../../../assets/icons/image-inlay.png"),
         ),
-    };
-    egui::Image::from_bytes(uri, bytes)
-        .fit_to_exact_size(egui::vec2(92.0, 92.0))
-        .alt_text(tool_view.label())
+    }
+}
+
+fn load_tool_icon_texture(ctx: &egui::Context, tool_view: ToolView) -> egui::TextureHandle {
+    let (uri, bytes) = tool_icon_bytes(tool_view);
+    let decoded = image::load_from_memory(bytes)
+        .unwrap_or_else(|error| panic!("failed to decode {uri}: {error}"))
+        .to_rgba8();
+    let size = [decoded.width() as usize, decoded.height() as usize];
+    let color_image = egui::ColorImage::from_rgba_unmultiplied(size, decoded.as_raw());
+    ctx.load_texture(uri, color_image, egui::TextureOptions::LINEAR)
 }
 
 fn count_arc_moves(gcode: &str) -> usize {
@@ -3071,6 +3088,7 @@ mod tests {
             input_catalog_filter: InputCatalogFilter::default(),
             input_catalog_search: String::new(),
             input_preview: InputPreview::default(),
+            tool_icon_textures: None,
             show_new_project_modal: false,
             preferences_path: None,
             calculation: None,

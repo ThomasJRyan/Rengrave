@@ -118,6 +118,17 @@ impl ToolView {
         }
     }
 
+    pub(crate) fn index(self) -> usize {
+        match self {
+            Self::TextEngrave => 0,
+            Self::TextVCarve => 1,
+            Self::TextInlay => 2,
+            Self::ImageEngrave => 3,
+            Self::ImageVCarve => 4,
+            Self::ImageInlay => 5,
+        }
+    }
+
     pub(crate) fn value(self) -> &'static str {
         match self {
             Self::TextEngrave => "text-engrave",
