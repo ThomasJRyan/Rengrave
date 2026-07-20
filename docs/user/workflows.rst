@@ -73,6 +73,12 @@ Finish stock            Roughing stock left for the final path
 Max depth/pass          Per-pass roughing cap when multipass is active
 ======================  ================================================
 
+Changing the V-bit angle changes the depth (the emitted ``Z`` coordinates) of
+the V-carve. The XY centerline normally remains the same because the V-carve
+solver follows the widest circle that fits at each source position. An XY-only
+preview or comparison of XY coordinates therefore does not show the angle
+change; inspect the generated G-code's Z values to compare the cuts.
+
 At every sampled outline position, R-Engrave searches for the largest circle
 that can fit without crossing the relevant boundary. The circle radius becomes
 the cutter contact width and is converted to a Z value. The result is then
@@ -83,7 +89,12 @@ Cleanup operations
 
 Cleanup is emitted as secondary G-code. It is selected independently for a
 straight bit and a V-bit. Each bit can request a profile pass, X scanlines, Y
-scanlines, and repeated loop offsets.
+scanlines, and repeated loop offsets. For straight-bit cleanup, enter one or
+more comma-separated diameters in **Clean diameters**, largest first, such as
+``6.35,3.175,1.5``. R-Engrave emits one cleanup file per diameter and assigns
+only residual toolpaths to each smaller tool, so a smaller endmill does not
+retrace material already covered by a larger one. **Clean dia** remains the
+fallback when the list is empty or invalid.
 
 Cleanup files are standalone operations: they write the configured feed rate
 before the first plunge and use the configured plunge rate when it differs.

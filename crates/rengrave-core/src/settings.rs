@@ -182,6 +182,7 @@ pub fn default_legacy_settings() -> LegacySettings {
         ("return_to_origin", "1"),
         ("input_type", "text"),
         ("clean_dia", ".25"),
+        ("clean_dias", ".25"),
         ("clean_step", "50"),
         ("clean_v", "0.05"),
         ("clean_paths", "1,1,0,1,0,1,0,0"),

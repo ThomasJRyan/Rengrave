@@ -46,6 +46,7 @@ impl CleanupSelection {
 #[derive(Debug, Clone, PartialEq)]
 pub struct CleanupOptions {
     pub bit_diameter: f64,
+    pub straight_diameters: Vec<f64>,
     pub step_over_percent: f64,
     pub vbit_diameter: f64,
     pub v_flop: bool,
@@ -58,6 +59,7 @@ impl CleanupOptions {
         let paths = parse_clean_paths(settings.get_last("clean_paths"));
         Self {
             bit_diameter: get_f64(settings, "clean_dia", 0.25).max(ZERO),
+            straight_diameters: get_diameters(settings),
             step_over_percent: get_f64(settings, "clean_step", 50.0).max(ZERO),
             vbit_diameter: get_f64(settings, "clean_v", 0.05).max(ZERO),
             v_flop: get_legacy_bool(settings, "v_flop", false),
@@ -88,6 +90,10 @@ impl CleanupOptions {
             CleanupBit::Straight => self.bit_diameter,
             CleanupBit::VBit => self.vbit_diameter,
         }
+    }
+
+    pub fn straight_tool_diameters(&self) -> &[f64] {
+        &self.straight_diameters
     }
 
     pub fn step_over(&self, bit: CleanupBit) -> f64 {
@@ -127,6 +133,26 @@ pub fn generate_cleanup_points_with_cancel(
     accuracy: f64,
     cancel: &(dyn Fn() -> bool + Sync),
 ) -> Result<Vec<CleanupPoint>, CleanupCanceled> {
+    generate_cleanup_points_for_diameter_with_cancel(
+        segments,
+        cleanup,
+        vcarve,
+        bit,
+        cleanup.tool_diameter(bit),
+        accuracy,
+        cancel,
+    )
+}
+
+pub fn generate_cleanup_points_for_diameter_with_cancel(
+    segments: &[EngraveSegment],
+    cleanup: &CleanupOptions,
+    vcarve: &VCarveOptions,
+    bit: CleanupBit,
+    tool_diameter: f64,
+    accuracy: f64,
+    cancel: &(dyn Fn() -> bool + Sync),
+) -> Result<Vec<CleanupPoint>, CleanupCanceled> {
     check_canceled(cancel)?;
     let selection = cleanup.selection(bit);
     if !selection.any() {
@@ -139,13 +165,20 @@ pub fn generate_cleanup_points_with_cancel(
     }
 
     check_canceled(cancel)?;
-    let area_paths = cleanup_area_paths(&source_paths, cleanup, vcarve, bit, accuracy.max(ZERO));
+    let area_paths = cleanup_area_paths(
+        &source_paths,
+        cleanup,
+        vcarve,
+        bit,
+        tool_diameter,
+        accuracy.max(ZERO),
+    );
     check_canceled(cancel)?;
     if area_paths.is_empty() {
         return Ok(Vec::new());
     }
 
-    let tool_diameter = cleanup.tool_diameter(bit);
+    let tool_diameter = tool_diameter.max(ZERO);
     let step_over = cleanup.step_over(bit);
     let radius = tool_diameter / 2.0;
     let mut output = Vec::new();
@@ -192,6 +225,42 @@ pub fn generate_cleanup_points_with_cancel(
     Ok(output)
 }
 
+pub fn generate_straight_cleanup_stages_with_cancel(
+    segments: &[EngraveSegment],
+    cleanup: &CleanupOptions,
+    vcarve: &VCarveOptions,
+    accuracy: f64,
+    cancel: &(dyn Fn() -> bool + Sync),
+) -> Result<Vec<Vec<CleanupPoint>>, CleanupCanceled> {
+    let mut stages = Vec::new();
+    let mut completed = Vec::new();
+    for &diameter in cleanup.straight_tool_diameters() {
+        let points = generate_cleanup_points_for_diameter_with_cancel(
+            segments,
+            cleanup,
+            vcarve,
+            CleanupBit::Straight,
+            diameter,
+            accuracy,
+            cancel,
+        )?;
+        let current_radius = diameter / 2.0;
+        let residual: Vec<_> = points
+            .into_iter()
+            .filter(|point| {
+                !completed.iter().any(|prior: &CleanupPoint| {
+                    distance(point.position, prior.position)
+                        <= (prior.radius - current_radius).max(0.0) + accuracy
+                })
+            })
+            .collect();
+        completed.extend(residual.iter().copied());
+        stages.push(residual);
+        check_canceled(cancel)?;
+    }
+    Ok(stages)
+}
+
 fn check_canceled(cancel: &dyn Fn() -> bool) -> Result<(), CleanupCanceled> {
     if cancel() {
         Err(CleanupCanceled)
@@ -205,6 +274,7 @@ fn cleanup_area_paths(
     cleanup: &CleanupOptions,
     vcarve: &VCarveOptions,
     bit: CleanupBit,
+    tool_diameter: f64,
     accuracy: f64,
 ) -> Vec<Vec<Point>> {
     let rbit = vcarve.effective_bit_diameter() / 2.0;
@@ -212,11 +282,11 @@ fn cleanup_area_paths(
 
     match bit {
         CleanupBit::Straight => {
-            let radial_adjust = cleanup.bit_diameter / 2.0 + rbit;
+            let radial_adjust = tool_diameter / 2.0 + rbit;
             offset_paths(source_paths, sign * -radial_adjust, accuracy)
         }
         CleanupBit::VBit => {
-            let flat_radius = cleanup.bit_diameter / 2.0;
+            let flat_radius = tool_diameter / 2.0;
             let vclean_radius = cleanup.vbit_diameter / 4.0;
             let step1 = offset_paths(source_paths, sign * -(flat_radius + rbit), accuracy);
             if step1.is_empty() {
@@ -653,6 +723,22 @@ fn get_f64(settings: &LegacySettings, key: &str, default: f64) -> f64 {
         .unwrap_or(default)
 }
 
+fn get_diameters(settings: &LegacySettings) -> Vec<f64> {
+    let fallback = get_f64(settings, "clean_dia", 0.25).max(ZERO);
+    let Some(value) = settings.get_last("clean_dias") else {
+        return vec![fallback];
+    };
+    let mut diameters: Vec<_> = value
+        .split(',')
+        .filter_map(|part| part.trim().parse::<f64>().ok())
+        .filter(|diameter| *diameter > ZERO)
+        .collect();
+    if diameters.is_empty() {
+        diameters.push(fallback);
+    }
+    diameters
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -674,6 +760,49 @@ mod tests {
         assert!(!options.vbit.x);
         assert!(options.vbit.y);
         assert!(options.vbit.loops);
+    }
+
+    #[test]
+    fn parses_arbitrary_straight_cleanup_diameters() {
+        let mut settings = default_legacy_settings();
+        settings.set_or_push("clean_dias", "0.5, 0.25, 0.125", false);
+        let options = CleanupOptions::from_legacy(&settings);
+        assert_eq!(options.straight_tool_diameters(), &[0.5, 0.25, 0.125]);
+    }
+
+    #[test]
+    fn cleanup_stages_keep_residual_toolpaths_separate() {
+        let mut settings = default_legacy_settings();
+        settings.set_or_push("clean_paths", "1,1,0,0,0,0,0,0", false);
+        settings.set_or_push("clean_dias", "0.2,0.08", false);
+        let cleanup = CleanupOptions::from_legacy(&settings);
+        let vcarve = VCarveOptions::from_legacy(&settings);
+        let stages = generate_straight_cleanup_stages_with_cancel(
+            &square_segments(),
+            &cleanup,
+            &vcarve,
+            0.001,
+            &|| false,
+        )
+        .unwrap();
+
+        assert_eq!(stages.len(), 2);
+        assert!(
+            stages[0]
+                .iter()
+                .all(|point| (point.radius - 0.1).abs() < 1e-9)
+        );
+        assert!(
+            stages[1]
+                .iter()
+                .all(|point| (point.radius - 0.04).abs() < 1e-9)
+        );
+        assert!(stages[1].iter().all(|small| {
+            stages[0].iter().all(|large| {
+                distance(small.position, large.position)
+                    > (large.radius - small.radius).max(0.0) + 0.001
+            })
+        }));
     }
 
     #[test]

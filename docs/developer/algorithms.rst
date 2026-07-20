@@ -67,6 +67,14 @@ cut width and depth is:
 
    z(r) = -\frac{r}{\tan(\beta / 2)}
 
+The included angle changes the Z depth assigned to each sampled radius; it does
+not change the XY centerline selected by the maximum-circle walk. This is
+intentional: an ideal V-bit follows the same centerline through a letter or
+image region while a narrower bit reaches a given width at a greater depth.
+Consequently, comparing only XY coordinates (or an XY-only preview) can make
+different V-bit angles appear to produce the same path. The emitted G-code's
+Z coordinates are the angle-sensitive part of the primary V-carve.
+
 For an inlay, the inlay depth offset is added to the V-bit depth. Ball and flat
 bits use different depth models: a ball cutter follows the circular segment of
 its radius, while a flat bit clamps to half its diameter.
@@ -130,6 +138,14 @@ spans, and trims each span by half the cleanup diameter. Vertical scanlines do
 the same with Y. Nearest-endpoint ordering reduces travel without changing
 cutting geometry. ``v_flop`` selects the opposite pairing parity for legacy
 orientation behavior.
+
+Straight cleanup may contain an arbitrary ordered diameter list. Each diameter
+generates the reachable region with its own radius. Later stages discard
+candidate points within ``r_previous - r_current`` of an earlier centerline,
+which models the larger cutter footprint and prevents a smaller tool from
+retracking covered material while preserving tight-corner residuals. Stage
+order is stable and produces ``_clean``, ``_clean_2``, and later companion
+files.
 
 Cleanup emission uses the V-carve maximum depth
 ``VCarveOptions::max_cut_depth()`` as its final target. For inlays, the

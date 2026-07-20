@@ -3,7 +3,10 @@ use std::path::{Path, PathBuf};
 use rayon::join;
 
 use crate::bitmap::{BitmapError, vectorize_bitmap_to_dxf_with_cancel};
-use crate::cleanup::{CleanupBit, CleanupOptions, generate_cleanup_points_with_cancel};
+use crate::cleanup::{
+    CleanupBit, CleanupOptions, generate_cleanup_points_with_cancel,
+    generate_straight_cleanup_stages_with_cancel,
+};
 use crate::dxf::{DxfError, dxf_font_from_str_with_cancel, read_dxf_font_with_cancel};
 use crate::export::{ExportOptions, write_dxf, write_svg_with_circle};
 use crate::external::is_bitmap_input;
@@ -649,11 +652,10 @@ fn write_layout_gcode(
         progress(BatchProgress::CalculatingVBitCleanup);
         let (straight_result, vbit_result) = join(
             || {
-                generate_cleanup_points_with_cancel(
+                generate_straight_cleanup_stages_with_cancel(
                     vcarve_segments,
                     &cleanup_options,
                     &vcarve_options,
-                    CleanupBit::Straight,
                     gcode_options.accuracy,
                     cancel,
                 )
@@ -670,23 +672,44 @@ fn write_layout_gcode(
             },
         );
 
-        for (bit, cleanup_result) in [
-            (CleanupBit::Straight, straight_result),
-            (CleanupBit::VBit, vbit_result),
-        ] {
-            let cleanup_points = cleanup_result.map_err(|_| BatchError::Canceled)?;
+        let straight_stages = straight_result.map_err(|_| BatchError::Canceled)?;
+        for (stage_index, cleanup_points) in straight_stages.into_iter().enumerate() {
             check_canceled(cancel)?;
             if cleanup_points.is_empty() {
                 continue;
             }
+            let diameter = cleanup_options
+                .straight_tool_diameters()
+                .get(stage_index)
+                .copied()
+                .unwrap_or(cleanup_options.bit_diameter);
+            let mut stage_options = cleanup_options.clone();
+            stage_options.bit_diameter = diameter;
             secondary.push(GeneratedSecondary {
-                suffix: bit.suffix().to_owned(),
+                suffix: if stage_index == 0 {
+                    CleanupBit::Straight.suffix().to_owned()
+                } else {
+                    format!("{}_{}", CleanupBit::Straight.suffix(), stage_index + 1)
+                },
+                lines: write_cleanup_gcode(
+                    &cleanup_points,
+                    &gcode_options,
+                    &stage_options,
+                    &vcarve_options,
+                    CleanupBit::Straight,
+                ),
+            });
+        }
+        let cleanup_points = vbit_result.map_err(|_| BatchError::Canceled)?;
+        if !cleanup_points.is_empty() {
+            secondary.push(GeneratedSecondary {
+                suffix: CleanupBit::VBit.suffix().to_owned(),
                 lines: write_cleanup_gcode(
                     &cleanup_points,
                     &gcode_options,
                     &cleanup_options,
                     &vcarve_options,
-                    bit,
+                    CleanupBit::VBit,
                 ),
             });
         }

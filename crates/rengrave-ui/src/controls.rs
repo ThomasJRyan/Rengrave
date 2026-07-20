@@ -42,6 +42,7 @@ pub(crate) struct UiControls {
     pub(crate) v_rough_stk: f64,
     pub(crate) v_depth_lim: f64,
     pub(crate) clean_dia: f64,
+    pub(crate) clean_dias: String,
     pub(crate) clean_step: f64,
     pub(crate) clean_v: f64,
     pub(crate) clean_paths: String,
@@ -305,6 +306,7 @@ impl UiControls {
             v_rough_stk: setting_f64(settings, "v_rough_stk", 0.0),
             v_depth_lim: setting_f64(settings, "v_depth_lim", 0.0),
             clean_dia: setting_f64(settings, "clean_dia", 0.25),
+            clean_dias: settings.get_last("clean_dias").unwrap_or("0.25").to_owned(),
             clean_step: setting_f64(settings, "clean_step", 50.0),
             clean_v: setting_f64(settings, "clean_v", 0.05),
             clean_paths: settings
@@ -578,6 +580,7 @@ impl UiControls {
             format_setting_number(self.clean_dia),
             false,
         );
+        push_setting(&mut entries, "clean_dias", self.clean_dias.trim(), false);
         push_setting(
             &mut entries,
             "clean_step",
