@@ -1530,14 +1530,7 @@ impl RengraveApp {
     }
 
     fn show_cleanup_settings(&mut self, ui: &mut egui::Ui) {
-        number_row(ui, "Clean dia", &mut self.controls.clean_dia, 0.01);
-        ui.horizontal(|ui| {
-            ui.label("Clean diameters");
-            ui.add(
-                egui::TextEdit::singleline(&mut self.controls.clean_dias)
-                    .hint_text("large, smaller, smallest"),
-            );
-        });
+        cleanup_diameter_rows(ui, &mut self.controls.clean_dias);
         number_row(ui, "Clean step %", &mut self.controls.clean_step, 1.0);
         number_row(ui, "Clean V", &mut self.controls.clean_v, 0.01);
         ui.label("Straight");

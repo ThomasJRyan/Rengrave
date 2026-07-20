@@ -82,6 +82,7 @@ pub(crate) fn parameter_help(label: &str) -> Option<&'static str> {
         "Finish stock" => "Leave this much material for a final V-carve pass after roughing.",
         "Max depth/pass" => "Limit the depth removed in each roughing pass.",
         "Clean dia" => "Set the diameter of the straight cleanup cutter.",
+        "Clean diameters" => "Set the straight cleanup cutters from largest to smallest.",
         "Clean step %" => "Set straight cleanup step-over as a percentage of cutter diameter.",
         "Clean V" => "Set the diameter used for V-bit cleanup reach calculations.",
         "Height calc" => {
@@ -164,6 +165,62 @@ pub(crate) fn number_row(ui: &mut egui::Ui, label: &str, value: &mut f64, speed:
             });
         });
     });
+}
+
+pub(crate) fn cleanup_diameter_rows(ui: &mut egui::Ui, values: &mut String) {
+    let mut diameters: Vec<f64> = values
+        .split(',')
+        .filter_map(|value| value.trim().parse().ok())
+        .filter(|value: &f64| *value > 0.0)
+        .collect();
+    if diameters.is_empty() {
+        diameters.push(0.25);
+    }
+
+    let mut changed = false;
+    let original_count = diameters.len();
+    let mut remove_index = None;
+    let mut add_after = false;
+    for index in 0..original_count {
+        let mut diameter = diameters[index];
+        ui.horizontal(|ui| {
+            row_label(ui, &format!("Clean dia {}", index + 1), 124.0);
+            right_aligned_group(ui, FORM_CONTROL_WIDTH, |ui| {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let remove = index > 0 && ui.small_button("−").clicked();
+                    let add = index + 1 == original_count && ui.small_button("+").clicked();
+                    let response = ui.add_sized(
+                        [FORM_CONTROL_WIDTH - 46.0, 22.0],
+                        egui::DragValue::new(&mut diameter)
+                            .speed(0.01)
+                            .max_decimals(4),
+                    );
+                    changed |= response.changed();
+                    remove_index = remove.then_some(index);
+                    add_after = add;
+                });
+            });
+        });
+        diameters[index] = diameter;
+        if remove_index.is_some() || add_after {
+            break;
+        }
+    }
+    if let Some(index) = remove_index {
+        diameters.remove(index);
+        changed = true;
+    } else if add_after {
+        let last = *diameters.last().unwrap_or(&0.25);
+        diameters.push((last / 2.0).max(0.001));
+        changed = true;
+    }
+    if changed {
+        *values = diameters
+            .iter()
+            .map(|diameter| format_setting_number(*diameter))
+            .collect::<Vec<_>>()
+            .join(",");
+    }
 }
 
 pub(crate) fn number_row_with_help(
