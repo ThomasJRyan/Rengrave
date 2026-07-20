@@ -1,8 +1,7 @@
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use rengrave_core::batch::{BatchRequest, prepare_batch_output};
-use rengrave_core::settings::{LegacySetting, LegacySettings};
+use rengrave_core::settings::LegacySetting;
 
 const SIMPLE_CXF: &str = "tests/fixtures/inputs/simple.cxf";
 const ARC_CXF: &str = "tests/fixtures/inputs/arc.cxf";
@@ -56,11 +55,7 @@ fn multiline_cxf_text_generates_separate_rows_and_legacy_tcode() {
         "unexpected warnings: {:?}",
         output.warnings
     );
-    assert!(
-        output
-            .gcode
-            .contains("(fengrave_set TCODE       065 010 066 )")
-    );
+    assert!(!output.gcode.contains("fengrave_set"));
 
     let points = motion_xy_points(&output.gcode);
     assert!(
@@ -97,7 +92,7 @@ fn text_on_circle_with_add_circle_emits_circle_gcode_and_svg() {
         "unexpected warnings: {:?}",
         output.warnings
     );
-    assert!(output.gcode.contains("(fengrave_set TRADIUS     5 )"));
+    assert!(!output.gcode.contains("fengrave_set"));
     assert!(
         output.gcode.contains("\nG2 I") || output.gcode.contains("\nG3 I"),
         "expected add-circle arc move in:\n{}",
@@ -140,8 +135,7 @@ fn add_box_flat_text_emits_rectangular_border_in_batch_outputs() {
         "unexpected boxed warnings: {:?}",
         boxed.warnings
     );
-    assert!(boxed.gcode.contains("(fengrave_set plotbox     1 )"));
-    assert!(boxed.gcode.contains("(fengrave_set boxgap      0.25 )"));
+    assert!(!boxed.gcode.contains("fengrave_set"));
     assert!(
         count_xy_cut_moves(&boxed.gcode) >= count_xy_cut_moves(&baseline.gcode) + 4,
         "expected Add Box to append rectangular border moves:\n{}",
@@ -210,9 +204,7 @@ fn vcarve_closed_text_generates_depth_moves_and_cleanup_companion() {
         "unexpected warnings: {:?}",
         output.warnings
     );
-    let parsed = LegacySettings::parse(&output.gcode);
-    assert_eq!(parsed.get_last("cut_type"), Some("v-carve"));
-    assert_eq!(parsed.get_last("clean_paths"), Some("1,0,0,0,0,0,0,0"));
+    assert!(!output.gcode.contains("fengrave_set"));
     assert!(output.gcode.contains("G1 X"));
     assert!(output.gcode.contains(" Z-"));
     assert!(
@@ -250,35 +242,9 @@ fn transform_settings_round_trip_through_generated_settings_comments() {
     })
     .unwrap();
 
-    let parsed = LegacySettings::parse(&output.gcode);
-    assert_eq!(parsed.get_last("justify"), Some("Right"));
-    assert_eq!(parsed.get_last("origin"), Some("Bot-Left"));
-    assert_eq!(parsed.get_last("flip"), Some("1"));
-    assert_eq!(parsed.get_last("mirror"), Some("1"));
-    assert_eq!(parsed.get_last("TANGLE"), Some("45"));
-    assert_eq!(parsed.get_last("xorigin"), Some("1.25"));
-    assert_eq!(parsed.get_last("yorigin"), Some("-0.75"));
-    assert_eq!(parsed.text_from_tcode().unwrap(), Some("A\nB".to_owned()));
+    assert!(!output.gcode.contains("fengrave_set"));
 
-    let settings_path =
-        std::env::temp_dir().join(format!("rengrave-round-trip-{}.ngc", std::process::id()));
-    fs::write(&settings_path, &output.gcode).unwrap();
-    let reloaded = prepare_batch_output(&BatchRequest {
-        batch: true,
-        gcode_file: Some(settings_path.clone()),
-        ..BatchRequest::default()
-    })
-    .unwrap();
-    let _ = fs::remove_file(settings_path);
-
-    assert!(
-        reloaded.warnings.is_empty(),
-        "unexpected warnings: {:?}",
-        reloaded.warnings
-    );
-    assert!(reloaded.gcode.contains("(fengrave_set mirror      1 )"));
-    assert!(reloaded.gcode.contains("G1 X"));
-    assert!(!reloaded.gcode.contains("settings-only output"));
+    assert!(output.gcode.contains("G1 X"));
 }
 
 #[test]
@@ -298,7 +264,7 @@ fn dxf_image_input_generates_gcode_svg_and_dxf_payloads() {
         "unexpected warnings: {:?}",
         output.warnings
     );
-    assert!(output.gcode.contains("(fengrave_set input_type  image )"));
+    assert!(!output.gcode.contains("fengrave_set"));
     assert!(!output.gcode.contains("(Engrave Text:"));
     assert!(output.gcode.contains("G1 X0.0000 Y1.9900"));
     assert!(output.svg.as_deref().unwrap().contains("<path"));
@@ -372,10 +338,7 @@ fn batch_arc_fit_output(fixture: &Path, arc_fit: &str) -> rengrave_core::batch::
         "unexpected arc-fit warnings for {arc_fit}: {:?}",
         output.warnings
     );
-    assert_eq!(
-        LegacySettings::parse(&output.gcode).get_last("arc_fit"),
-        Some(arc_fit)
-    );
+    assert!(!output.gcode.contains("fengrave_set"));
     output
 }
 
@@ -393,13 +356,29 @@ fn assert_gcode_eq_with_tolerance(actual: impl AsRef<str>, expected: &str, toler
         return;
     }
 
-    let actual_lines: Vec<_> = actual.lines().collect();
-    let expected_lines: Vec<_> = expected.lines().collect();
+    let actual_lines: Vec<_> = actual
+        .lines()
+        .filter(|line| !is_legacy_header_comment(line))
+        .collect();
+    let expected_lines: Vec<_> = expected
+        .lines()
+        .filter(|line| !is_legacy_header_comment(line))
+        .collect();
     for index in 0..actual_lines.len().max(expected_lines.len()) {
         let actual_line = actual_lines.get(index).copied().unwrap_or("<missing>");
         let expected_line = expected_lines.get(index).copied().unwrap_or("<missing>");
         assert_gcode_line_eq(actual_line, expected_line, index + 1, tolerance);
     }
+}
+
+fn is_legacy_header_comment(line: &str) -> bool {
+    line.starts_with("( Code generated by")
+        || line.starts_with("( Compatibility target:")
+        || line.starts_with("(Settings used in f-engrave")
+        || line.starts_with("(Engrave Text:")
+        || line.starts_with("(===")
+        || line.starts_with("(###")
+        || line.starts_with("(fengrave_set")
 }
 
 fn assert_gcode_line_eq(actual: &str, expected: &str, line_number: usize, tolerance: f64) {

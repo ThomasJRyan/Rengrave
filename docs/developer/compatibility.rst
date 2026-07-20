@@ -38,6 +38,11 @@ ordering, coordinate formatting, comments, unit commands, arc syntax, safe-Z
 behavior, or the trailer require a focused fixture update and an explanation
 of the intentional difference.
 
+Legacy ``fengrave_set`` comments are input-only metadata. The batch renderers
+must not prepend the imported settings or other F-Engrave header comments to
+new G-code; controller-facing output begins with the generated motion
+preamble (for example, ``G90`` and the unit command).
+
 The output writer currently preserves these important behaviors:
 
 * absolute coordinates and explicit unit commands;

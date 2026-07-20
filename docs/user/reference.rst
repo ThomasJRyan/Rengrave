@@ -96,6 +96,11 @@ Legacy settings are recovered from comments such as:
    (fengrave_set cut_type v-carve )
    (fengrave_set TCODE R-Engrave )
 
+These comments are accepted when importing legacy files, but R-Engrave does
+not write them into newly exported G-code. This keeps the machine program
+focused on controller commands and avoids compatibility problems with CNC
+software that does not accept F-Engrave metadata comments.
+
 R-Engrave also supports the ``.rgrv`` project format. It is a versioned JSON
 file containing application version, text, legacy settings, input path,
 default directory, optional legacy settings path, selected workbench, and
