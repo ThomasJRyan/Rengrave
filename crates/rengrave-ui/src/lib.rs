@@ -52,7 +52,7 @@ pub(crate) use preview::*;
 pub(crate) use widgets::*;
 
 const DEFAULT_PREVIEW_ZOOM: f64 = 80.0;
-const MAX_PREVIEW_PITCH_DEGREES: f64 = 80.0;
+const MAX_PREVIEW_PITCH_DEGREES: f64 = 90.0;
 const MM_PER_INCH: f64 = 25.4;
 const PREVIEW_FIT_PADDING: f32 = 24.0;
 const INPUT_PREVIEW_VECTOR_HEIGHT: f32 = 180.0;
@@ -2062,7 +2062,7 @@ impl RengraveApp {
                 self.transform.viewport_rotation_degrees += f64::from(delta.x) * 0.35;
                 self.preview_pitch_degrees = (self.preview_pitch_degrees
                     + f64::from(delta.y) * 0.35)
-                    .clamp(-MAX_PREVIEW_PITCH_DEGREES, MAX_PREVIEW_PITCH_DEGREES);
+                    .clamp(0.0, MAX_PREVIEW_PITCH_DEGREES);
             }
             ui.ctx().request_repaint();
         } else if response.dragged_by(egui::PointerButton::Primary) {
@@ -3253,13 +3253,10 @@ mod tests {
     #[test]
     fn preview_pitch_is_limited_before_the_view_can_flip() {
         assert_eq!(
-            (100.0_f64).clamp(-MAX_PREVIEW_PITCH_DEGREES, MAX_PREVIEW_PITCH_DEGREES),
+            (100.0_f64).clamp(0.0, MAX_PREVIEW_PITCH_DEGREES),
             MAX_PREVIEW_PITCH_DEGREES
         );
-        assert_eq!(
-            (-100.0_f64).clamp(-MAX_PREVIEW_PITCH_DEGREES, MAX_PREVIEW_PITCH_DEGREES),
-            -MAX_PREVIEW_PITCH_DEGREES
-        );
+        assert_eq!((-100.0_f64).clamp(0.0, MAX_PREVIEW_PITCH_DEGREES), 0.0);
     }
 
     #[test]

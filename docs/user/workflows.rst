@@ -93,10 +93,11 @@ magenta so plunges, retracts, V-carve depth, and profile-tab heights are
 visible. Use the mouse wheel to zoom, drag with the left button to pan, and
 drag with either the middle or right button to orbit. Shift+right drag pans in
 the orbit navigation convention used by common CAD tools. The **Reset view**
-control in the upper-right returns to a centred top view. Orbit pitch is limited
-to keep the workpiece from flipping upside down, while horizontal orbit remains
-continuous. The upper-left readout reports the X, Y, and Z extents of the
-visible toolpath. **Fit preview** also re-centres the complete toolpath.
+control in the upper-right returns to a centred top view. Orbit pitch moves only
+from the top view through a direct side view, while horizontal orbit remains
+continuous; the workpiece cannot flip upside down. The upper-left readout
+reports the X, Y, and Z extents of the visible toolpath. **Fit preview** also
+re-centres the complete toolpath.
 
 The 3D view is a toolpath inspection aid, not a stock-removal simulation. It
 shows commanded motion and depth, but it does not model cutter diameter,

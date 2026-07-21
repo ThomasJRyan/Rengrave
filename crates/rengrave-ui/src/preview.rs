@@ -1204,7 +1204,7 @@ pub(crate) fn draw_preview_3d(
 pub(crate) fn view_cube_interaction(ui: &mut egui::Ui, rect: egui::Rect) -> Option<()> {
     let cube_rect = egui::Rect::from_min_size(
         rect.right_top() + egui::vec2(-122.0, 10.0),
-        egui::vec2(112.0, 32.0),
+        egui::vec2(112.0, 40.0),
     );
     let painter = ui.painter_at(cube_rect);
     let center = cube_rect.center();
