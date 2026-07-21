@@ -1188,7 +1188,11 @@ pub(crate) fn draw_preview_3d(
         rect.left_top() + egui::vec2(8.0, 8.0),
         egui::Align2::LEFT_TOP,
         format!(
-            "3D toolpath  |  Z {}..{}",
+            "Toolpath | X: {}..{} | Y: {}..{} | Z: {}..{}",
+            format_preview_coord(min.x),
+            format_preview_coord(max.x),
+            format_preview_coord(min.y),
+            format_preview_coord(max.y),
             format_preview_coord(min.z),
             format_preview_coord(max.z)
         ),
@@ -1199,8 +1203,8 @@ pub(crate) fn draw_preview_3d(
 
 pub(crate) fn view_cube_interaction(ui: &mut egui::Ui, rect: egui::Rect) -> Option<()> {
     let cube_rect = egui::Rect::from_min_size(
-        rect.right_top() + egui::vec2(-94.0, 10.0),
-        egui::vec2(84.0, 84.0),
+        rect.right_top() + egui::vec2(-122.0, 10.0),
+        egui::vec2(112.0, 32.0),
     );
     let painter = ui.painter_at(cube_rect);
     let center = cube_rect.center();
@@ -1224,7 +1228,7 @@ pub(crate) fn view_cube_interaction(ui: &mut egui::Ui, rect: egui::Rect) -> Opti
     painter.text(
         center,
         egui::Align2::CENTER_CENTER,
-        "RESET\nVIEW",
+        "Reset View",
         egui::FontId::monospace(10.0),
         egui::Color32::from_rgb(214, 220, 224),
     );
