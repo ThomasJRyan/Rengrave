@@ -1428,6 +1428,42 @@ mod tests {
     }
 
     #[test]
+    fn vbit_angle_changes_depth_without_changing_xy_centerline() {
+        let segments = square_segments();
+        let mut narrow_settings = default_legacy_settings();
+        narrow_settings.set_or_push("v_bit_angle", "30", false);
+        let narrow = VCarveOptions::from_legacy(&narrow_settings);
+
+        let mut wide_settings = default_legacy_settings();
+        wide_settings.set_or_push("v_bit_angle", "100", false);
+        let wide = VCarveOptions::from_legacy(&wide_settings);
+
+        let narrow_points = generate_vcarve_points(&segments, &narrow, 0.001);
+        let wide_points = generate_vcarve_points(&segments, &wide, 0.001);
+
+        assert_eq!(narrow_points.len(), wide_points.len());
+        assert!(
+            narrow_points
+                .iter()
+                .zip(&wide_points)
+                .all(|(narrow, wide)| narrow.position == wide.position)
+        );
+        assert!(
+            narrow_points
+                .iter()
+                .zip(&wide_points)
+                .any(|(narrow_point, wide_point)| {
+                    (narrow_point.radius - wide_point.radius).abs() > 1e-9
+                        || (narrow_point.radius > 0.0
+                            && (narrow.depth_for_radius(narrow_point.radius)
+                                - wide.depth_for_radius(wide_point.radius))
+                            .abs()
+                                > 1e-9)
+                })
+        );
+    }
+
+    #[test]
     fn depth_limit_reduces_effective_vbit_diameter() {
         let mut settings = default_legacy_settings();
         settings.set_or_push("v_depth_lim", "-0.2", false);
