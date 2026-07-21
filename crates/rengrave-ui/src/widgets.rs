@@ -174,7 +174,7 @@ pub(crate) fn cleanup_diameter_rows(ui: &mut egui::Ui, values: &mut String) {
         .filter(|value: &f64| *value > 0.0)
         .collect();
     if diameters.is_empty() {
-        diameters.push(0.25);
+        diameters.push(6.35);
     }
 
     let mut changed = false;

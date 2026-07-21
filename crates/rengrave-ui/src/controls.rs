@@ -306,7 +306,16 @@ impl UiControls {
             v_rough_stk: setting_f64(settings, "v_rough_stk", 0.0),
             v_depth_lim: setting_f64(settings, "v_depth_lim", 0.0),
             clean_dia: setting_f64(settings, "clean_dia", 0.25),
-            clean_dias: settings.get_last("clean_dias").unwrap_or("0.25").to_owned(),
+            clean_dias: settings
+                .get_last("clean_dias")
+                .map(str::to_owned)
+                .unwrap_or_else(|| {
+                    if source_units == UnitsChoice::Mm {
+                        "6.35".to_owned()
+                    } else {
+                        "0.25".to_owned()
+                    }
+                }),
             clean_step: setting_f64(settings, "clean_step", 50.0),
             clean_v: setting_f64(settings, "clean_v", 0.05),
             clean_paths: settings
@@ -396,6 +405,13 @@ impl UiControls {
         self.v_rough_stk *= factor;
         self.v_depth_lim *= factor;
         self.clean_dia *= factor;
+        self.clean_dias = self
+            .clean_dias
+            .split(',')
+            .filter_map(|value| value.trim().parse::<f64>().ok())
+            .map(|value| format_setting_number(value * factor))
+            .collect::<Vec<_>>()
+            .join(",");
         self.clean_v *= factor;
         self.profile_margin *= factor;
         self.profile_radius *= factor;

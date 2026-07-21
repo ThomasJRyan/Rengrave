@@ -5386,6 +5386,7 @@ mod tests {
         assert_close(controls.v_step_len, 0.254);
         assert_close(controls.v_max_cut, -25.4);
         assert_close(controls.clean_dia, 6.35);
+        assert_eq!(controls.clean_dias, "6.35");
         assert_close(controls.clean_v, 1.27);
         assert_close(controls.profile_margin, 6.35);
         assert_close(controls.profile_radius, 0.0);
@@ -5426,6 +5427,7 @@ mod tests {
         controls.v_rough_stk = 0.015;
         controls.v_depth_lim = -0.5;
         controls.clean_dia = 0.125;
+        controls.clean_dias = "0.125,0.0625".to_owned();
         controls.clean_step = 45.0;
         controls.clean_v = 0.03;
         controls.profile_margin = 0.25;
@@ -5460,6 +5462,7 @@ mod tests {
         assert_close(controls.v_rough_stk, 0.381);
         assert_close(controls.v_depth_lim, -12.7);
         assert_close(controls.clean_dia, 3.175);
+        assert_eq!(controls.clean_dias, "3.175,1.5875");
         assert_close(controls.clean_v, 0.762);
         assert_close(controls.profile_margin, 6.35);
         assert_close(controls.profile_radius, 2.54);
@@ -5501,6 +5504,7 @@ mod tests {
         assert_close(controls.v_rough_stk, 0.015);
         assert_close(controls.v_depth_lim, -0.5);
         assert_close(controls.clean_dia, 0.125);
+        assert_eq!(controls.clean_dias, "0.125,0.0625");
         assert_close(controls.clean_v, 0.03);
         assert_close(controls.profile_margin, 0.25);
         assert_close(controls.profile_radius, 0.1);
