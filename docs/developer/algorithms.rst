@@ -157,10 +157,11 @@ and XY feed words are emitted as needed when those rates differ.
 
 The desktop preview parses generated G-code into ``PreviewSegment3d`` values,
 retaining the modal Z position across lines that contain only a Z move. The
-renderer uses an orbit camera with independent yaw and non-negative pitch, panning
+renderer uses an orbit camera with independent non-positive pitch, panning
 and zooming in a lightweight egui painter; this avoids a platform-specific GPU
 dependency while still exposing the full three-axis navigation model without
-allowing an upside-down view; the pitch range includes the direct side view.
+allowing an upside-down view; the pitch range is 0° through -90° and includes
+the direct side view.
 The rectangular Reset View control returns to the centered top view. Layer
 colors remain shared
 with the former 2D preview: cuts are green, rapids amber, cleanup blue, and

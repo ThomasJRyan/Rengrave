@@ -226,7 +226,7 @@ impl RengraveApp {
                 viewport_rotation_degrees: preferences.viewport_rotation_degrees,
                 ..ViewTransform::default()
             },
-            preview_pitch_degrees: 35.0,
+            preview_pitch_degrees: -35.0,
             status,
             settings_count: document.settings.entries.len(),
             project_path: String::new(),
@@ -2062,7 +2062,7 @@ impl RengraveApp {
                 self.transform.viewport_rotation_degrees += f64::from(delta.x) * 0.35;
                 self.preview_pitch_degrees = (self.preview_pitch_degrees
                     + f64::from(delta.y) * 0.35)
-                    .clamp(0.0, MAX_PREVIEW_PITCH_DEGREES);
+                    .clamp(-MAX_PREVIEW_PITCH_DEGREES, 0.0);
             }
             ui.ctx().request_repaint();
         } else if response.dragged_by(egui::PointerButton::Primary) {
@@ -3139,7 +3139,7 @@ mod tests {
                 zoom: DEFAULT_PREVIEW_ZOOM,
                 ..ViewTransform::default()
             },
-            preview_pitch_degrees: 35.0,
+            preview_pitch_degrees: -35.0,
             status: "Ready".to_owned(),
             settings_count: document.settings.entries.len(),
             project_path: String::new(),
@@ -3252,11 +3252,11 @@ mod tests {
 
     #[test]
     fn preview_pitch_is_limited_before_the_view_can_flip() {
+        assert_eq!((100.0_f64).clamp(-MAX_PREVIEW_PITCH_DEGREES, 0.0), 0.0);
         assert_eq!(
-            (100.0_f64).clamp(0.0, MAX_PREVIEW_PITCH_DEGREES),
-            MAX_PREVIEW_PITCH_DEGREES
+            (-100.0_f64).clamp(-MAX_PREVIEW_PITCH_DEGREES, 0.0),
+            -MAX_PREVIEW_PITCH_DEGREES
         );
-        assert_eq!((-100.0_f64).clamp(0.0, MAX_PREVIEW_PITCH_DEGREES), 0.0);
     }
 
     #[test]

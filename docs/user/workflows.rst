@@ -94,8 +94,8 @@ visible. Use the mouse wheel to zoom, drag with the left button to pan, and
 drag with either the middle or right button to orbit. Shift+right drag pans in
 the orbit navigation convention used by common CAD tools. The **Reset view**
 control in the upper-right returns to a centred top view. Orbit pitch moves only
-from the top view through a direct side view, while horizontal orbit remains
-continuous; the workpiece cannot flip upside down. The upper-left readout
+from the top view through a direct side view using the -90° direction, while
+horizontal orbit remains continuous; the workpiece cannot flip upside down. The upper-left readout
 reports the X, Y, and Z extents of the visible toolpath. **Fit preview** also
 re-centres the complete toolpath.
 
