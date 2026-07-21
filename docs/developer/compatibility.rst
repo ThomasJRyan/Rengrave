@@ -29,6 +29,10 @@ Project format
 projects remain readable. Increase ``RENGRAVE_PROJECT_FORMAT_VERSION`` only
 when an older project can no longer be interpreted safely, and add a migration
 or an explicit unsupported-version error. Paths are not embedded assets.
+Generated primary and secondary G-code may be stored as optional output-cache
+fields. They must only be written when the UI's ``BatchRequest`` exactly
+matches the last completed calculation; older projects without those fields
+fall back to normal generation on load.
 
 Generated output contract
 -------------------------

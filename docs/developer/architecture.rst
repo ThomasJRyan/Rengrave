@@ -130,6 +130,15 @@ G-code into preview layers and derives extents, move counts, cut/rapid lengths,
 arc counts, and warnings. Manual settings edits persist through UI preferences
 and stale-output detection names the changed request areas.
 
+Loading a ``.rgrv`` first restores its optional embedded output cache when the
+project contains one. The cache includes the primary G-code and each secondary
+suffix (including profile output), and is accepted as current by assigning the
+same request represented by the loaded settings. Projects without a cache
+start the worker as usual. Secondary preview parsing must use the newly
+received ``BatchOutput`` directly before replacing the app's previous output
+state; this keeps profile and cleanup layers visible on both generation and
+load.
+
 Parameter help is centralized in ``rengrave-ui/src/widgets.rs``. Numeric,
 combo, text, and path rows attach the matching explanation to both the label
 and interactive control; parameter checkboxes use the same catalog, while

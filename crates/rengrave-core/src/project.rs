@@ -57,6 +57,19 @@ pub struct RengraveProjectOutputs {
     pub svg_path: Option<PathBuf>,
     #[serde(default)]
     pub dxf_path: Option<PathBuf>,
+    /// The last generated primary output, when it matched the saved settings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub embedded_gcode: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub embedded_secondary_gcode: Vec<RengraveProjectSecondaryOutput>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct RengraveProjectSecondaryOutput {
+    #[serde(default)]
+    pub suffix: String,
+    #[serde(default)]
+    pub gcode: String,
 }
 
 impl Default for RengraveProjectFile {
@@ -633,6 +646,11 @@ mod tests {
                 gcode_path: Some(PathBuf::from("/tmp/out.ngc")),
                 svg_path: Some(PathBuf::from("/tmp/out.svg")),
                 dxf_path: Some(PathBuf::from("/tmp/out.dxf")),
+                embedded_gcode: Some("G1 X1\n".to_owned()),
+                embedded_secondary_gcode: vec![RengraveProjectSecondaryOutput {
+                    suffix: "profile".to_owned(),
+                    gcode: "G1 X2\n".to_owned(),
+                }],
             },
         };
 

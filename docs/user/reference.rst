@@ -104,11 +104,16 @@ software that does not accept F-Engrave metadata comments.
 R-Engrave also supports the ``.rgrv`` project format. It is a versioned JSON
 file containing application version, text, legacy settings, input path,
 default directory, optional legacy settings path, selected workbench, and
-primary export paths. The current project format version is ``1``.
+primary export paths. When the generated output is current, it also stores
+the primary G-code and cleanup/profile companion G-code inside the project.
+This lets loading a saved project restore its preview immediately without
+waiting for recalculation. If output is stale, it is not cached and the
+project regenerates it on load. The current project format version is ``1``.
 
 For a portable project, keep referenced input files beside the project or use
-stable absolute paths. A project stores paths; it does not embed fonts, images,
-or generated G-code.
+stable absolute paths. A project stores paths rather than embedding fonts or
+images. Embedded G-code is only a cache of output that matched the saved
+settings; changing a setting or input causes fresh output to be generated.
 
 Units and precision
 -------------------

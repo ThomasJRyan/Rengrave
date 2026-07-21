@@ -23,8 +23,8 @@ use rengrave_core::font::{Font, Stroke, read_cxf, read_ttf};
 use rengrave_core::geometry::{Point, ViewTransform};
 use rengrave_core::project::{
     DocumentRequest, RENGRAVE_PROJECT_FORMAT_VERSION, RengraveDocument, RengraveProjectFile,
-    RengraveProjectOutputs, is_rengrave_project_path, load_document, read_rengrave_project,
-    write_rengrave_project,
+    RengraveProjectOutputs, RengraveProjectSecondaryOutput, is_rengrave_project_path,
+    load_document, read_rengrave_project, write_rengrave_project,
 };
 use rengrave_core::settings::{
     DEFAULT_GCODE_POSTAMBLE, DEFAULT_GCODE_PREAMBLE, LegacySetting, LegacySettings,
@@ -395,6 +395,19 @@ impl RengraveApp {
                     gcode_path: path_from_text(&self.gcode_path),
                     svg_path: path_from_text(&self.svg_path),
                     dxf_path: path_from_text(&self.dxf_path),
+                    embedded_gcode: (!self.gcode.is_empty() && !self.output_is_stale())
+                        .then(|| self.gcode.clone()),
+                    embedded_secondary_gcode: if !self.gcode.is_empty() && !self.output_is_stale() {
+                        self.secondary_gcode
+                            .iter()
+                            .map(|output| RengraveProjectSecondaryOutput {
+                                suffix: output.suffix.clone(),
+                                gcode: output.gcode.clone(),
+                            })
+                            .collect()
+                    } else {
+                        Vec::new()
+                    },
                 },
             },
             warnings,
@@ -461,7 +474,28 @@ impl RengraveApp {
         self.status = format!("Project loaded: {}", path.display());
         self.refresh_input_catalog();
         self.save_preferences();
-        self.start_calculation(ctx);
+        if let Some(gcode) = project.outputs.embedded_gcode {
+            self.apply_batch_output(BatchOutput {
+                gcode,
+                warnings: Vec::new(),
+                secondary_gcode: project
+                    .outputs
+                    .embedded_secondary_gcode
+                    .into_iter()
+                    .map(|output| SecondaryGcode {
+                        suffix: output.suffix,
+                        gcode: output.gcode,
+                    })
+                    .collect(),
+                svg: None,
+                dxf: None,
+            });
+            self.input_overlay_outline = input_outline_segments(&self.batch_request(true));
+            self.last_output_request = Some(self.batch_request(true));
+            self.status = format!("Project loaded: {} (cached G-code)", path.display());
+        } else {
+            self.start_calculation(ctx);
+        }
     }
 
     fn save_current_project(&mut self) {
@@ -713,12 +747,12 @@ impl RengraveApp {
         self.preview_tab_segments = profile_tab_preview_segments(&output.secondary_gcode);
         self.preview_3d_segments = preview_motion_3d.cuts;
         self.preview_3d_rapids = preview_motion_3d.rapids;
-        self.preview_3d_cleanup_segments = self
+        self.preview_3d_cleanup_segments = output
             .secondary_gcode
             .iter()
             .flat_map(|output| parse_preview_motion_3d(&output.gcode).cuts)
             .collect();
-        self.preview_3d_tab_segments = self
+        self.preview_3d_tab_segments = output
             .secondary_gcode
             .iter()
             .flat_map(|output| parse_preview_motion_3d(&output.gcode).tabs)
@@ -5109,6 +5143,24 @@ mod tests {
                 end: Point::new(2.0, 0.0),
             }]
         );
+    }
+
+    #[test]
+    fn applying_output_populates_secondary_3d_preview_layers_from_new_output() {
+        let mut app = test_app();
+        app.apply_batch_output(BatchOutput {
+            gcode: "G0 X0 Y0 Z1\nG1 Z-1\nG1 X1 Y0 Z-1\n".to_owned(),
+            warnings: Vec::new(),
+            secondary_gcode: vec![SecondaryGcode {
+                suffix: "profile".to_owned(),
+                gcode: "G0 X0 Y0 Z1\nG1 Z-2\nG1 X1 Y0 Z-2\n".to_owned(),
+            }],
+            svg: None,
+            dxf: None,
+        });
+
+        assert_eq!(app.secondary_gcode.len(), 1);
+        assert!(!app.preview_3d_cleanup_segments.is_empty());
     }
 
     #[test]
