@@ -186,19 +186,17 @@ pub(crate) fn cleanup_diameter_rows(ui: &mut egui::Ui, values: &mut String) {
         ui.horizontal(|ui| {
             row_label(ui, &format!("Clean dia {}", index + 1), 124.0);
             right_aligned_group(ui, FORM_CONTROL_WIDTH, |ui| {
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let remove = index > 0 && ui.small_button("−").clicked();
-                    let add = index + 1 == original_count && ui.small_button("+").clicked();
-                    let response = ui.add_sized(
-                        [FORM_CONTROL_WIDTH - 46.0, 22.0],
-                        egui::DragValue::new(&mut diameter)
-                            .speed(0.01)
-                            .max_decimals(4),
-                    );
-                    changed |= response.changed();
-                    remove_index = remove.then_some(index);
-                    add_after = add;
-                });
+                let response = ui.add_sized(
+                    [FORM_CONTROL_WIDTH - 46.0, 22.0],
+                    egui::DragValue::new(&mut diameter)
+                        .speed(0.01)
+                        .max_decimals(4),
+                );
+                changed |= response.changed();
+                let remove = index > 0 && ui.small_button("−").clicked();
+                let add = index + 1 == original_count && ui.small_button("+").clicked();
+                remove_index = remove.then_some(index);
+                add_after = add;
             });
         });
         diameters[index] = diameter;
