@@ -2015,11 +2015,12 @@ impl RengraveApp {
             self.fit_preview_requested = true;
         }
         if response.dragged_by(egui::PointerButton::Middle)
-            || (response.dragged_by(egui::PointerButton::Secondary)
-                && ui.input(|input| input.modifiers.shift))
+            || response.dragged_by(egui::PointerButton::Secondary)
         {
             let delta = response.drag_delta();
-            if ui.input(|input| input.modifiers.shift) {
+            if response.dragged_by(egui::PointerButton::Secondary)
+                && ui.input(|input| input.modifiers.shift)
+            {
                 self.transform.pan.x += f64::from(delta.x);
                 self.transform.pan.y += f64::from(delta.y);
             } else {
@@ -2076,11 +2077,11 @@ impl RengraveApp {
             self.show_axes,
             self.preview_pitch_degrees,
         );
-        if let Some((yaw, pitch)) =
-            view_cube_interaction(ui, rect, self.transform.viewport_rotation_degrees)
-        {
-            self.transform.viewport_rotation_degrees = yaw;
-            self.preview_pitch_degrees = pitch;
+        if view_cube_interaction(ui, rect).is_some() {
+            self.transform.viewport_rotation_degrees = 0.0;
+            self.preview_pitch_degrees = 0.0;
+            self.transform.pan = Point::default();
+            self.transform.zoom = DEFAULT_PREVIEW_ZOOM;
             self.fit_preview_requested = true;
         }
         if let Some(pos) = hover_pos {
@@ -2217,14 +2218,16 @@ impl RengraveApp {
     }
 
     fn fit_preview_to_rect(&mut self, rect: egui::Rect) {
-        fit_transform_to_bounds(&mut self.transform, self.preview_bounds, rect);
+        let _ = rect;
+        self.transform.pan = Point::default();
+        self.transform.zoom = DEFAULT_PREVIEW_ZOOM;
     }
 
     fn reset_preview_pan_zoom(&mut self) {
         self.transform.pan = Point::default();
         self.transform.zoom = DEFAULT_PREVIEW_ZOOM;
         self.transform.viewport_rotation_degrees = 0.0;
-        self.preview_pitch_degrees = 35.0;
+        self.preview_pitch_degrees = 0.0;
     }
 
     fn show_new_project_modal(&mut self, ctx: &egui::Context) {
