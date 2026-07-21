@@ -84,6 +84,20 @@ that can fit without crossing the relevant boundary. The circle radius becomes
 the cutter contact width and is converted to a Z value. The result is then
 simplified in 3D before G-code emission.
 
+Preview and inspection
+----------------------
+
+The central preview is a 3D toolpath view. Cutting, rapid, cleanup, and tab
+moves are projected from their X/Y/Z coordinates, with the Z axis shown in
+magenta so plunges, retracts, V-carve depth, and profile-tab heights are
+visible. Drag the canvas to pan and use the mouse wheel to zoom. The existing
+view rotation control changes the horizontal camera angle; **Fit preview**
+re-centres the complete toolpath.
+
+The 3D view is a toolpath inspection aid, not a stock-removal simulation. It
+shows commanded motion and depth, but it does not model cutter diameter,
+material removal, acceleration, or machine kinematics.
+
 Cleanup operations
 ------------------
 

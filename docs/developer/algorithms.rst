@@ -155,6 +155,14 @@ the V-carve surface. Cleanup G-code also emits an initial ``F`` command so a
 secondary file has an explicit modal cutting feed when run by itself; plunge
 and XY feed words are emitted as needed when those rates differ.
 
+The desktop preview parses generated G-code into ``PreviewSegment3d`` values,
+retaining the modal Z position across lines that contain only a Z move. The
+renderer projects X/Y around the existing viewport yaw and applies a fixed
+oblique pitch so depth remains legible in a lightweight egui painter; this
+avoids a platform-specific GPU dependency. Layer colors remain shared with the
+former 2D preview: cuts are green, rapids amber, cleanup blue, and tabs use the
+profile accent.
+
 Profile paths, corners, and tabs
 --------------------------------
 

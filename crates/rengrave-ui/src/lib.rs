@@ -113,6 +113,10 @@ struct RengraveApp {
     preview_rapids: Vec<PreviewSegment>,
     preview_cleanup_segments: Vec<PreviewSegment>,
     preview_tab_segments: Vec<PreviewSegment>,
+    preview_3d_segments: Vec<PreviewSegment3d>,
+    preview_3d_rapids: Vec<PreviewSegment3d>,
+    preview_3d_cleanup_segments: Vec<PreviewSegment3d>,
+    preview_3d_tab_segments: Vec<PreviewSegment3d>,
     preview_bounds: Option<PreviewBounds>,
     gcode_path: String,
     svg_path: String,
@@ -238,6 +242,10 @@ impl RengraveApp {
             preview_rapids: Vec::new(),
             preview_cleanup_segments: Vec::new(),
             preview_tab_segments: Vec::new(),
+            preview_3d_segments: Vec::new(),
+            preview_3d_rapids: Vec::new(),
+            preview_3d_cleanup_segments: Vec::new(),
+            preview_3d_tab_segments: Vec::new(),
             preview_bounds: None,
             gcode_path: if preferences.gcode_path.trim().is_empty() {
                 default_gcode_path
@@ -681,6 +689,10 @@ impl RengraveApp {
                 self.preview_rapids.clear();
                 self.preview_cleanup_segments.clear();
                 self.preview_tab_segments.clear();
+                self.preview_3d_segments.clear();
+                self.preview_3d_rapids.clear();
+                self.preview_3d_cleanup_segments.clear();
+                self.preview_3d_tab_segments.clear();
                 self.preview_bounds = None;
                 self.input_overlay_outline.clear();
                 self.last_output_request = None;
@@ -692,10 +704,23 @@ impl RengraveApp {
         self.gcode_lines = output.gcode.lines().count();
         self.gcode_arc_count = count_arc_moves(&output.gcode);
         let preview_motion = parse_preview_motion(&output.gcode);
+        let preview_motion_3d = parse_preview_motion_3d(&output.gcode);
         self.preview_segments = preview_motion.cuts;
         self.preview_rapids = preview_motion.rapids;
         self.preview_cleanup_segments = cleanup_preview_segments(&output.secondary_gcode);
         self.preview_tab_segments = profile_tab_preview_segments(&output.secondary_gcode);
+        self.preview_3d_segments = preview_motion_3d.cuts;
+        self.preview_3d_rapids = preview_motion_3d.rapids;
+        self.preview_3d_cleanup_segments = self
+            .secondary_gcode
+            .iter()
+            .flat_map(|output| parse_preview_motion_3d(&output.gcode).cuts)
+            .collect();
+        self.preview_3d_tab_segments = self
+            .secondary_gcode
+            .iter()
+            .flat_map(|output| parse_preview_motion_3d(&output.gcode).tabs)
+            .collect();
         self.preview_bounds = PreviewBounds::from_segment_layers(&[
             &self.preview_segments,
             &self.preview_rapids,
@@ -2013,25 +2038,26 @@ impl RengraveApp {
 
         self.ensure_input_preview();
 
-        draw_preview(
+        draw_preview_3d(
             ui.painter(),
             rect,
             self.transform,
-            self.controls.units.value(),
-            &self.preview_segments,
-            &self.preview_rapids,
-            &self.preview_cleanup_segments,
-            &self.preview_tab_segments,
-            &self.input_overlay_outline,
-            self.preview_bounds,
+            &self.preview_3d_segments,
+            &self.preview_3d_rapids,
+            &self.preview_3d_cleanup_segments,
+            &self.preview_3d_tab_segments,
+            if self.show_input_overlay && !self.input_overlay_outline.is_empty() {
+                &self.input_overlay_outline
+            } else {
+                &[]
+            },
             self.show_toolpath,
             self.show_rapids,
             self.show_cleanup,
             self.show_tabs,
-            self.show_input_overlay && !self.input_overlay_outline.is_empty(),
             self.show_bounds,
-            self.show_axes,
             self.show_grid,
+            self.show_axes,
         );
         if let Some(pos) = hover_pos {
             let cursor = screen_point_to_model(rect, self.transform, pos);
@@ -3066,6 +3092,10 @@ mod tests {
             preview_rapids: Vec::new(),
             preview_cleanup_segments: Vec::new(),
             preview_tab_segments: Vec::new(),
+            preview_3d_segments: Vec::new(),
+            preview_3d_rapids: Vec::new(),
+            preview_3d_cleanup_segments: Vec::new(),
+            preview_3d_tab_segments: Vec::new(),
             preview_bounds: None,
             gcode_path,
             svg_path,
@@ -3138,6 +3168,20 @@ mod tests {
         assert_eq!(motion.rapids.len(), 1);
         assert_eq!(motion.rapids[0].start, Point::new(1.0, 0.0));
         assert_eq!(motion.rapids[0].end, Point::new(2.0, 2.0));
+    }
+
+    #[test]
+    fn parses_z_values_for_3d_preview() {
+        let motion = parse_preview_motion_3d(
+            "G0 X0.0000 Y0.0000 Z0.2500\nG1 Z-0.1250\nG1 X1.0000 Y0.0000\nG0 X2.0000 Y2.0000 Z0.2500\n",
+        );
+
+        assert_eq!(motion.cuts.len(), 2);
+        assert_eq!(motion.cuts[0].start.z, 0.25);
+        assert_eq!(motion.cuts[0].end.z, -0.125);
+        assert_eq!(motion.rapids.len(), 1);
+        assert_eq!(motion.rapids[0].start.z, -0.125);
+        assert_eq!(motion.rapids[0].end.z, 0.25);
     }
 
     #[test]

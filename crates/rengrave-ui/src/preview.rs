@@ -2,12 +2,114 @@
 //! transforms, and all egui drawing for the central preview (grid, axes,
 //! bounds, scale bar, layer overlay, and the input outline overlay).
 
+#![allow(dead_code)]
+
 use super::*;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct PreviewSegment {
     pub(crate) start: Point,
     pub(crate) end: Point,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct PreviewPoint3d {
+    pub(crate) x: f64,
+    pub(crate) y: f64,
+    pub(crate) z: f64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct PreviewSegment3d {
+    pub(crate) start: PreviewPoint3d,
+    pub(crate) end: PreviewPoint3d,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(crate) struct PreviewMotion3d {
+    pub(crate) cuts: Vec<PreviewSegment3d>,
+    pub(crate) rapids: Vec<PreviewSegment3d>,
+    pub(crate) tabs: Vec<PreviewSegment3d>,
+}
+
+pub(crate) fn parse_preview_motion_3d(gcode: &str) -> PreviewMotion3d {
+    let mut current = None;
+    let mut current_z = 0.0;
+    let mut motion = PreviewMotion3d::default();
+
+    for line in gcode.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('(') || trimmed.is_empty() {
+            continue;
+        }
+        let command = trimmed.split_whitespace().next().unwrap_or_default();
+        if !matches!(
+            command,
+            "G0" | "G00" | "G1" | "G01" | "G2" | "G02" | "G3" | "G03"
+        ) {
+            continue;
+        }
+        let params = motion_params(trimmed);
+        if let Some(z) = params.z {
+            current_z = z;
+        }
+        let Some(next_xy) =
+            params.point(current.map(|point: PreviewPoint3d| Point::new(point.x, point.y)))
+        else {
+            continue;
+        };
+        let next = PreviewPoint3d {
+            x: next_xy.x,
+            y: next_xy.y,
+            z: current_z,
+        };
+        if matches!(command, "G2" | "G02" | "G3" | "G03")
+            && let Some(start) = current
+            && let (Some(i), Some(j)) = (params.i, params.j)
+        {
+            let center = Point::new(start.x + i, start.y + j);
+            let radius = i.hypot(j);
+            let start_angle = (start.y - center.y).atan2(start.x - center.x);
+            let end_angle = (next.y - center.y).atan2(next.x - center.x);
+            let clockwise = matches!(command, "G2" | "G02");
+            let mut sweep = end_angle - start_angle;
+            if clockwise && sweep >= 0.0 {
+                sweep -= std::f64::consts::TAU;
+            } else if !clockwise && sweep <= 0.0 {
+                sweep += std::f64::consts::TAU;
+            }
+            let steps = ((sweep.abs() * radius / 0.25).ceil() as usize).clamp(8, 128);
+            let mut previous = start;
+            for step in 1..=steps {
+                let angle = start_angle + sweep * step as f64 / steps as f64;
+                let point = PreviewPoint3d {
+                    x: center.x + radius * angle.cos(),
+                    y: center.y + radius * angle.sin(),
+                    z: current_z,
+                };
+                motion.cuts.push(PreviewSegment3d {
+                    start: previous,
+                    end: point,
+                });
+                previous = point;
+            }
+            current = Some(next);
+            continue;
+        }
+        if let Some(start) = current
+            && ((start.x - next.x).hypot(start.y - next.y) > 0.00001
+                || (start.z - next.z).abs() > 0.00001)
+        {
+            let segment = PreviewSegment3d { start, end: next };
+            if matches!(command, "G0" | "G00") {
+                motion.rapids.push(segment);
+            } else {
+                motion.cuts.push(segment);
+            }
+        }
+        current = Some(next);
+    }
+    motion
 }
 
 const PREVIEW_INPUT_OUTLINE_TOLERANCE: f64 = 0.01;
@@ -778,6 +880,317 @@ pub(crate) fn draw_preview(
         ),
     );
     draw_preview_scale_bar(painter, rect, transform.zoom, unit_label);
+}
+
+pub(crate) fn draw_preview_3d(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    transform: ViewTransform,
+    cuts: &[PreviewSegment3d],
+    rapids: &[PreviewSegment3d],
+    cleanup: &[PreviewSegment3d],
+    tabs: &[PreviewSegment3d],
+    input_overlay: &[PreviewSegment],
+    show_toolpath: bool,
+    show_rapids: bool,
+    show_cleanup: bool,
+    show_tabs: bool,
+    show_bounds: bool,
+    show_grid: bool,
+    show_axes: bool,
+) {
+    painter.rect_filled(rect, 0.0, preview_background_color());
+    let all = cuts.iter().chain(rapids).chain(cleanup).chain(tabs);
+    let mut min = PreviewPoint3d {
+        x: 0.0,
+        y: 0.0,
+        z: 0.0,
+    };
+    let mut max = min;
+    let mut has_points = false;
+    for segment in all {
+        for point in [segment.start, segment.end] {
+            if !has_points {
+                min = point;
+                max = point;
+                has_points = true;
+            } else {
+                min.x = min.x.min(point.x);
+                min.y = min.y.min(point.y);
+                min.z = min.z.min(point.z);
+                max.x = max.x.max(point.x);
+                max.y = max.y.max(point.y);
+                max.z = max.z.max(point.z);
+            }
+        }
+    }
+    for segment in input_overlay {
+        for point in [segment.start, segment.end] {
+            let point = PreviewPoint3d {
+                x: point.x,
+                y: point.y,
+                z: 0.0,
+            };
+            if !has_points {
+                min = point;
+                max = point;
+                has_points = true;
+            } else {
+                min.x = min.x.min(point.x);
+                min.y = min.y.min(point.y);
+                max.x = max.x.max(point.x);
+                max.y = max.y.max(point.y);
+            }
+        }
+    }
+    if !has_points {
+        return;
+    }
+
+    let yaw = transform.total_rotation_radians();
+    let pitch = 35.0_f64.to_radians();
+    let xy_span = (max.x - min.x).max(max.y - min.y).max(0.001);
+    let z_span = (max.z - min.z).max(0.001);
+    let scale = (rect.width().min(rect.height()) as f64 * 0.72 / (xy_span + z_span * 0.8))
+        .clamp(1.0, 500.0);
+    let center = PreviewPoint3d {
+        x: (min.x + max.x) / 2.0,
+        y: (min.y + max.y) / 2.0,
+        z: (min.z + max.z) / 2.0,
+    };
+    let project = |point: PreviewPoint3d| {
+        let x = point.x - center.x;
+        let y = point.y - center.y;
+        let z = (point.z - center.z) * 2.0;
+        let rotated_x = x * yaw.cos() - y * yaw.sin();
+        let rotated_y = x * yaw.sin() + y * yaw.cos();
+        let vertical = rotated_y * pitch.cos() - z * pitch.sin();
+        egui::pos2(
+            rect.center().x + (rotated_x * scale) as f32 + transform.pan.x as f32,
+            rect.center().y - (vertical * scale) as f32 + transform.pan.y as f32,
+        )
+    };
+
+    let draw_layer = |segments: &[PreviewSegment3d], stroke: egui::Stroke| {
+        for segment in segments {
+            painter.line_segment([project(segment.start), project(segment.end)], stroke);
+        }
+    };
+    if show_rapids {
+        draw_layer(
+            rapids,
+            egui::Stroke::new(1.0, egui::Color32::from_rgb(190, 142, 72)),
+        );
+    }
+    if show_cleanup {
+        draw_layer(
+            cleanup,
+            egui::Stroke::new(1.2, egui::Color32::from_rgb(118, 164, 190)),
+        );
+    }
+    if show_tabs {
+        draw_layer(tabs, egui::Stroke::new(2.2, profile_tab_color()));
+    }
+    if show_toolpath {
+        draw_layer(
+            cuts,
+            egui::Stroke::new(1.4, egui::Color32::from_rgb(94, 176, 132)),
+        );
+    }
+    for segment in input_overlay {
+        let start = PreviewPoint3d {
+            x: segment.start.x,
+            y: segment.start.y,
+            z: 0.0,
+        };
+        let end = PreviewPoint3d {
+            x: segment.end.x,
+            y: segment.end.y,
+            z: 0.0,
+        };
+        painter.line_segment(
+            [project(start), project(end)],
+            egui::Stroke::new(
+                1.0,
+                egui::Color32::from_rgba_unmultiplied(230, 168, 220, 205),
+            ),
+        );
+    }
+
+    if show_grid || show_bounds {
+        let step = ((max.x - min.x).max(max.y - min.y) / 8.0).max(0.001);
+        let grid_stroke = egui::Stroke::new(0.6, egui::Color32::from_rgb(43, 48, 51));
+        if show_grid {
+            let mut x = min.x;
+            while x <= max.x + step * 0.5 {
+                painter.line_segment(
+                    [
+                        project(PreviewPoint3d {
+                            x,
+                            y: min.y,
+                            z: min.z,
+                        }),
+                        project(PreviewPoint3d {
+                            x,
+                            y: max.y,
+                            z: min.z,
+                        }),
+                    ],
+                    grid_stroke,
+                );
+                x += step;
+            }
+            let mut y = min.y;
+            while y <= max.y + step * 0.5 {
+                painter.line_segment(
+                    [
+                        project(PreviewPoint3d {
+                            x: min.x,
+                            y,
+                            z: min.z,
+                        }),
+                        project(PreviewPoint3d {
+                            x: max.x,
+                            y,
+                            z: min.z,
+                        }),
+                    ],
+                    grid_stroke,
+                );
+                y += step;
+            }
+        }
+        if show_bounds {
+            let corners = [
+                PreviewPoint3d {
+                    x: min.x,
+                    y: min.y,
+                    z: min.z,
+                },
+                PreviewPoint3d {
+                    x: max.x,
+                    y: min.y,
+                    z: min.z,
+                },
+                PreviewPoint3d {
+                    x: max.x,
+                    y: max.y,
+                    z: min.z,
+                },
+                PreviewPoint3d {
+                    x: min.x,
+                    y: max.y,
+                    z: min.z,
+                },
+                PreviewPoint3d {
+                    x: min.x,
+                    y: min.y,
+                    z: max.z,
+                },
+                PreviewPoint3d {
+                    x: max.x,
+                    y: min.y,
+                    z: max.z,
+                },
+                PreviewPoint3d {
+                    x: max.x,
+                    y: max.y,
+                    z: max.z,
+                },
+                PreviewPoint3d {
+                    x: min.x,
+                    y: max.y,
+                    z: max.z,
+                },
+            ];
+            for (a, b) in [
+                (0, 1),
+                (1, 2),
+                (2, 3),
+                (3, 0),
+                (4, 5),
+                (5, 6),
+                (6, 7),
+                (7, 4),
+                (0, 4),
+                (1, 5),
+                (2, 6),
+                (3, 7),
+            ] {
+                painter.line_segment(
+                    [project(corners[a]), project(corners[b])],
+                    egui::Stroke::new(0.8, egui::Color32::from_rgb(90, 104, 112)),
+                );
+            }
+        }
+    }
+
+    if show_axes {
+        let origin = project(PreviewPoint3d {
+            x: min.x,
+            y: min.y,
+            z: 0.0,
+        });
+        let x_axis = project(PreviewPoint3d {
+            x: max.x,
+            y: min.y,
+            z: 0.0,
+        });
+        let y_axis = project(PreviewPoint3d {
+            x: min.x,
+            y: max.y,
+            z: 0.0,
+        });
+        let z_axis = project(PreviewPoint3d {
+            x: min.x,
+            y: min.y,
+            z: max.z,
+        });
+        painter.line_segment(
+            [origin, x_axis],
+            egui::Stroke::new(1.0, egui::Color32::from_rgb(220, 188, 104)),
+        );
+        painter.line_segment(
+            [origin, y_axis],
+            egui::Stroke::new(1.0, egui::Color32::from_rgb(104, 166, 200)),
+        );
+        painter.line_segment(
+            [origin, z_axis],
+            egui::Stroke::new(1.0, egui::Color32::from_rgb(190, 142, 190)),
+        );
+        painter.text(
+            x_axis,
+            egui::Align2::LEFT_CENTER,
+            "X",
+            egui::FontId::monospace(12.0),
+            egui::Color32::from_rgb(220, 188, 104),
+        );
+        painter.text(
+            y_axis,
+            egui::Align2::LEFT_CENTER,
+            "Y",
+            egui::FontId::monospace(12.0),
+            egui::Color32::from_rgb(104, 166, 200),
+        );
+        painter.text(
+            z_axis,
+            egui::Align2::LEFT_CENTER,
+            "Z",
+            egui::FontId::monospace(12.0),
+            egui::Color32::from_rgb(190, 142, 190),
+        );
+    }
+    painter.text(
+        rect.left_top() + egui::vec2(8.0, 8.0),
+        egui::Align2::LEFT_TOP,
+        format!(
+            "3D toolpath  |  Z {}..{}",
+            format_preview_coord(min.z),
+            format_preview_coord(max.z)
+        ),
+        egui::FontId::monospace(12.0),
+        egui::Color32::from_rgb(214, 220, 224),
+    );
 }
 
 fn preview_background_color() -> egui::Color32 {
