@@ -898,6 +898,7 @@ pub(crate) fn draw_preview_3d(
     show_bounds: bool,
     show_grid: bool,
     show_axes: bool,
+    pitch_degrees: f64,
 ) {
     painter.rect_filled(rect, 0.0, preview_background_color());
     let all = cuts.iter().chain(rapids).chain(cleanup).chain(tabs);
@@ -948,7 +949,7 @@ pub(crate) fn draw_preview_3d(
     }
 
     let yaw = transform.total_rotation_radians();
-    let pitch = 35.0_f64.to_radians();
+    let pitch = pitch_degrees.to_radians();
     let xy_span = (max.x - min.x).max(max.y - min.y).max(0.001);
     let z_span = (max.z - min.z).max(0.001);
     let scale = (rect.width().min(rect.height()) as f64 * 0.72 / (xy_span + z_span * 0.8))
@@ -1191,6 +1192,93 @@ pub(crate) fn draw_preview_3d(
         egui::FontId::monospace(12.0),
         egui::Color32::from_rgb(214, 220, 224),
     );
+}
+
+pub(crate) fn view_cube_interaction(
+    ui: &mut egui::Ui,
+    rect: egui::Rect,
+    yaw_degrees: f64,
+) -> Option<(f64, f64)> {
+    let cube_rect = egui::Rect::from_min_size(
+        rect.right_top() + egui::vec2(-94.0, 10.0),
+        egui::vec2(84.0, 84.0),
+    );
+    let painter = ui.painter_at(cube_rect);
+    let center = cube_rect.center();
+    let top = [
+        center + egui::vec2(0.0, -30.0),
+        center + egui::vec2(26.0, -16.0),
+        center + egui::vec2(0.0, -2.0),
+        center + egui::vec2(-26.0, -16.0),
+    ];
+    let left = [
+        top[0],
+        top[3],
+        top[3] + egui::vec2(0.0, 28.0),
+        top[0] + egui::vec2(0.0, 28.0),
+    ];
+    let right = [
+        top[0],
+        top[1],
+        top[1] + egui::vec2(0.0, 28.0),
+        top[0] + egui::vec2(0.0, 28.0),
+    ];
+    let stroke = egui::Stroke::new(1.0, egui::Color32::from_rgb(120, 132, 138));
+    painter.rect_filled(
+        cube_rect,
+        4.0,
+        egui::Color32::from_rgba_unmultiplied(36, 39, 42, 220),
+    );
+    painter.add(egui::Shape::convex_polygon(
+        top.to_vec(),
+        egui::Color32::from_rgb(76, 94, 101),
+        stroke,
+    ));
+    painter.add(egui::Shape::convex_polygon(
+        left.to_vec(),
+        egui::Color32::from_rgb(53, 71, 78),
+        stroke,
+    ));
+    painter.add(egui::Shape::convex_polygon(
+        right.to_vec(),
+        egui::Color32::from_rgb(64, 82, 89),
+        stroke,
+    ));
+    painter.text(
+        center + egui::vec2(0.0, -19.0),
+        egui::Align2::CENTER_CENTER,
+        "TOP",
+        egui::FontId::monospace(9.0),
+        egui::Color32::from_rgb(214, 220, 224),
+    );
+    painter.text(
+        center + egui::vec2(-13.0, 11.0),
+        egui::Align2::CENTER_CENTER,
+        "FRONT",
+        egui::FontId::monospace(8.0),
+        egui::Color32::from_rgb(214, 220, 224),
+    );
+    painter.text(
+        center + egui::vec2(15.0, 11.0),
+        egui::Align2::CENTER_CENTER,
+        "RIGHT",
+        egui::FontId::monospace(8.0),
+        egui::Color32::from_rgb(214, 220, 224),
+    );
+    let response = ui.interact(cube_rect, ui.id().with("view_cube"), egui::Sense::click());
+    if !response.clicked() {
+        return None;
+    }
+    let pos = response.interact_pointer_pos().unwrap_or(center);
+    if pos.y < center.y - 8.0 {
+        Some((0.0, 0.0))
+    } else if pos.x < center.x - 8.0 {
+        Some((yaw_degrees, 90.0))
+    } else if pos.x > center.x + 8.0 {
+        Some((90.0, 90.0))
+    } else {
+        Some((45.0, 35.0))
+    }
 }
 
 fn preview_background_color() -> egui::Color32 {

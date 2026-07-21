@@ -157,11 +157,12 @@ and XY feed words are emitted as needed when those rates differ.
 
 The desktop preview parses generated G-code into ``PreviewSegment3d`` values,
 retaining the modal Z position across lines that contain only a Z move. The
-renderer projects X/Y around the existing viewport yaw and applies a fixed
-oblique pitch so depth remains legible in a lightweight egui painter; this
-avoids a platform-specific GPU dependency. Layer colors remain shared with the
-former 2D preview: cuts are green, rapids amber, cleanup blue, and tabs use the
-profile accent.
+renderer uses an orbit camera with independent yaw and pitch, panning and
+zooming in a lightweight egui painter; this avoids a platform-specific GPU
+dependency while still exposing the full three-axis navigation model. The
+orientation cube selects standard camera presets. Layer colors remain shared
+with the former 2D preview: cuts are green, rapids amber, cleanup blue, and
+tabs use the profile accent.
 
 Profile paths, corners, and tabs
 --------------------------------

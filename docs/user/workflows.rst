@@ -90,9 +90,11 @@ Preview and inspection
 The central preview is a 3D toolpath view. Cutting, rapid, cleanup, and tab
 moves are projected from their X/Y/Z coordinates, with the Z axis shown in
 magenta so plunges, retracts, V-carve depth, and profile-tab heights are
-visible. Drag the canvas to pan and use the mouse wheel to zoom. The existing
-view rotation control changes the horizontal camera angle; **Fit preview**
-re-centres the complete toolpath.
+visible. Use the mouse wheel to zoom, drag with the left button to pan, and
+drag with the middle button to orbit. Shift+middle drag pans in the orbit
+navigation convention used by common CAD tools. The cube in the upper-right
+provides top, front, right, and isometric presets. **Fit preview** re-centres
+the complete toolpath.
 
 The 3D view is a toolpath inspection aid, not a stock-removal simulation. It
 shows commanded motion and depth, but it does not model cutter diameter,

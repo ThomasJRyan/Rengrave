@@ -95,6 +95,7 @@ pub fn run(options: UiLaunchOptions) -> eframe::Result<()> {
 struct RengraveApp {
     text: String,
     transform: ViewTransform,
+    preview_pitch_degrees: f64,
     status: String,
     settings_count: usize,
     project_path: String,
@@ -224,6 +225,7 @@ impl RengraveApp {
                 viewport_rotation_degrees: preferences.viewport_rotation_degrees,
                 ..ViewTransform::default()
             },
+            preview_pitch_degrees: 35.0,
             status,
             settings_count: document.settings.entries.len(),
             project_path: String::new(),
@@ -2012,7 +2014,21 @@ impl RengraveApp {
         if response.double_clicked() && self.preview_bounds.is_some() {
             self.fit_preview_requested = true;
         }
-        if response.dragged() {
+        if response.dragged_by(egui::PointerButton::Middle)
+            || (response.dragged_by(egui::PointerButton::Secondary)
+                && ui.input(|input| input.modifiers.shift))
+        {
+            let delta = response.drag_delta();
+            if ui.input(|input| input.modifiers.shift) {
+                self.transform.pan.x += f64::from(delta.x);
+                self.transform.pan.y += f64::from(delta.y);
+            } else {
+                self.transform.viewport_rotation_degrees += f64::from(delta.x) * 0.35;
+                self.preview_pitch_degrees =
+                    (self.preview_pitch_degrees + f64::from(delta.y) * 0.35).clamp(-89.0, 89.0);
+            }
+            ui.ctx().request_repaint();
+        } else if response.dragged_by(egui::PointerButton::Primary) {
             let delta = response.drag_delta();
             self.transform.pan.x += f64::from(delta.x);
             self.transform.pan.y += f64::from(delta.y);
@@ -2058,7 +2074,15 @@ impl RengraveApp {
             self.show_bounds,
             self.show_grid,
             self.show_axes,
+            self.preview_pitch_degrees,
         );
+        if let Some((yaw, pitch)) =
+            view_cube_interaction(ui, rect, self.transform.viewport_rotation_degrees)
+        {
+            self.transform.viewport_rotation_degrees = yaw;
+            self.preview_pitch_degrees = pitch;
+            self.fit_preview_requested = true;
+        }
         if let Some(pos) = hover_pos {
             let cursor = screen_point_to_model(rect, self.transform, pos);
             draw_preview_cursor_readout(ui.painter(), rect, cursor);
@@ -2199,6 +2223,8 @@ impl RengraveApp {
     fn reset_preview_pan_zoom(&mut self) {
         self.transform.pan = Point::default();
         self.transform.zoom = DEFAULT_PREVIEW_ZOOM;
+        self.transform.viewport_rotation_degrees = 0.0;
+        self.preview_pitch_degrees = 35.0;
     }
 
     fn show_new_project_modal(&mut self, ctx: &egui::Context) {
@@ -3074,6 +3100,7 @@ mod tests {
                 zoom: DEFAULT_PREVIEW_ZOOM,
                 ..ViewTransform::default()
             },
+            preview_pitch_degrees: 35.0,
             status: "Ready".to_owned(),
             settings_count: document.settings.entries.len(),
             project_path: String::new(),
