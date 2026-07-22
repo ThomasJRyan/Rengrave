@@ -162,8 +162,9 @@ and zooming in a lightweight egui painter; this avoids a platform-specific GPU
 dependency while still exposing the full three-axis navigation model without
 allowing an upside-down view; the pitch range is 0° through -90° and includes
 the direct side view.
-The rectangular Reset View control returns to the centered top view. Layer
-colors remain shared
+Left and middle drags orbit the camera, while right drag pans it. The
+rectangular Reset View control returns to the centered top view. Layer colors
+remain shared
 with the former 2D preview: cuts are green, rapids amber, cleanup blue, and
 tabs use the profile accent.
 

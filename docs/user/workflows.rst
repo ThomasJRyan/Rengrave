@@ -90,9 +90,9 @@ Preview and inspection
 The central preview is a 3D toolpath view. Cutting, rapid, cleanup, and tab
 moves are projected from their X/Y/Z coordinates, with the Z axis shown in
 magenta so plunges, retracts, V-carve depth, and profile-tab heights are
-visible. Use the mouse wheel to zoom, drag with the left button to pan, and
-drag with either the middle or right button to orbit. Shift+right drag pans in
-the orbit navigation convention used by common CAD tools. The **Reset view**
+visible. Use the mouse wheel to zoom, drag with the left or middle button to
+orbit, and drag with the right button to pan. This matches the common CAD
+navigation convention used by the 3D preview. The **Reset view**
 control in the upper-right returns to a centred top view. Orbit pitch moves only
 from the top view through a direct side view using the -90° direction, while
 horizontal orbit remains continuous; the workpiece cannot flip upside down. The upper-left readout

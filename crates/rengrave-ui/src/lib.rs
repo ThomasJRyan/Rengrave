@@ -2055,23 +2055,15 @@ impl RengraveApp {
         if response.double_clicked() && self.preview_bounds.is_some() {
             self.fit_preview_requested = true;
         }
-        if response.dragged_by(egui::PointerButton::Middle)
-            || response.dragged_by(egui::PointerButton::Secondary)
+        if response.dragged_by(egui::PointerButton::Primary)
+            || response.dragged_by(egui::PointerButton::Middle)
         {
             let delta = response.drag_delta();
-            if response.dragged_by(egui::PointerButton::Secondary)
-                && ui.input(|input| input.modifiers.shift)
-            {
-                self.transform.pan.x += f64::from(delta.x);
-                self.transform.pan.y += f64::from(delta.y);
-            } else {
-                self.transform.viewport_rotation_degrees += f64::from(delta.x) * 0.35;
-                self.preview_pitch_degrees = (self.preview_pitch_degrees
-                    + f64::from(delta.y) * 0.35)
-                    .clamp(-MAX_PREVIEW_PITCH_DEGREES, 0.0);
-            }
+            self.transform.viewport_rotation_degrees += f64::from(delta.x) * 0.35;
+            self.preview_pitch_degrees = (self.preview_pitch_degrees + f64::from(delta.y) * 0.35)
+                .clamp(-MAX_PREVIEW_PITCH_DEGREES, 0.0);
             ui.ctx().request_repaint();
-        } else if response.dragged_by(egui::PointerButton::Primary) {
+        } else if response.dragged_by(egui::PointerButton::Secondary) {
             let delta = response.drag_delta();
             self.transform.pan.x += f64::from(delta.x);
             self.transform.pan.y += f64::from(delta.y);
