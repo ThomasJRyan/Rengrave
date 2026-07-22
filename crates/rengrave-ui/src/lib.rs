@@ -448,7 +448,10 @@ impl RengraveApp {
         self.project_path = path.display().to_string();
         self.settings_path = path_to_text(&project.legacy_settings_path);
         self.input_path = path_to_text(&project.input_path);
-        self.default_dir_path = path_to_text(&project.default_dir);
+        let project_default_dir = project
+            .default_dir
+            .or_else(|| path.parent().map(Path::to_path_buf));
+        self.default_dir_path = path_to_text(&project_default_dir);
         self.gcode_path = path_to_text(&project.outputs.gcode_path);
         self.svg_path = path_to_text(&project.outputs.svg_path);
         self.dxf_path = path_to_text(&project.outputs.dxf_path);
@@ -850,6 +853,9 @@ impl RengraveApp {
         ctx: egui::Context,
     ) {
         let text = path.display().to_string();
+        if let Some(directory) = remembered_browser_directory(target, &path) {
+            self.default_dir_path = directory.display().to_string();
+        }
         match target {
             FileBrowserTarget::Project => {
                 if is_rengrave_project_path(&path) {
@@ -2496,6 +2502,15 @@ fn start_system_font_catalog_preload(ctx: egui::Context) -> Receiver<InputCatalo
         ctx.request_repaint();
     });
     receiver
+}
+
+fn remembered_browser_directory(target: FileBrowserTarget, path: &Path) -> Option<PathBuf> {
+    if target == FileBrowserTarget::DefaultDir {
+        return Some(path.to_owned());
+    }
+    path.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .map(Path::to_path_buf)
 }
 
 fn default_output_path(default_dir: &Option<PathBuf>, file_name: &str) -> String {
@@ -4431,6 +4446,20 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(file.parent().unwrap());
+    }
+
+    #[test]
+    fn selected_browser_paths_remember_their_parent_directory() {
+        let file = PathBuf::from("/tmp/rengrave-last-folder/job.rgrv");
+        assert_eq!(
+            remembered_browser_directory(FileBrowserTarget::Project, &file),
+            Some(PathBuf::from("/tmp/rengrave-last-folder"))
+        );
+        let folder = PathBuf::from("/tmp/rengrave-last-folder");
+        assert_eq!(
+            remembered_browser_directory(FileBrowserTarget::DefaultDir, &folder),
+            Some(folder)
+        );
     }
 
     #[test]

@@ -130,6 +130,11 @@ G-code into preview layers and derives extents, move counts, cut/rapid lengths,
 arc counts, and warnings. Manual settings edits persist through UI preferences
 and stale-output detection names the changed request areas.
 
+File-browser selections update the persisted ``default_dir_path`` preference
+with the selected file's parent directory. Loading a project uses its explicit
+default directory when present, or the project file's own directory otherwise,
+so the next dialog starts in a useful location across application sessions.
+
 Loading a ``.rgrv`` first restores its optional embedded output cache when the
 project contains one. The cache includes the primary G-code and each secondary
 suffix (including profile output), and is accepted as current by assigning the

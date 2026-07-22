@@ -114,6 +114,8 @@ For a portable project, keep referenced input files beside the project or use
 stable absolute paths. A project stores paths rather than embedding fonts or
 images. Embedded G-code is only a cache of output that matched the saved
 settings; changing a setting or input causes fresh output to be generated.
+The last folder used by a project, input, or output file dialog is also stored
+in the UI preferences and reused the next time R-Engrave starts.
 
 Units and precision
 -------------------
