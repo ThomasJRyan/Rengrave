@@ -1638,11 +1638,22 @@ impl RengraveApp {
         if ui
             .add_enabled(
                 !self.preview_cleanup_segments.is_empty(),
-                egui::Checkbox::new(&mut self.show_cleanup, "Show secondary moves"),
+                egui::Checkbox::new(&mut self.show_cleanup, "Show cleanup and profile paths"),
             )
+            .on_hover_text("Show generated cleanup, profile, and chamfer companion paths")
             .changed()
         {
             self.save_preferences();
+        }
+        if !self.secondary_gcode.is_empty() {
+            ui.small(format!(
+                "Companion paths: {}",
+                self.secondary_gcode
+                    .iter()
+                    .map(|output| secondary_operation_label(&output.suffix))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
         }
         if ui
             .add_enabled(
@@ -2175,7 +2186,7 @@ impl RengraveApp {
                 if ui
                     .add_enabled(
                         !self.preview_cleanup_segments.is_empty(),
-                        egui::Checkbox::new(&mut self.show_cleanup, "Secondary layer"),
+                        egui::Checkbox::new(&mut self.show_cleanup, "Cleanup and profile paths"),
                     )
                     .changed()
                 {
@@ -2503,6 +2514,15 @@ fn remembered_browser_directory(target: FileBrowserTarget, path: &Path) -> Optio
     path.parent()
         .filter(|parent| !parent.as_os_str().is_empty())
         .map(Path::to_path_buf)
+}
+
+fn secondary_operation_label(suffix: &str) -> &str {
+    match suffix {
+        "profile" => "Profile",
+        "profile_chamfer" => "Profile chamfer",
+        "clean" | "v_clean" => "Cleanup",
+        _ => suffix,
+    }
 }
 
 fn default_output_path(default_dir: &Option<PathBuf>, file_name: &str) -> String {
@@ -4452,6 +4472,17 @@ mod tests {
             remembered_browser_directory(FileBrowserTarget::DefaultDir, &folder),
             Some(folder)
         );
+    }
+
+    #[test]
+    fn secondary_operation_labels_use_plain_language() {
+        assert_eq!(secondary_operation_label("profile"), "Profile");
+        assert_eq!(
+            secondary_operation_label("profile_chamfer"),
+            "Profile chamfer"
+        );
+        assert_eq!(secondary_operation_label("clean"), "Cleanup");
+        assert_eq!(secondary_operation_label("custom"), "custom");
     }
 
     #[test]

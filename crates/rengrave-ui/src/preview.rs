@@ -1199,6 +1199,13 @@ pub(crate) fn draw_preview_3d(
         egui::FontId::monospace(12.0),
         egui::Color32::from_rgb(214, 220, 224),
     );
+    painter.text(
+        rect.right_top() + egui::vec2(-8.0, 58.0),
+        egui::Align2::RIGHT_TOP,
+        "LMB/MMB orbit  |  RMB pan  |  Wheel zoom",
+        egui::FontId::monospace(10.0),
+        egui::Color32::from_rgb(150, 158, 164),
+    );
 }
 
 pub(crate) fn view_cube_interaction(ui: &mut egui::Ui, rect: egui::Rect) -> Option<()> {

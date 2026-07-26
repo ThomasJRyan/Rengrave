@@ -92,7 +92,8 @@ moves are projected from their X/Y/Z coordinates, with the Z axis shown in
 magenta so plunges, retracts, V-carve depth, and profile-tab heights are
 visible. Use the mouse wheel to zoom, drag with the left or middle button to
 orbit, and drag with the right button to pan. This matches the common CAD
-navigation convention used by the 3D preview. The **Reset view**
+navigation convention used by the 3D preview; the same mapping is shown in the
+preview canvas. The **Reset view**
 control in the upper-right returns to a centred top view. Orbit pitch moves only
 from the top view through a direct side view using the -90° direction, while
 horizontal orbit remains continuous; the workpiece cannot flip upside down. The upper-left readout
@@ -114,6 +115,10 @@ more comma-separated diameters in **Clean diameters**, largest first, such as
 only residual toolpaths to each smaller tool, so a smaller endmill does not
 retrace material already covered by a larger one. **Clean dia** remains the
 fallback when the list is empty or invalid.
+
+The preview identifies companion paths by operation: **Cleanup**, **Profile**,
+and **Profile chamfer**. Use **Show cleanup and profile paths** to toggle these
+secondary operations together; profile tabs remain a separate layer.
 
 Cleanup files are standalone operations: they write the configured feed rate
 before the first plunge and use the configured plunge rate when it differs.
