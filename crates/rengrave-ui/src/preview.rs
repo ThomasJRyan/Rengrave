@@ -1200,8 +1200,8 @@ pub(crate) fn draw_preview_3d(
         egui::Color32::from_rgb(214, 220, 224),
     );
     painter.text(
-        rect.right_top() + egui::vec2(-8.0, 58.0),
-        egui::Align2::RIGHT_TOP,
+        rect.right_bottom() + egui::vec2(-8.0, -8.0),
+        egui::Align2::RIGHT_BOTTOM,
         "LMB/MMB orbit  |  RMB pan  |  Wheel zoom",
         egui::FontId::monospace(10.0),
         egui::Color32::from_rgb(150, 158, 164),
