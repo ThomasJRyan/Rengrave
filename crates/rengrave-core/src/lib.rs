@@ -12,6 +12,7 @@ pub mod profile;
 pub mod project;
 pub mod settings;
 pub mod svg;
+pub mod toolbit;
 pub mod vcarve;
 
 pub const FENGRAVE_VERSION: &str = "1.78";

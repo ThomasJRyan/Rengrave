@@ -48,6 +48,7 @@ User guide
 * `User workflows <#user-workflows>`_
 * `User reference <#user-reference>`_
 * `Troubleshooting <#troubleshooting>`_
+* `Toolbit library <#toolbit-library>`_
 
 Developer guide
 ---------------
@@ -65,10 +66,12 @@ without making the required ``rst2html`` build depend on Sphinx.
 .. include:: user/workflows.rst
 .. include:: user/reference.rst
 .. include:: user/troubleshooting.rst
+.. include:: user/toolbits.rst
 .. include:: developer/architecture.rst
 .. include:: developer/algorithms.rst
 .. include:: developer/compatibility.rst
 .. include:: developer/testing.rst
+.. include:: developer/toolbits.rst
 
 Current scope
 -------------

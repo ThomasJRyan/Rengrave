@@ -23,14 +23,15 @@ use rengrave_core::font::{Font, Stroke, read_cxf, read_ttf};
 use rengrave_core::geometry::{Point, ViewTransform};
 use rengrave_core::project::{
     DocumentRequest, RENGRAVE_PROJECT_FORMAT_VERSION, RengraveDocument, RengraveProjectFile,
-    RengraveProjectOutputs, RengraveProjectSecondaryOutput, is_rengrave_project_path,
-    load_document, read_rengrave_project, write_rengrave_project,
+    RengraveProjectOutputs, RengraveProjectSecondaryOutput, ToolbitAssignment,
+    is_rengrave_project_path, load_document, read_rengrave_project, write_rengrave_project,
 };
 use rengrave_core::settings::{
     DEFAULT_GCODE_POSTAMBLE, DEFAULT_GCODE_PREAMBLE, LegacySetting, LegacySettings,
     default_legacy_settings, get_legacy_bool, legacy_bool_value,
 };
 use rengrave_core::svg::read_svg_font;
+use rengrave_core::toolbit::{Toolbit, ToolbitLibrary, default_library_path};
 use rfd::FileDialog;
 
 mod browser;
@@ -143,6 +144,11 @@ struct RengraveApp {
     input_preview: InputPreview,
     tool_icon_textures: Option<[egui::TextureHandle; 6]>,
     show_new_project_modal: bool,
+    toolbit_library: ToolbitLibrary,
+    toolbit_library_path: Option<PathBuf>,
+    show_toolbit_library: bool,
+    toolbit_filter: String,
+    toolbit_assignments: Vec<ToolbitAssignment>,
     preferences_path: Option<PathBuf>,
     calculation: Option<CalculationJob>,
     next_calculation_id: u64,
@@ -285,6 +291,14 @@ impl RengraveApp {
             input_preview: InputPreview::default(),
             tool_icon_textures: None,
             show_new_project_modal: false,
+            toolbit_library: default_library_path()
+                .as_deref()
+                .and_then(|path| ToolbitLibrary::load(path).ok())
+                .unwrap_or_default(),
+            toolbit_library_path: default_library_path(),
+            show_toolbit_library: false,
+            toolbit_filter: String::new(),
+            toolbit_assignments: Vec::new(),
             preferences_path,
             calculation: None,
             next_calculation_id: 1,
@@ -410,6 +424,7 @@ impl RengraveApp {
                         Vec::new()
                     },
                 },
+                toolbit_assignments: self.toolbit_assignments.clone(),
             },
             warnings,
         ))
@@ -440,10 +455,26 @@ impl RengraveApp {
 
     fn apply_project_file(
         &mut self,
-        project: RengraveProjectFile,
+        mut project: RengraveProjectFile,
         path: PathBuf,
         ctx: egui::Context,
     ) {
+        let units_inch = project.settings.get_last("units") == Some("in");
+        let mut assignment_warnings = Vec::new();
+        for assignment in &project.toolbit_assignments {
+            if !assignment.snapshot.eligible_for(assignment.role) {
+                assignment_warnings.push(format!(
+                    "Tool `{}` is not supported for {:?}; legacy settings were left unchanged",
+                    assignment.display_name, assignment.role
+                ));
+            } else {
+                assignment.snapshot.apply_to_settings(
+                    &mut project.settings,
+                    assignment.role,
+                    units_inch,
+                );
+            }
+        }
         self.cancel_calculation("Project loaded");
         self.project_path = path.display().to_string();
         self.settings_path = path_to_text(&project.legacy_settings_path);
@@ -456,6 +487,7 @@ impl RengraveApp {
         self.svg_path = path_to_text(&project.outputs.svg_path);
         self.dxf_path = path_to_text(&project.outputs.dxf_path);
         self.text = project.text;
+        self.toolbit_assignments = project.toolbit_assignments.clone();
         self.controls = UiControls::from_settings(&project.settings);
         let inferred = ToolView::from_settings_and_path(
             &project.settings,
@@ -474,7 +506,7 @@ impl RengraveApp {
         self.show_bounds = get_legacy_bool(&project.settings, "show_box", true);
         self.show_axes = get_legacy_bool(&project.settings, "show_axis", true);
         self.settings_count = project.settings.entries.len();
-        self.warnings.clear();
+        self.warnings = assignment_warnings;
         self.status = format!("Project loaded: {}", path.display());
         self.refresh_input_catalog();
         self.save_preferences();
@@ -546,6 +578,7 @@ impl RengraveApp {
     fn start_new_project(&mut self, tool_view: ToolView, ctx: egui::Context) {
         self.cancel_calculation("New project");
         self.project_path.clear();
+        self.toolbit_assignments.clear();
         self.settings_path.clear();
         self.input_path.clear();
         self.text = RengraveDocument::default().text;
@@ -1390,6 +1423,11 @@ impl RengraveApp {
     }
 
     fn show_profile_settings(&mut self, ui: &mut egui::Ui) {
+        self.show_toolbit_selector(
+            ui,
+            rengrave_core::toolbit::ToolRole::ProfileEndmill,
+            "Profile library tool",
+        );
         parameter_checkbox(ui, &mut self.controls.profile_enabled, "Enable profile cut");
         ui.add_enabled_ui(self.controls.profile_enabled, |ui| {
             number_row_with_help(
@@ -1531,6 +1569,11 @@ impl RengraveApp {
     }
 
     fn show_vcarve_settings(&mut self, ui: &mut egui::Ui) {
+        self.show_toolbit_selector(
+            ui,
+            rengrave_core::toolbit::ToolRole::Primary,
+            "Primary library tool",
+        );
         combo_row(ui, "Bit", self.controls.bit_shape.label(), |ui| {
             ui.selectable_value(
                 &mut self.controls.bit_shape,
@@ -1598,6 +1641,11 @@ impl RengraveApp {
     }
 
     fn show_cleanup_settings(&mut self, ui: &mut egui::Ui) {
+        self.show_toolbit_selector(
+            ui,
+            rengrave_core::toolbit::ToolRole::Cleanup,
+            "Add cleanup tool",
+        );
         cleanup_diameter_rows(ui, &mut self.controls.clean_dias);
         number_row(ui, "Clean step %", &mut self.controls.clean_step, 1.0);
         number_row(ui, "Clean V", &mut self.controls.clean_v, 0.01);
@@ -1615,6 +1663,78 @@ impl RengraveApp {
             clean_path_checkbox(ui, "Y", &mut self.controls.clean_paths, 4);
             clean_path_checkbox(ui, "Loops", &mut self.controls.clean_paths, 7);
         });
+    }
+
+    fn show_toolbit_selector(
+        &mut self,
+        ui: &mut egui::Ui,
+        role: rengrave_core::toolbit::ToolRole,
+        label: &str,
+    ) {
+        let eligible: Vec<Toolbit> = self.toolbit_library.eligible(role).cloned().collect();
+        if eligible.is_empty() {
+            return;
+        }
+        let mut selected = None;
+        egui::ComboBox::from_label(label)
+            .selected_text("Select stored tool…")
+            .show_ui(ui, |ui| {
+                for tool in &eligible {
+                    if ui
+                        .selectable_label(
+                            false,
+                            format!("{} · {} · {:.3} mm", tool.name, tool.kind, tool.diameter_mm),
+                        )
+                        .clicked()
+                    {
+                        selected = Some(tool.clone());
+                    }
+                }
+            });
+        if let Some(tool) = selected {
+            let factor = if self.controls.units == UnitsChoice::Inch {
+                1.0 / MM_PER_INCH
+            } else {
+                1.0
+            };
+            match role {
+                rengrave_core::toolbit::ToolRole::Primary => {
+                    self.controls.v_bit_dia = tool.diameter_mm * factor;
+                    if let Some(angle) = tool.angle_deg {
+                        self.controls.v_bit_angle = angle;
+                    }
+                    self.controls.bit_shape = if tool.kind == "straight_endmill" {
+                        BitShapeChoice::Flat
+                    } else {
+                        BitShapeChoice::VBit
+                    };
+                }
+                rengrave_core::toolbit::ToolRole::Cleanup => {
+                    let diameter = format_setting_number(tool.diameter_mm * factor);
+                    if !self.controls.clean_dias.trim().is_empty() {
+                        self.controls.clean_dias.push(',');
+                    }
+                    self.controls.clean_dias.push_str(&diameter);
+                }
+                _ => {}
+            }
+            if let Some(feed) = tool.feed_mm_min {
+                self.controls.feed = feed * factor;
+            }
+            if let Some(plunge) = tool.plunge_mm_min {
+                self.controls.plunge = plunge * factor;
+            }
+            self.toolbit_assignments
+                .retain(|assignment| assignment.role != role);
+            self.toolbit_assignments.push(ToolbitAssignment {
+                library_id: tool.id.clone(),
+                display_name: tool.name.clone(),
+                snapshot: tool.clone(),
+                role,
+            });
+            self.status = format!("Applied `{}` for this job; output is stale", tool.name);
+            self.last_output_request = None;
+        }
     }
 
     fn show_canvas_panel(&mut self, ui: &mut egui::Ui) -> egui::Rect {
@@ -1983,10 +2103,87 @@ impl eframe::App for RengraveApp {
 
         self.show_browser(ui.ctx());
         self.show_new_project_modal(ui.ctx());
+        self.show_toolbit_library_window(ui.ctx());
     }
 }
 
 impl RengraveApp {
+    fn show_toolbit_library_window(&mut self, ctx: &egui::Context) {
+        if !self.show_toolbit_library {
+            return;
+        }
+        let mut open = true;
+        egui::Window::new("Toolbit library")
+            .open(&mut open)
+            .default_size([760.0, 520.0])
+            .resizable(true)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("Find tool");
+                    ui.text_edit_singleline(&mut self.toolbit_filter);
+                    if ui.button("New").clicked() {
+                        let mut tool = Toolbit::default();
+                        tool.id = format!("toolbit-{}", self.toolbit_library.toolbits.len() + 1);
+                        self.toolbit_library.toolbits.push(tool);
+                    }
+                    if ui.button("Save").clicked() {
+                        if let Some(path) = &self.toolbit_library_path {
+                            self.status = match self.toolbit_library.save(path) {
+                                Ok(()) => format!("Toolbit library saved: {}", path.display()),
+                                Err(error) => error,
+                            };
+                        } else { self.status = "Toolbit library path is unavailable".into(); }
+                    }
+                });
+                ui.separator();
+                if self.toolbit_library.toolbits.is_empty() {
+                    ui.label("No tools yet. Add a tool when you are ready; R-Engrave will not invent cutter dimensions.");
+                }
+                let filter = self.toolbit_filter.to_ascii_lowercase();
+                let mut remove = None;
+                let mut duplicate = None;
+                for (index, tool) in self.toolbit_library.toolbits.iter_mut().enumerate() {
+                    if !filter.is_empty() && !tool.name.to_ascii_lowercase().contains(&filter) && !tool.kind.contains(&filter) { continue; }
+                    let tool_id = tool.id.clone();
+                    ui.push_id(tool_id, |ui| {
+                        ui.group(|ui| {
+                            ui.horizontal(|ui| {
+                                ui.strong(&tool.name);
+                                ui.label(format!("{} · {:.3} mm", tool.kind, tool.diameter_mm));
+                                if ui.button("Duplicate").clicked() {
+                                    let mut copy = tool.clone();
+                                    copy.id = format!("{}-copy", copy.id);
+                                    copy.name.push_str(" copy");
+                                    duplicate = Some(copy);
+                                }
+                                if ui.button("Delete").clicked() { remove = Some(index); }
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label("Name"); ui.text_edit_singleline(&mut tool.name);
+                                ui.label("Type");
+                                egui::ComboBox::from_id_salt(format!("kind-{}", tool.id)).selected_text(&tool.kind).show_ui(ui, |ui| {
+                                    for kind in ["straight_endmill", "v_bit", "bullnose", "future"] { ui.selectable_value(&mut tool.kind, kind.into(), kind); }
+                                });
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label("Diameter (mm)"); ui.add(egui::DragValue::new(&mut tool.diameter_mm).speed(0.01));
+                                if tool.kind == "v_bit" { ui.label("Angle (°)"); ui.add(egui::DragValue::new(tool.angle_deg.get_or_insert(60.0)).speed(1.0)); }
+                                if tool.kind == "bullnose" { ui.label("Corner radius (mm)"); ui.add(egui::DragValue::new(tool.corner_radius_mm.get_or_insert(0.5)).speed(0.01)); }
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label("Feed (mm/min)"); ui.add(egui::DragValue::new(tool.feed_mm_min.get_or_insert(0.0)).speed(1.0));
+                                ui.label("Plunge (mm/min)"); ui.add(egui::DragValue::new(tool.plunge_mm_min.get_or_insert(0.0)).speed(1.0));
+                            });
+                            for error in tool.validate() { ui.colored_label(egui::Color32::from_rgb(225, 176, 84), error); }
+                        });
+                    });
+                }
+                if let Some(index) = remove { self.toolbit_library.toolbits.remove(index); }
+                if let Some(copy) = duplicate { self.toolbit_library.toolbits.push(copy); }
+            });
+        self.show_toolbit_library = open;
+    }
+
     fn show_toolbar_contents(&mut self, ui: &mut egui::Ui) {
         self.show_menu_bar(ui);
         ui.horizontal(|ui| {
@@ -2205,6 +2402,12 @@ impl RengraveApp {
                 ui.checkbox(&mut self.show_axes, "Axes layer");
                 if ui.checkbox(&mut self.show_grid, "Grid layer").changed() {
                     self.save_preferences();
+                }
+            });
+
+            ui.menu_button("Settings", |ui| {
+                if menu_action(ui, "Toolbit library…", true) {
+                    self.show_toolbit_library = true;
                 }
             });
 
@@ -3213,6 +3416,11 @@ mod tests {
             input_preview: InputPreview::default(),
             tool_icon_textures: None,
             show_new_project_modal: false,
+            toolbit_library: ToolbitLibrary::default(),
+            toolbit_library_path: None,
+            show_toolbit_library: false,
+            toolbit_filter: String::new(),
+            toolbit_assignments: Vec::new(),
             preferences_path: None,
             calculation: None,
             next_calculation_id: 1,

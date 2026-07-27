@@ -27,7 +27,7 @@ pub struct RengraveDocument {
 pub const RENGRAVE_PROJECT_EXTENSION: &str = "rgrv";
 pub const RENGRAVE_PROJECT_FORMAT_VERSION: u32 = 1;
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct RengraveProjectFile {
     #[serde(default = "current_project_format_version")]
     pub format_version: u32,
@@ -47,6 +47,16 @@ pub struct RengraveProjectFile {
     pub workbench: String,
     #[serde(default)]
     pub outputs: RengraveProjectOutputs,
+    #[serde(default)]
+    pub toolbit_assignments: Vec<ToolbitAssignment>,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ToolbitAssignment {
+    pub library_id: String,
+    pub display_name: String,
+    pub snapshot: crate::toolbit::Toolbit,
+    pub role: crate::toolbit::ToolRole,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -84,6 +94,7 @@ impl Default for RengraveProjectFile {
             legacy_settings_path: None,
             workbench: String::new(),
             outputs: RengraveProjectOutputs::default(),
+            toolbit_assignments: Vec::new(),
         }
     }
 }
@@ -652,6 +663,7 @@ mod tests {
                     gcode: "G1 X2\n".to_owned(),
                 }],
             },
+            toolbit_assignments: Vec::new(),
         };
 
         write_rengrave_project(&path, &project).unwrap();
