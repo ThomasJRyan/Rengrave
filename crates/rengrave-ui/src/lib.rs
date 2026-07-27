@@ -3136,7 +3136,7 @@ fn generated_gcode_summary(
     arc_moves: usize,
 ) -> String {
     format!(
-        "G-code: {lines} lines, {cut_moves} cut moves, {rapid_moves} rapid moves, {secondary_moves} secondary moves, {arc_moves} arcs"
+        "G-code: {lines} lines, {cut_moves} cut moves, {rapid_moves} rapid moves, {secondary_moves} companion moves, {arc_moves} arcs"
     )
 }
 
@@ -5247,7 +5247,7 @@ mod tests {
     fn generated_gcode_summary_reports_compact_motion_counts() {
         assert_eq!(
             generated_gcode_summary(177, 35, 14, 2, 3),
-            "G-code: 177 lines, 35 cut moves, 14 rapid moves, 2 secondary moves, 3 arcs"
+            "G-code: 177 lines, 35 cut moves, 14 rapid moves, 2 companion moves, 3 arcs"
         );
     }
 
@@ -5271,7 +5271,7 @@ mod tests {
         assert!(
             harness
                 .query_by_label(
-                    "G-code: 177 lines, 2 cut moves, 1 rapid moves, 1 secondary moves, 3 arcs"
+                    "G-code: 177 lines, 2 cut moves, 1 rapid moves, 1 companion moves, 3 arcs"
                 )
                 .is_some()
         );
