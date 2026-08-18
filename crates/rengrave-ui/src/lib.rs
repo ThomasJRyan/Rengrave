@@ -70,6 +70,13 @@ const STATUS_STRIP_HEIGHT: f32 = 26.0;
 const FORM_CONTROL_WIDTH: f32 = 170.0;
 const PATH_CONTROL_WIDTH: f32 = 244.0;
 const LOGO_SIZE: f32 = 40.0;
+const MAX_RECENT_PROJECTS: usize = 10;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AppScreen {
+    Startup,
+    Workbench,
+}
 
 #[derive(Debug, Clone, Default)]
 pub struct UiLaunchOptions {
@@ -95,6 +102,7 @@ pub fn run(options: UiLaunchOptions) -> eframe::Result<()> {
 }
 
 struct RengraveApp {
+    screen: AppScreen,
     text: String,
     transform: ViewTransform,
     preview_pitch_degrees: f64,
@@ -143,6 +151,9 @@ struct RengraveApp {
     input_catalog_search: String,
     input_preview: InputPreview,
     tool_icon_textures: Option<[egui::TextureHandle; 6]>,
+    startup_logo_texture: Option<egui::TextureHandle>,
+    recent_projects: Vec<PathBuf>,
+    show_recent_projects: bool,
     show_new_project_modal: bool,
     toolbit_library: ToolbitLibrary,
     toolbit_library_path: Option<PathBuf>,
@@ -172,20 +183,30 @@ enum CatalogPanelMode {
 impl RengraveApp {
     fn new(cc: &eframe::CreationContext<'_>, options: UiLaunchOptions) -> Self {
         apply_theme(&cc.egui_ctx);
+        let direct_launch = options.gcode_file.is_some()
+            || options.font_or_image.is_some()
+            || options.text.is_some()
+            || options.default_dir.is_some();
         let preferences_path = default_preferences_path();
         let preferences = preferences_path
             .as_deref()
             .and_then(|path| UiPreferences::load(path).ok())
             .unwrap_or_default();
-        let gcode_file = options
-            .gcode_file
-            .clone()
-            .or_else(|| path_from_text(&preferences.settings_path));
-        let font_or_image = launch_font_or_image_path(&options, &preferences);
+        let gcode_file = options.gcode_file.clone();
+        let font_or_image = if direct_launch {
+            launch_font_or_image_path(&options, &preferences)
+        } else {
+            None
+        };
         let default_dir = options
             .default_dir
             .clone()
-            .or_else(|| path_from_text(&preferences.default_dir_path));
+            .filter(|_| direct_launch)
+            .or_else(|| {
+                direct_launch
+                    .then(|| path_from_text(&preferences.default_dir_path))
+                    .flatten()
+            });
         let document_request = DocumentRequest {
             gcode_file: gcode_file.clone(),
             font_or_image: font_or_image.clone(),
@@ -210,7 +231,7 @@ impl RengraveApp {
             default_dir.as_ref(),
         );
         let system_font_catalog_receiver =
-            Some(start_system_font_catalog_preload(cc.egui_ctx.clone()));
+            direct_launch.then(|| start_system_font_catalog_preload(cc.egui_ctx.clone()));
         let status = if document.warnings.is_empty() {
             "Ready".to_owned()
         } else {
@@ -226,6 +247,11 @@ impl RengraveApp {
         let (default_gcode_path, default_svg_path, default_dxf_path) =
             default_output_paths(&default_dir);
         let mut app = Self {
+            screen: if direct_launch {
+                AppScreen::Workbench
+            } else {
+                AppScreen::Startup
+            },
             text: document.text,
             transform: ViewTransform {
                 zoom: DEFAULT_PREVIEW_ZOOM,
@@ -290,6 +316,13 @@ impl RengraveApp {
             input_catalog_search: String::new(),
             input_preview: InputPreview::default(),
             tool_icon_textures: None,
+            startup_logo_texture: None,
+            recent_projects: preferences
+                .recent_projects
+                .iter()
+                .map(PathBuf::from)
+                .collect(),
+            show_recent_projects: false,
             show_new_project_modal: false,
             toolbit_library: default_library_path()
                 .as_deref()
@@ -312,7 +345,9 @@ impl RengraveApp {
             #[cfg(debug_assertions)]
             debug_layout_overlay: false,
         };
-        app.start_calculation(cc.egui_ctx.clone());
+        if direct_launch {
+            app.start_calculation(cc.egui_ctx.clone());
+        }
         app
     }
 
@@ -359,6 +394,7 @@ impl RengraveApp {
             settings_overrides: Vec::new(),
         }) {
             Ok(document) => {
+                self.screen = AppScreen::Workbench;
                 let display_input_path =
                     document_input_path_for_display(&requested_input, &document);
                 self.text = document.text;
@@ -476,6 +512,8 @@ impl RengraveApp {
             }
         }
         self.cancel_calculation("Project loaded");
+        self.screen = AppScreen::Workbench;
+        self.record_recent_project(path.clone());
         self.project_path = path.display().to_string();
         self.settings_path = path_to_text(&project.legacy_settings_path);
         self.input_path = path_to_text(&project.input_path);
@@ -544,6 +582,7 @@ impl RengraveApp {
             Ok((project, warnings)) => match write_rengrave_project(&path, &project) {
                 Ok(()) => {
                     self.project_path = path.display().to_string();
+                    self.record_recent_project(path.clone());
                     self.status = format!("Project saved: {}", path.display());
                     self.warnings = warnings;
                     self.save_preferences();
@@ -599,6 +638,8 @@ impl RengraveApp {
         self.auto_recalc_signature = None;
         self.auto_recalc_changed_at = None;
         self.show_new_project_modal = false;
+        self.show_recent_projects = false;
+        self.screen = AppScreen::Workbench;
         self.pending_text_font_selection = tool_view.uses_text();
         self.refresh_default_catalog_for_tool_view();
         let selected_font =
@@ -610,6 +651,22 @@ impl RengraveApp {
             self.status = format!("New {} project", tool_view.label());
         }
         self.save_preferences();
+    }
+
+    fn record_recent_project(&mut self, path: PathBuf) {
+        self.recent_projects.retain(|recent| recent != &path);
+        self.recent_projects.insert(0, path);
+        self.recent_projects.truncate(MAX_RECENT_PROJECTS);
+    }
+
+    fn open_recent_project(&mut self, path: PathBuf, ctx: egui::Context) {
+        self.show_recent_projects = false;
+        if !path.is_file() {
+            self.status = format!("Recent project is unavailable: {}", path.display());
+            self.warnings = vec!["Choose Open Project to locate the file again.".to_owned()];
+            return;
+        }
+        self.load_project(path, ctx);
     }
 
     fn start_calculation(&mut self, ctx: egui::Context) {
@@ -2011,6 +2068,11 @@ impl RengraveApp {
             viewport_rotation_degrees: self.transform.viewport_rotation_degrees,
             auto_recalculate: self.auto_recalculate,
             show_input_overlay: self.show_input_overlay,
+            recent_projects: self
+                .recent_projects
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect(),
         };
         if let Err(err) = preferences.save(path) {
             self.warnings
@@ -2025,6 +2087,31 @@ impl eframe::App for RengraveApp {
         self.poll_system_font_catalog(ui.ctx());
         self.maybe_auto_recalculate(ui.ctx());
         let root_rect = ui.max_rect();
+
+        if self.screen == AppScreen::Startup {
+            let top_rect = egui::Panel::top("startup_nav")
+                .resizable(false)
+                .show_inside(ui, |ui| self.show_menu_bar(ui))
+                .response
+                .rect;
+            self.show_startup_screen(ui);
+            self.show_recent_projects_window(ui.ctx());
+            self.show_new_project_modal(ui.ctx());
+            #[cfg(debug_assertions)]
+            if self.debug_layout_overlay {
+                draw_debug_layout_overlay(
+                    ui.ctx(),
+                    DebugLayoutRects {
+                        root: root_rect,
+                        top: top_rect,
+                        left: top_rect,
+                        preview: ui.max_rect(),
+                        bottom: top_rect,
+                    },
+                );
+            }
+            return;
+        }
 
         let top_rect = egui::Panel::top("toolbar")
             .resizable(false)
@@ -2108,6 +2195,118 @@ impl eframe::App for RengraveApp {
 }
 
 impl RengraveApp {
+    fn show_startup_screen(&mut self, ui: &mut egui::Ui) {
+        let available = ui.available_rect_before_wrap();
+        let left_width = available.width() * 0.20;
+        let left_rect = egui::Rect::from_min_size(
+            available.min,
+            egui::vec2(left_width.min(available.width()), available.height()),
+        );
+        let right_rect = egui::Rect::from_min_max(
+            egui::pos2(left_rect.max.x + 1.0, available.min.y),
+            available.max,
+        );
+
+        egui::Frame::new()
+            .fill(ui.visuals().panel_fill)
+            .show(ui, |ui| {
+                ui.scope_builder(egui::UiBuilder::new().max_rect(left_rect), |ui| {
+                    ui.add_space(18.0);
+                    ui.vertical_centered(|ui| {
+                        ui.heading("Projects");
+                    });
+                    ui.add_space(14.0);
+                    ui.separator();
+                    ui.add_space(8.0);
+                    if full_width_button(ui, "New Project", true) {
+                        self.show_new_project_modal = true;
+                    }
+                    if full_width_button(ui, "Open Project", true) {
+                        self.choose_path(FileBrowserTarget::Project, ui.ctx().clone());
+                    }
+                    if full_width_button(ui, "Recent Project", true) {
+                        self.show_recent_projects = true;
+                    }
+                });
+                ui.painter().line_segment(
+                    [
+                        egui::pos2(left_rect.max.x, available.min.y),
+                        egui::pos2(left_rect.max.x, available.max.y),
+                    ],
+                    egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color),
+                );
+                ui.scope_builder(egui::UiBuilder::new().max_rect(right_rect), |ui| {
+                    let texture = self.startup_logo_texture(ui.ctx());
+                    ui.centered_and_justified(|ui| {
+                        if let Some(texture) = texture {
+                            let max_size = egui::vec2(
+                                (right_rect.width() * 0.65).max(260.0),
+                                (right_rect.height() * 0.65).max(140.0),
+                            );
+                            ui.add(egui::Image::from_texture(texture).max_size(max_size));
+                        } else {
+                            ui.heading("R-Engrave");
+                        }
+                    });
+                });
+            });
+    }
+
+    fn startup_logo_texture(&mut self, ctx: &egui::Context) -> Option<&egui::TextureHandle> {
+        if self.startup_logo_texture.is_none() {
+            let image =
+                image::load_from_memory(include_bytes!("../../../assets/logo/logo-full.png"))
+                    .ok()?
+                    .to_rgba8();
+            let size = [image.width() as usize, image.height() as usize];
+            let color_image = egui::ColorImage::from_rgba_unmultiplied(size, image.as_raw());
+            self.startup_logo_texture =
+                Some(ctx.load_texture("startup-logo", color_image, egui::TextureOptions::LINEAR));
+        }
+        self.startup_logo_texture.as_ref()
+    }
+
+    fn show_recent_projects_window(&mut self, ctx: &egui::Context) {
+        if !self.show_recent_projects {
+            return;
+        }
+        let mut open = true;
+        egui::Window::new("Recent Projects")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .default_width(560.0)
+            .show(ctx, |ui| {
+                if self.recent_projects.is_empty() {
+                    ui.label("No recent projects.");
+                } else {
+                    for path in self.recent_projects.clone() {
+                        let label = path.display().to_string();
+                        let available = path.is_file();
+                        if ui
+                            .add_enabled(available, egui::Button::new(&label))
+                            .on_hover_text(if available {
+                                "Open this project"
+                            } else {
+                                "The project file is no longer available"
+                            })
+                            .clicked()
+                        {
+                            self.open_recent_project(path, ctx.clone());
+                            break;
+                        }
+                    }
+                }
+                ui.separator();
+                if ui.button("Clear Recent Projects").clicked() {
+                    self.recent_projects.clear();
+                    self.save_preferences();
+                    self.show_recent_projects = false;
+                }
+            });
+        self.show_recent_projects = open;
+    }
+
     fn show_toolbit_library_window(&mut self, ctx: &egui::Context) {
         if !self.show_toolbit_library {
             return;
@@ -2343,76 +2542,108 @@ impl RengraveApp {
                     self.choose_path(FileBrowserTarget::Project, ui.ctx().clone());
                 }
 
-                if menu_action(ui, "Save", !self.project_path.trim().is_empty()) {
+                ui.menu_button("Recent Projects", |ui| {
+                    if self.recent_projects.is_empty() {
+                        ui.label("No recent projects");
+                    } else {
+                        for path in self.recent_projects.clone() {
+                            let available = path.is_file();
+                            if ui
+                                .add_enabled(
+                                    available,
+                                    egui::Button::new(path.display().to_string()),
+                                )
+                                .clicked()
+                            {
+                                self.open_recent_project(path, ui.ctx().clone());
+                                ui.close();
+                                break;
+                            }
+                        }
+                    }
+                });
+
+                if menu_action(
+                    ui,
+                    "Save",
+                    self.screen == AppScreen::Workbench && !self.project_path.trim().is_empty(),
+                ) {
                     self.save_current_project();
                 }
 
-                if menu_action(ui, "Save As", true) {
+                if menu_action(ui, "Save As", self.screen == AppScreen::Workbench) {
                     self.choose_path(FileBrowserTarget::ProjectOutput, ui.ctx().clone());
                 }
             });
 
-            ui.menu_button("Run", |ui| {
-                if menu_action(ui, "Calculate", true) {
-                    self.start_calculation(ui.ctx().clone());
-                }
-                if menu_action(ui, "Cancel calculation", self.calculation.is_some()) {
-                    self.cancel_calculation("Calculation canceled");
-                }
-                if let Some(stale_summary) = self.active_calculation_stale_summary() {
-                    ui.colored_label(egui::Color32::from_rgb(225, 176, 84), stale_summary);
-                }
-            });
+            if self.screen == AppScreen::Workbench {
+                ui.menu_button("Run", |ui| {
+                    if menu_action(ui, "Calculate", true) {
+                        self.start_calculation(ui.ctx().clone());
+                    }
+                    if menu_action(ui, "Cancel calculation", self.calculation.is_some()) {
+                        self.cancel_calculation("Calculation canceled");
+                    }
+                    if let Some(stale_summary) = self.active_calculation_stale_summary() {
+                        ui.colored_label(egui::Color32::from_rgb(225, 176, 84), stale_summary);
+                    }
+                });
 
-            ui.menu_button("View", |ui| {
-                if menu_action(ui, "Fit preview", self.preview_bounds.is_some()) {
-                    self.fit_preview_requested = true;
-                }
-                if menu_action(ui, "Reset pan/zoom", true) {
-                    self.reset_preview_pan_zoom();
-                }
-                if menu_action(ui, "Reset view rotation", true) {
-                    self.transform.viewport_rotation_degrees = 0.0;
-                    self.save_preferences();
-                }
-                ui.separator();
-                ui.checkbox(&mut self.show_toolpath, "Toolpath layer");
-                if ui.checkbox(&mut self.show_rapids, "Rapid layer").changed() {
-                    self.save_preferences();
-                }
-                if ui
-                    .add_enabled(
-                        !self.preview_cleanup_segments.is_empty(),
-                        egui::Checkbox::new(&mut self.show_cleanup, "Cleanup and profile paths"),
-                    )
-                    .changed()
-                {
-                    self.save_preferences();
-                }
-                if ui
-                    .add_enabled(
-                        !self.preview_tab_segments.is_empty(),
-                        egui::Checkbox::new(&mut self.show_tabs, "Profile tabs layer"),
-                    )
-                    .changed()
-                {
-                    self.save_preferences();
-                }
-                ui.checkbox(&mut self.show_bounds, "Bounds layer");
-                ui.checkbox(&mut self.show_axes, "Axes layer");
-                if ui.checkbox(&mut self.show_grid, "Grid layer").changed() {
-                    self.save_preferences();
-                }
-            });
+                ui.menu_button("View", |ui| {
+                    if menu_action(ui, "Fit preview", self.preview_bounds.is_some()) {
+                        self.fit_preview_requested = true;
+                    }
+                    if menu_action(ui, "Reset pan/zoom", true) {
+                        self.reset_preview_pan_zoom();
+                    }
+                    if menu_action(ui, "Reset view rotation", true) {
+                        self.transform.viewport_rotation_degrees = 0.0;
+                        self.save_preferences();
+                    }
+                    ui.separator();
+                    ui.checkbox(&mut self.show_toolpath, "Toolpath layer");
+                    if ui.checkbox(&mut self.show_rapids, "Rapid layer").changed() {
+                        self.save_preferences();
+                    }
+                    if ui
+                        .add_enabled(
+                            !self.preview_cleanup_segments.is_empty(),
+                            egui::Checkbox::new(
+                                &mut self.show_cleanup,
+                                "Cleanup and profile paths",
+                            ),
+                        )
+                        .changed()
+                    {
+                        self.save_preferences();
+                    }
+                    if ui
+                        .add_enabled(
+                            !self.preview_tab_segments.is_empty(),
+                            egui::Checkbox::new(&mut self.show_tabs, "Profile tabs layer"),
+                        )
+                        .changed()
+                    {
+                        self.save_preferences();
+                    }
+                    ui.checkbox(&mut self.show_bounds, "Bounds layer");
+                    ui.checkbox(&mut self.show_axes, "Axes layer");
+                    if ui.checkbox(&mut self.show_grid, "Grid layer").changed() {
+                        self.save_preferences();
+                    }
+                });
 
-            ui.menu_button("Settings", |ui| {
-                if menu_action(ui, "Toolbit library…", true) {
-                    self.show_toolbit_library = true;
-                }
-            });
+                ui.menu_button("Settings", |ui| {
+                    if menu_action(ui, "Toolbit library…", true) {
+                        self.show_toolbit_library = true;
+                    }
+                });
+            }
 
             #[cfg(debug_assertions)]
-            self.show_debug_menu(ui);
+            if self.screen == AppScreen::Workbench {
+                self.show_debug_menu(ui);
+            }
         });
     }
 
@@ -3364,6 +3595,7 @@ mod tests {
         let (gcode_path, svg_path, dxf_path) = default_output_paths(&None);
 
         RengraveApp {
+            screen: AppScreen::Workbench,
             text: document.text,
             transform: ViewTransform {
                 zoom: DEFAULT_PREVIEW_ZOOM,
@@ -3415,6 +3647,9 @@ mod tests {
             input_catalog_search: String::new(),
             input_preview: InputPreview::default(),
             tool_icon_textures: None,
+            startup_logo_texture: None,
+            recent_projects: Vec::new(),
+            show_recent_projects: false,
             show_new_project_modal: false,
             toolbit_library: ToolbitLibrary::default(),
             toolbit_library_path: None,
@@ -5501,6 +5736,24 @@ mod tests {
     }
 
     #[test]
+    fn kittest_startup_screen_contains_only_project_actions() {
+        let mut app = test_app();
+        app.screen = AppScreen::Startup;
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(1000.0, 700.0))
+            .build_eframe(|_| app);
+        harness.run();
+
+        for label in ["New Project", "Open Project", "Recent Project"] {
+            assert!(harness.query_by_label(label).is_some(), "missing {label}");
+        }
+        assert!(harness.query_by_label("Height").is_none());
+        assert!(harness.query_by_label("Calculate").is_none());
+        assert!(harness.query_by_label("File").is_some());
+        assert!(harness.query_by_label("Run").is_none());
+    }
+
+    #[test]
     fn kittest_shows_parameter_tooltip_when_hovering_field() {
         let mut harness = Harness::builder()
             .with_size(egui::vec2(500.0, 900.0))
@@ -5607,12 +5860,40 @@ mod tests {
             viewport_rotation_degrees: 42.5,
             auto_recalculate: true,
             show_input_overlay: false,
+            recent_projects: vec!["/tmp/recent\\=project.rgrv".to_owned()],
         };
 
         let encoded = preferences.to_text();
         let parsed = UiPreferences::parse(&encoded);
 
         assert_eq!(parsed, preferences);
+    }
+
+    #[test]
+    fn recent_projects_are_bounded_and_newest_first() {
+        let mut app = test_app();
+        for index in 0..(MAX_RECENT_PROJECTS + 2) {
+            app.record_recent_project(PathBuf::from(format!("/tmp/project-{index}.rgrv")));
+        }
+
+        assert_eq!(app.recent_projects.len(), MAX_RECENT_PROJECTS);
+        assert_eq!(
+            app.recent_projects.first(),
+            Some(&PathBuf::from("/tmp/project-11.rgrv"))
+        );
+
+        app.record_recent_project(PathBuf::from("/tmp/project-5.rgrv"));
+        assert_eq!(
+            app.recent_projects.first(),
+            Some(&PathBuf::from("/tmp/project-5.rgrv"))
+        );
+        assert_eq!(
+            app.recent_projects
+                .iter()
+                .filter(|path| path == &&PathBuf::from("/tmp/project-5.rgrv"))
+                .count(),
+            1
+        );
     }
 
     #[test]

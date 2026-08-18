@@ -161,6 +161,29 @@ modules:
 * ``preferences.rs`` persists small ``key=value`` UI preferences; ``widgets.rs``
   provides shared form rows and parameter help.
 
+The application lifecycle has two explicit screens:
+
+* ``Startup`` renders only the menu bar, the 20%-wide project-action pane,
+  and the 80%-wide logo pane. It does not start a calculation or expose
+  workbench controls.
+* ``Workbench`` renders the existing input, settings, preview, output, and
+  status panels. It is entered by selecting a new workbench or successfully
+  loading a project.
+
+Normal desktop launches enter ``Startup``. Explicit CLI input arguments retain
+the direct workbench launch path for batch-oriented workflows. The startup
+logo is embedded from ``assets/logo/logo-full.png`` at compile time so the
+installed application does not depend on the developer's absolute checkout
+path.
+
+Recent project paths are UI preference state. Successful project loads and
+saves move a path to the front of a bounded ten-entry list, remove duplicates,
+and persist the list as repeated ``recent_project=`` records. Missing paths
+are retained and disabled in the recent-project window rather than being
+silently discarded. Preference writes use a temporary sibling file followed by
+rename so a partially written recent-project list is not treated as valid UI
+state.
+
 The UI starts a calculation on a background thread, sends progress through an
 ``mpsc`` channel, and uses an ``Arc<AtomicBool>`` cancellation flag. Results
 are applied only for the current calculation id. This keeps the egui render

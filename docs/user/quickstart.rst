@@ -8,6 +8,31 @@ controller that will run it before cutting material.
 The workbench flow
 ------------------
 
+Startup screen
+~~~~~~~~~~~~~~
+
+When R-Engrave is opened without a command-line input, it starts on the
+project screen rather than opening a machining workbench. The screen contains
+the top navigation bar, a project-action pane, and the R-Engrave logo. No tool
+settings, input catalogs, or toolpath controls are shown until a project is
+created or opened.
+
+Choose one of the following actions:
+
+* **New Project** opens the workbench picker. Select Text Engrave, Text
+  V-carve, Text Inlay, Image Engrave, Image V-carve, or Image Inlay.
+* **Open Project** opens an existing ``.rgrv`` project file and then enters
+  its saved workbench.
+* **Recent Project** shows successfully opened or saved projects remembered
+  by R-Engrave. Unavailable files remain visible but disabled so their paths
+  can be located again with **Open Project**.
+
+Recent projects are stored in the per-user R-Engrave UI preferences, not in
+the project file. At most ten entries are retained, with the newest entry
+first. Choosing **Clear Recent Projects** removes the list.
+
+The normal workbench flow is:
+
 |workflow|
 
 The normal loop is:

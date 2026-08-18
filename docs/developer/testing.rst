@@ -11,7 +11,8 @@ Use the smallest test that proves the changed contract:
 * core integration/golden tests cover document loading, output text, SVG/DXF
   payloads, legacy round trips, and cross-module behavior;
 * UI library tests cover controls, stale/recalculation state, preview layers,
-  layout at representative desktop sizes, and egui harness interaction;
+  startup layout and actions, recent-project ordering, layout at representative
+  desktop sizes, and egui harness interaction;
 * CLI checks cover argument translation, artifact paths, and debug manifests.
 
 Typical commands:

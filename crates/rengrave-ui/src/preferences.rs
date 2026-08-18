@@ -20,6 +20,7 @@ pub(crate) struct UiPreferences {
     pub(crate) viewport_rotation_degrees: f64,
     pub(crate) auto_recalculate: bool,
     pub(crate) show_input_overlay: bool,
+    pub(crate) recent_projects: Vec<String>,
 }
 
 impl Default for UiPreferences {
@@ -38,6 +39,7 @@ impl Default for UiPreferences {
             viewport_rotation_degrees: 0.0,
             auto_recalculate: false,
             show_input_overlay: true,
+            recent_projects: Vec::new(),
         }
     }
 }
@@ -54,8 +56,13 @@ impl UiPreferences {
             fs::create_dir_all(parent)
                 .map_err(|err| format!("unable to create `{}`: {err}", parent.display()))?;
         }
-        fs::write(path, self.to_text())
-            .map_err(|err| format!("unable to write `{}`: {err}", path.display()))
+        let temporary_path = path.with_extension(format!("tmp-{}", std::process::id()));
+        fs::write(&temporary_path, self.to_text())
+            .map_err(|err| format!("unable to write `{}`: {err}", temporary_path.display()))?;
+        fs::rename(&temporary_path, path).map_err(|err| {
+            let _ = fs::remove_file(&temporary_path);
+            format!("unable to replace `{}`: {err}", path.display())
+        })
     }
 
     pub(crate) fn parse(input: &str) -> Self {
@@ -91,6 +98,9 @@ impl UiPreferences {
                 "show_input_overlay" => {
                     preferences.show_input_overlay = value != "0" && value != "false"
                 }
+                "recent_project" if !value.trim().is_empty() => {
+                    preferences.recent_projects.push(value)
+                }
                 _ => {}
             }
         }
@@ -124,6 +134,11 @@ impl UiPreferences {
             ),
         ]
         .into_iter()
+        .chain(
+            self.recent_projects
+                .iter()
+                .map(|path| ("recent_project", path.as_str())),
+        )
         .map(|(key, value)| format!("{key}={}", escape_pref_value(value)))
         .collect::<Vec<_>>()
         .join("\n")
