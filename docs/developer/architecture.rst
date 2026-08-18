@@ -1,157 +1,227 @@
-Architecture
-============
+R-Engrave architecture
+======================
 
-Design constraints
-------------------
+This page describes the architecture currently implemented under
+``crates/``. The central rule is that machining behavior belongs to
+``rengrave-core``; the desktop UI and command line interface are clients of
+the same calculation pipeline.
 
-R-Engrave is deliberately split so the UI is not the source of machining
-truth. ``rengrave-core`` owns settings, geometry, parsing, toolpath generation,
-and exports. Both ``rengrave-ui`` and ``rengrave-cli`` call that same core
-pipeline. ``f-engrave_source/`` is retained as a reference and should remain
-unchanged unless a task explicitly concerns upstream material or licensing.
+Workspace shape
+---------------
 
-::
+The Cargo workspace contains four crates:
 
-   rengrave-cli ───────┐
-                       ├──> rengrave-core ──> G-code / SVG / DXF
-   rengrave-ui ────────┘          │
-                                  ├──> preview geometry
-                                  ├──> warnings / progress
-                                  └──> legacy settings recovery
-
-The core has no dependency on ``eframe`` or ``egui``. The UI owns presentation,
-preferences, the input catalog, file dialogs, background calculation, and
-preview parsing. The CLI owns argument translation and file writes.
-
-Repository map
---------------
-
-.. list-table:: Repository map
+.. list-table:: Crates
    :header-rows: 1
-   :widths: 30 70
+   :widths: 25 75
 
-   * - Path
+   * - Crate
      - Responsibility
-   * - ``core/src/project.rs``
-     - document/project loading and path resolution
-   * - ``core/src/settings.rs``
-     - legacy keys, booleans, TCODE, defaults, emission
-   * - ``core/src/font.rs``
-     - CXF/TTF font parsing and glyph strokes
-   * - ``core/src/dxf.rs``
-     - DXF geometry and font-like vector input
-   * - ``core/src/svg.rs``
-     - SVG vector input
-   * - ``core/src/bitmap.rs``
-     - bitmap thresholding and native tracing handoff
-   * - ``core/src/layout.rs``
-     - text placement, transforms, bounds, origins
-   * - ``core/src/vcarve.rs``
-     - maximum-circle V-carve sampling and ordering
-   * - ``core/src/cleanup.rs``
-     - offsets, boolean regions, scanlines, ordering
-   * - ``core/src/profile.rs``
-     - profile envelope, corners, depth passes, tabs
-   * - ``core/src/gcode.rs``
-     - motion emission, arcs, trailers, simplification
-   * - ``core/src/export.rs``
-     - SVG and DXF serialization
-   * - ``core/src/batch.rs``
-     - shared staged pipeline and cancellation
-   * - ``ui/src/lib.rs``
-     - app state, worker lifecycle, panels, export UI
-   * - ``ui/src/preview.rs``
-     - parsed G-code preview layers and transforms
-   * - ``ui/src/controls.rs``
-     - UI-to-legacy settings mapping
-   * - ``ui/src/widgets.rs``
-     - Shared parameter rows and the centralized tooltip copy catalog
-   * - ``assets/icons/``
-     - Square generated workbench icons embedded by the desktop UI
-   * - ``cli/src/main.rs``
-     - clap options and artifact writing
+   * - ``rengrave-core``
+     - Settings compatibility, project files, input parsing, layout, toolpath
+       algorithms, G-code, SVG, and DXF generation.
+   * - ``rengrave-ui``
+     - Native ``eframe``/``egui`` application, controls, file browsing,
+       preferences, background calculation, and preview rendering.
+   * - ``rengrave-cli``
+     - ``clap`` command line entry point for GUI launch, batch output, direct
+       SVG/DXF exports, and debug artifacts.
+   * - ``rengrave-potrace``
+     - Native bitmap-to-curve tracing. It is used by ``rengrave-core`` and has
+       no dependency on the UI or CLI.
 
-Batch pipeline
+Dependency direction
+~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: text
+
+       user actions                         batch flags
+            |                                      |
+            v                                      v
+     +-------------+                        +-------------+
+     | rengrave-ui |                        | rengrave-cli|
+     +-------------+                        +-------------+
+            |                                      |
+            +------------------+-------------------+
+                               v
+                    +-----------------------+
+                    |    rengrave-core     |
+                    | model + calculations |
+                    +-----+------------+----+
+                          |            |
+                          v            v
+                 rengrave-potrace   output artifacts
+                                  G-code / SVG / DXF
+
+``rengrave-core`` has no ``egui`` or ``eframe`` dependency. This keeps the
+calculation and compatibility contract usable from both entry points and
+testable without a native window.
+
+Core data flow
 --------------
 
-``prepare_batch_output_with_cancel_and_progress`` is the integration seam for
-both UI and CLI. It reports explicit stages such as document loading, font/DXF/
-SVG loading, bitmap vectorization, layout, V-carve, cleanup, profile emission,
-and rendering. Cancellation is checked at stage and inner-loop boundaries.
+``batch::prepare_batch_output_with_cancel_and_progress`` is the integration
+seam used by the UI and CLI. It returns a ``BatchOutput`` containing primary
+G-code, warnings, optional companion G-code, and optional SVG/DXF strings.
 
-|workflow|
+.. code-block:: text
 
-The pipeline is intentionally staged:
+   BatchRequest
+       |
+       v
+   project::load_document
+       |  LegacySettings + text + resolved input + warnings
+       v
+   input loading / vectorization
+       |  Font and strokes
+       v
+   layout::layout_text
+       |  EngraveSegment + Bounds + optional circle border
+       v
+   operation selection
+       |-- engrave: gcode::write_engrave_gcode
+       |-- V-carve: vcarve + gcode::write_vcarve_gcode
+       |-- cleanup: cleanup + gcode::write_cleanup_gcode
+       `-- profile: profile + gcode::write_profile_gcode
+       |
+       +--> export::write_svg / write_dxf
+       `--> render settings, motion, and postamble
+                    |
+                    v
+              BatchOutput
 
-#. ``load_document`` reads defaults or legacy comments, applies path/text
-   overrides, normalizes bitmap settings, and resolves the actual input.
-#. The input is parsed or vectorized into stroke segments.
-#. ``layout_text`` applies scale, spacing, text-on-circle, transforms, box,
-   profile-aware origin bounds, and explicit X/Y origin offsets.
-#. The selected operation generates primary segments or depth-aware points.
-#. Optional cleanup and profile operations are generated as secondary or
-   companion operations.
-#. G-code is emitted with units, preamble, safe-Z/plunge/cut motion, optional
-   arcs, postamble, and return-to-origin.
-#. SVG and DXF are rendered from the shared primary layout representation.
+Every stage checks the caller's cancellation function. Progress is reported
+with the ``BatchProgress`` enum, including document loading, input parsing,
+layout, toolpath calculation, export preparation, rendering, and completion.
+Independent V-carve groups use Rayon where useful; results are collected in a
+defined order so generated output remains deterministic.
 
-Workbench picker
-----------------
+Core module map
+---------------
 
-``rengrave-ui/src/lib.rs`` owns the New Project modal. ``ToolView::ALL`` is
-the single ordered list for the six workbenches and its ``category_label``
-keeps text and image choices grouped. ``tool_icon_image`` maps each enum value
-to a compile-time PNG in ``assets/icons`` and supplies the same workbench name
-as both accessible image text and hover tooltip. The modal intentionally keeps
-the labels out of the normal tile surface so the icon is the primary choice,
-while retaining the accessible name for keyboard, test, and assistive-technology
-consumers.
+The public modules in ``crates/rengrave-core/src/lib.rs`` form a layered
+pipeline rather than separate application modes.
 
-Data ownership and invariants
------------------------------
+* ``project.rs`` loads legacy settings and versioned ``.rgrv`` JSON project
+  files, resolves input paths, and carries cached output/tool assignments.
+* ``settings.rs`` owns the ordered legacy key/value representation, defaults,
+  booleans, TCODE text settings, and compatibility serialization.
+* ``font.rs``, ``dxf.rs``, and ``svg.rs`` normalize CXF, TTF, DXF, and SVG
+  input into glyphs and strokes. ``bitmap.rs`` converts image input through
+  the native tracer and the same DXF/stroke path.
+* ``geometry.rs`` provides points and view-independent transforms. ``layout.rs``
+  turns strokes and text into final coordinate-space ``EngraveSegment`` values,
+  applying scale, spacing, justification, origins, rotation, circles, and
+  optional boxes.
+* ``vcarve.rs`` calculates depth-aware V-bit points and ordering.
+  ``cleanup.rs`` calculates offset, boolean, and scanline cleanup paths.
+  ``profile.rs`` creates profile envelopes, depth passes, chamfers, and tabs.
+* ``gcode.rs`` converts each operation into machine motion, including units,
+  safe-Z moves, plunge/cut feeds, optional arc fitting, tabs, preamble, and
+  postamble.
+* ``export.rs`` serializes the shared layout segments to SVG or DXF. The
+  exports do not reconstruct geometry from the UI or from G-code.
+* ``toolbit.rs`` stores persistent tool definitions and role assignments;
+  ``external.rs`` contains input-format classification helpers.
+* ``batch.rs`` composes all of these modules and is the stable application
+  boundary for calculation, progress, cancellation, and output collection.
 
-``Point`` and ``EngraveSegment`` represent model-space geometry. Segments carry
-``loop_id`` so path ordering and cleanup can recover loop boundaries. Bounds
-are axis-aligned in model coordinates. Toolpath point types add a cutter radius
-or Z-dependent state without mutating the source geometry.
+Shared model boundary
+---------------------
 
-The most important invariant is shared coordinates: input preview, generated
-toolpath preview, SVG/DXF export, and G-code must be derived from the same
-settings and transformed geometry. If a UI-only transform is introduced, it
-must be clearly marked as view state and must not change exported coordinates.
+The authoritative geometry is model-space ``Point`` and
+``layout::EngraveSegment`` data. Bounds, loop identifiers, toolpath points,
+preview geometry, SVG/DXF output, and G-code are derived from this coordinate
+space. A UI pan, zoom, or viewport rotation is view state and must not alter
+exported coordinates.
 
-UI lifecycle
-------------
+The project boundary is separate from the calculation boundary:
 
-The UI loads preferences and a ``DocumentRequest`` at startup, derives
-``UiControls`` from legacy settings, then launches a background calculation
-worker. The worker returns ``BatchOutput``; the UI parses primary and secondary
-G-code into preview layers and derives extents, move counts, cut/rapid lengths,
-arc counts, and warnings. Manual settings edits persist through UI preferences
-and stale-output detection names the changed request areas.
+* ``RengraveProjectFile`` persists versioned settings, text, input paths,
+  workbench information, toolbit snapshots, output paths, and matching output
+  caches.
+* ``BatchRequest`` describes one calculation. It is assembled from a project,
+  legacy settings file, CLI arguments, or UI controls.
+* ``BatchOutput`` is transient generated output. The UI may cache it in a
+  project only when it still represents the saved request.
 
-File-browser selections update the persisted ``default_dir_path`` preference
-with the selected file's parent directory. Loading a project uses its explicit
-default directory when present, or the project file's own directory otherwise,
-so the next dialog starts in a useful location across application sessions.
+Desktop UI lifecycle
+--------------------
 
-Loading a ``.rgrv`` first restores its optional embedded output cache when the
-project contains one. The cache includes the primary G-code and each secondary
-suffix (including profile output), and is accepted as current by assigning the
-same request represented by the loaded settings. Projects without a cache
-start the worker as usual. Secondary preview parsing must use the newly
-received ``BatchOutput`` directly before replacing the app's previous output
-state; this keeps profile and cleanup layers visible on both generation and
-load.
+``rengrave-ui/src/lib.rs`` owns ``RengraveApp`` and composes the private UI
+modules:
 
-Parameter help is centralized in ``rengrave-ui/src/widgets.rs``. Numeric,
-combo, text, and path rows attach the matching explanation to both the label
-and interactive control; parameter checkboxes use the same catalog, while
-cleanup-path checkboxes add index-specific descriptions because labels such as
-``X`` and ``Profile`` occur for both cutter types. Keep tooltip copy brief and
-describe the effect on layout, tool motion, output, or compatibility rather
-than repeating the visible label.
+* ``controls.rs`` maps widgets to legacy settings and detects stale output.
+* ``preview.rs`` parses primary and secondary G-code into preview layers and
+  performs model-to-screen transforms.
+* ``input_preview.rs`` shows source vectors or bitmap information before and
+  alongside the generated toolpath.
+* ``catalog.rs`` scans usable fonts and input files; ``browser.rs`` handles
+  project, input, directory, and output selections.
+* ``preferences.rs`` persists small ``key=value`` UI preferences; ``widgets.rs``
+  provides shared form rows and parameter help.
 
-The native preview applies pan, zoom, model rotation, and viewport rotation at
-draw time. Cursor coordinates are converted back through the same view
-transform so the readout remains in model space.
+The UI starts a calculation on a background thread, sends progress through an
+``mpsc`` channel, and uses an ``Arc<AtomicBool>`` cancellation flag. Results
+are applied only for the current calculation id. This keeps the egui render
+thread responsive and prevents an older result from replacing newer controls.
+
+.. code-block:: text
+
+   controls / project / file browser
+                    |
+                    v
+              BatchRequest
+                    |
+              background thread
+                    |
+       progress + BatchOutput messages
+                    |
+                    v
+   G-code parser -> preview layers -> canvas + status
+                    |
+                    +--> save primary and companion G-code
+                    +--> save SVG / DXF
+                    `--> persist matching project cache
+
+The preview parses generated G-code into distinct toolpath, rapid, cleanup,
+and tab layers. It reports extents, lengths, move counts, arcs, warnings, and
+the current model-space cursor position.
+
+CLI lifecycle
+-------------
+
+``rengrave-cli/src/main.rs`` parses options into a ``BatchRequest``. With
+``--batch`` it writes primary G-code (or stdout), companion outputs, and any
+requested SVG/DXF files. Without batch mode it calls ``rengrave-ui::run``.
+``--agent-debug-dir`` runs the same core calculation and writes a manifest plus
+deterministic G-code, SVG, DXF, and secondary-output artifacts for inspection.
+
+Compatibility and extension rules
+----------------------------------
+
+``f-engrave_source/`` is the upstream behavior and licensing reference and is
+not part of the Rust dependency graph. Legacy settings and generated G-code
+are compatibility boundaries: changes to geometry, ordering, depth, units, or
+formatting should be validated against focused tests and golden fixtures.
+
+New machining behavior normally belongs in ``rengrave-core`` first, with the
+UI exposing controls only after the core settings and pipeline behavior exist.
+The CLI should continue to call the shared batch seam rather than duplicating
+toolpath logic.
+
+Validation map
+--------------
+
+* Core unit tests sit beside the relevant module; cross-format and output
+  comparisons are under ``crates/rengrave-core/tests``.
+* UI behavior and preview parsing are tested in ``rengrave-ui/src/lib.rs`` with
+  egui harness tests where rendering or interaction is part of the contract.
+* CLI behavior is exercised through the shared core request and artifact
+  writers.
+
+Useful focused commands are ``cargo test -p rengrave-core``,
+``cargo test -p rengrave-ui --lib``, and
+``cargo run -p rengrave-cli -- -b -t "Text"``. These validate source-level
+behavior; they do not by themselves prove physical CNC motion or native GPU
+behavior.
