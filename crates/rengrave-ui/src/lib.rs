@@ -70,6 +70,7 @@ const STATUS_STRIP_HEIGHT: f32 = 26.0;
 const FORM_CONTROL_WIDTH: f32 = 170.0;
 const PATH_CONTROL_WIDTH: f32 = 244.0;
 const LOGO_SIZE: f32 = 40.0;
+const GENERAL_TAB_WIDTH: f32 = 28.0;
 const MAX_RECENT_PROJECTS: usize = 10;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3581,7 +3582,8 @@ fn full_width_button(ui: &mut egui::Ui, label: &str, enabled: bool) -> bool {
 }
 
 fn vertical_general_tab(ui: &mut egui::Ui, selected: bool, label: &str) -> bool {
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(42.0, 92.0), egui::Sense::click());
+    let (rect, response) =
+        ui.allocate_exact_size(egui::vec2(GENERAL_TAB_WIDTH, 92.0), egui::Sense::click());
     let visuals = ui.visuals();
     let fill = if selected {
         visuals.selection.bg_fill
