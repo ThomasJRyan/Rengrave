@@ -19,8 +19,10 @@ created or opened.
 
 Choose one of the following actions:
 
-* **New Project** opens the workbench picker. Select Text Engrave, Text
-  V-carve, Text Inlay, Image Engrave, Image V-carve, or Image Inlay.
+* **New Project** opens the workbench picker. Select General Purpose, Text
+  Engrave, Text V-carve, Text Inlay, Image Engrave, Image V-carve, or Image
+  Inlay. General Purpose currently provides the shared three-panel layout;
+  it does not create or configure tools.
 * **Open Project** opens an existing ``.rgrv`` project file and then enters
   its saved workbench.
 * **Recent Project** shows successfully opened or saved projects remembered
@@ -55,7 +57,8 @@ Choosing a new project
 Choose **File > New project** to open the workbench picker. Each workbench is
 represented by a square icon grouped under text or image generation. Hover an
 icon to see its workbench name, then click the icon to start that project type.
-The six choices are Text Engrave, Text V-carve, Text Inlay, Image Engrave,
+The picker also includes the layout-only General Purpose workbench. The six
+machining choices are Text Engrave, Text V-carve, Text Inlay, Image Engrave,
 Image V-carve, and Image Inlay.
 
 Launching the desktop application

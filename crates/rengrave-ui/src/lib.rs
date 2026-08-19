@@ -78,6 +78,19 @@ enum AppScreen {
     Workbench,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GeneralToolTab {
+    Tab1,
+    Tab2,
+    Tab3,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GeneralView {
+    TwoD,
+    ThreeD,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct UiLaunchOptions {
     pub gcode_file: Option<PathBuf>,
@@ -103,6 +116,8 @@ pub fn run(options: UiLaunchOptions) -> eframe::Result<()> {
 
 struct RengraveApp {
     screen: AppScreen,
+    general_tool_tab: GeneralToolTab,
+    general_view: GeneralView,
     text: String,
     transform: ViewTransform,
     preview_pitch_degrees: f64,
@@ -252,6 +267,8 @@ impl RengraveApp {
             } else {
                 AppScreen::Startup
             },
+            general_tool_tab: GeneralToolTab::Tab1,
+            general_view: GeneralView::TwoD,
             text: document.text,
             transform: ViewTransform {
                 zoom: DEFAULT_PREVIEW_ZOOM,
@@ -548,6 +565,9 @@ impl RengraveApp {
         self.status = format!("Project loaded: {}", path.display());
         self.refresh_input_catalog();
         self.save_preferences();
+        if self.tool_view == ToolView::GeneralPurpose {
+            return;
+        }
         if let Some(gcode) = project.outputs.embedded_gcode {
             self.apply_batch_output(BatchOutput {
                 gcode,
@@ -2113,6 +2133,16 @@ impl eframe::App for RengraveApp {
             return;
         }
 
+        if self.tool_view == ToolView::GeneralPurpose {
+            egui::Panel::top("general_nav")
+                .resizable(false)
+                .show_inside(ui, |ui| self.show_menu_bar(ui));
+            self.show_general_workbench(ui);
+            self.show_browser(ui.ctx());
+            self.show_new_project_modal(ui.ctx());
+            return;
+        }
+
         let top_rect = egui::Panel::top("toolbar")
             .resizable(false)
             .show_inside(ui, |ui| {
@@ -2249,6 +2279,83 @@ impl RengraveApp {
                         }
                     });
                 });
+            });
+    }
+
+    fn show_general_workbench(&mut self, ui: &mut egui::Ui) {
+        let available = ui.available_rect_before_wrap();
+        let left_width = available.width() * 0.15;
+        let center_width = available.width() * 0.70;
+        let left_rect =
+            egui::Rect::from_min_size(available.min, egui::vec2(left_width, available.height()));
+        let center_rect = egui::Rect::from_min_size(
+            egui::pos2(left_rect.max.x + 1.0, available.min.y),
+            egui::vec2(center_width, available.height()),
+        );
+        let right_rect = egui::Rect::from_min_max(
+            egui::pos2(center_rect.max.x + 1.0, available.min.y),
+            available.max,
+        );
+
+        egui::Frame::new()
+            .fill(ui.visuals().panel_fill)
+            .show(ui, |ui| {
+                ui.scope_builder(egui::UiBuilder::new().max_rect(left_rect), |ui| {
+                    ui.add_space(12.0);
+                    ui.vertical_centered(|ui| ui.strong("Tool Panel"));
+                    ui.add_space(8.0);
+                    for (tab, label) in [
+                        (GeneralToolTab::Tab1, "Tab 1"),
+                        (GeneralToolTab::Tab2, "Tab 2"),
+                        (GeneralToolTab::Tab3, "Tab 3"),
+                    ] {
+                        if ui
+                            .selectable_label(self.general_tool_tab == tab, label)
+                            .clicked()
+                        {
+                            self.general_tool_tab = tab;
+                        }
+                    }
+                });
+
+                ui.scope_builder(egui::UiBuilder::new().max_rect(center_rect), |ui| {
+                    ui.horizontal(|ui| {
+                        if ui
+                            .selectable_label(self.general_view == GeneralView::TwoD, "2D View")
+                            .clicked()
+                        {
+                            self.general_view = GeneralView::TwoD;
+                        }
+                        if ui
+                            .selectable_label(self.general_view == GeneralView::ThreeD, "3D View")
+                            .clicked()
+                        {
+                            self.general_view = GeneralView::ThreeD;
+                        }
+                    });
+                });
+
+                ui.scope_builder(egui::UiBuilder::new().max_rect(right_rect), |ui| {
+                    ui.add_space(12.0);
+                    ui.vertical_centered(|ui| ui.strong("Toolpath Panel"));
+                });
+
+                let separator_color = ui.visuals().widgets.noninteractive.bg_stroke.color;
+                let painter = ui.painter();
+                painter.line_segment(
+                    [
+                        egui::pos2(left_rect.max.x, available.min.y),
+                        egui::pos2(left_rect.max.x, available.max.y),
+                    ],
+                    egui::Stroke::new(1.0, separator_color),
+                );
+                painter.line_segment(
+                    [
+                        egui::pos2(center_rect.max.x, available.min.y),
+                        egui::pos2(center_rect.max.x, available.max.y),
+                    ],
+                    egui::Stroke::new(1.0, separator_color),
+                );
             });
     }
 
@@ -2576,7 +2683,7 @@ impl RengraveApp {
                 }
             });
 
-            if self.screen == AppScreen::Workbench {
+            if self.screen == AppScreen::Workbench && self.tool_view != ToolView::GeneralPurpose {
                 ui.menu_button("Run", |ui| {
                     if menu_action(ui, "Calculate", true) {
                         self.start_calculation(ui.ctx().clone());
@@ -2641,7 +2748,7 @@ impl RengraveApp {
             }
 
             #[cfg(debug_assertions)]
-            if self.screen == AppScreen::Workbench {
+            if self.screen == AppScreen::Workbench && self.tool_view != ToolView::GeneralPurpose {
                 self.show_debug_menu(ui);
             }
         });
@@ -2724,6 +2831,10 @@ impl RengraveApp {
             ui.set_width(420.0);
             ui.heading("New project");
             ui.add_space(6.0);
+            if full_width_button(ui, ToolView::GeneralPurpose.label(), true) {
+                selected = Some(ToolView::GeneralPurpose);
+            }
+            ui.add_space(8.0);
             for category in ["Text generation", "Image generation"] {
                 ui.label(egui::RichText::new(category).strong());
                 ui.add_space(2.0);
@@ -3468,6 +3579,7 @@ fn full_width_button(ui: &mut egui::Ui, label: &str, enabled: bool) -> bool {
 
 fn tool_icon_bytes(tool_view: ToolView) -> (&'static str, &'static [u8]) {
     match tool_view {
+        ToolView::GeneralPurpose => panic!("general purpose workbench has no tool icon"),
         ToolView::TextEngrave => (
             "bytes://tool-icon/text-engrave",
             include_bytes!("../../../assets/icons/text-engrave.png"),
@@ -3596,6 +3708,8 @@ mod tests {
 
         RengraveApp {
             screen: AppScreen::Workbench,
+            general_tool_tab: GeneralToolTab::Tab1,
+            general_view: GeneralView::TwoD,
             text: document.text,
             transform: ViewTransform {
                 zoom: DEFAULT_PREVIEW_ZOOM,
@@ -4746,6 +4860,11 @@ mod tests {
         assert_eq!(ToolView::TextEngrave.category_label(), "Text generation");
         assert_eq!(ToolView::ImageInlay.category_label(), "Image generation");
         assert_eq!(ToolView::ImageInlay.value(), "image-inlay");
+        assert_eq!(ToolView::GeneralPurpose.value(), "general-purpose");
+        assert_eq!(
+            ToolView::parse("general-purpose"),
+            Some(ToolView::GeneralPurpose)
+        );
         assert_eq!(ToolView::parse("image-inlay"), Some(ToolView::ImageInlay));
         assert_eq!(ToolView::parse("unknown"), None);
         assert_eq!(
@@ -5754,6 +5873,37 @@ mod tests {
     }
 
     #[test]
+    fn kittest_general_workbench_has_layout_tabs_without_tools() {
+        let mut app = test_app();
+        app.tool_view = ToolView::GeneralPurpose;
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(1000.0, 700.0))
+            .build_eframe(|_| app);
+        harness.run();
+
+        for label in [
+            "Tool Panel",
+            "Tab 1",
+            "Tab 2",
+            "Tab 3",
+            "2D View",
+            "3D View",
+            "Toolpath Panel",
+        ] {
+            assert!(harness.query_by_label(label).is_some(), "missing {label}");
+        }
+        assert!(harness.query_by_label("Run").is_none());
+        assert!(harness.query_by_label("Calculate").is_none());
+
+        harness.get_by_label("Tab 2").click();
+        harness.run();
+        assert_eq!(harness.state().general_tool_tab, GeneralToolTab::Tab2);
+        harness.get_by_label("3D View").click();
+        harness.run();
+        assert_eq!(harness.state().general_view, GeneralView::ThreeD);
+    }
+
+    #[test]
     fn kittest_shows_parameter_tooltip_when_hovering_field() {
         let mut harness = Harness::builder()
             .with_size(egui::vec2(500.0, 900.0))
@@ -5791,6 +5941,8 @@ mod tests {
                 tool_view.label()
             );
         }
+
+        assert!(harness.query_by_label("General Purpose").is_some());
 
         harness
             .get_all_by_label("Text Engrave")

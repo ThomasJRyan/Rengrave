@@ -90,6 +90,7 @@ pub(crate) struct UiControls {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ToolView {
+    GeneralPurpose,
     TextEngrave,
     ImageEngrave,
     TextVCarve,
@@ -110,6 +111,7 @@ impl ToolView {
 
     pub(crate) fn label(self) -> &'static str {
         match self {
+            Self::GeneralPurpose => "General Purpose",
             Self::TextEngrave => "Text Engrave",
             Self::ImageEngrave => "Image Engrave",
             Self::TextVCarve => "Text V-carve",
@@ -121,6 +123,7 @@ impl ToolView {
 
     pub(crate) fn index(self) -> usize {
         match self {
+            Self::GeneralPurpose => panic!("general purpose workbench has no tool icon index"),
             Self::TextEngrave => 0,
             Self::TextVCarve => 1,
             Self::TextInlay => 2,
@@ -132,6 +135,7 @@ impl ToolView {
 
     pub(crate) fn value(self) -> &'static str {
         match self {
+            Self::GeneralPurpose => "general-purpose",
             Self::TextEngrave => "text-engrave",
             Self::ImageEngrave => "image-engrave",
             Self::TextVCarve => "text-v-carve",
@@ -143,6 +147,7 @@ impl ToolView {
 
     pub(crate) fn parse(value: &str) -> Option<Self> {
         match value {
+            "general-purpose" => Some(Self::GeneralPurpose),
             "text-engrave" => Some(Self::TextEngrave),
             "image-engrave" => Some(Self::ImageEngrave),
             "text-v-carve" => Some(Self::TextVCarve),
@@ -154,6 +159,9 @@ impl ToolView {
     }
 
     pub(crate) fn category_label(self) -> &'static str {
+        if self == Self::GeneralPurpose {
+            return "General workbench";
+        }
         if self.uses_text() {
             "Text generation"
         } else {

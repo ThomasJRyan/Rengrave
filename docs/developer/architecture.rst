@@ -189,6 +189,14 @@ The UI starts a calculation on a background thread, sends progress through an
 are applied only for the current calculation id. This keeps the egui render
 thread responsive and prevents an older result from replacing newer controls.
 
+``ToolView::GeneralPurpose`` is the layout-only workbench foundation. It is
+persisted using the ``general-purpose`` workbench identifier but is not part
+of ``ToolView::ALL`` and therefore does not receive a machining-tool icon.
+Its renderer owns only two UI state values: the selected one of three neutral
+Tool Panel tabs and the selected 2D/3D Editor/Preview tab. The renderer
+allocates the available width as 15%, 70%, and 15% and leaves the panels
+otherwise unimplemented until future requirements define their contents.
+
 .. code-block:: text
 
    controls / project / file browser

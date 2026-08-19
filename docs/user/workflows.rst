@@ -22,10 +22,22 @@ vector geometry. Bitmaps are thresholded, alpha-composited over white, traced
 to vector paths, and then sent through the same downstream geometry path as
 other image inputs.
 
-The **File > New project** picker presents these six workbenches as square
-icons rather than full-width text buttons. Hover an icon to reveal the exact
+The **File > New project** picker presents the six machining workbenches as
+square icons rather than full-width text buttons, along with the **General
+Purpose** layout-only workbench. Hover a machining icon to reveal the exact
 workbench name; the icon remains clickable and the text and image groups keep
 the same ordering as the table above.
+
+General Purpose workbench
+-------------------------
+
+The General Purpose workbench is a layout foundation for the future shared
+workbench. It contains three horizontal panels: a 15%-wide Tool Panel, a
+70%-wide Editor/Preview Panel, and a 15%-wide Toolpath Panel. The Tool Panel
+has three switchable vertical tabs labelled **Tab 1**, **Tab 2**, and
+**Tab 3**. The Editor/Preview Panel has **2D View** and **3D View** tabs.
+These tabs currently switch layout state only; no tools or additional
+functionality are provided yet.
 
 Layout and coordinate choices
 -----------------------------
