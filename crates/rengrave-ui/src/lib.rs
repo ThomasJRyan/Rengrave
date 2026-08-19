@@ -2300,6 +2300,7 @@ impl RengraveApp {
         egui::Frame::new()
             .fill(ui.visuals().panel_fill)
             .show(ui, |ui| {
+                ui.set_min_size(available.size());
                 ui.scope_builder(egui::UiBuilder::new().max_rect(left_rect), |ui| {
                     ui.add_space(12.0);
                     ui.vertical_centered(|ui| ui.strong("Tool Panel"));
