@@ -2501,30 +2501,26 @@ impl RengraveApp {
                 });
 
                 general_setup_group(ui, "XY Datum Position", |ui| {
-                    ui.horizontal(|ui| {
-                        draw_general_xy_datum(ui);
-                        ui.vertical(|ui| {
-                            ui.checkbox(&mut self.general_job_setup.xy_use_offset, "Use Offset");
-                            general_offset_row(
-                                ui,
-                                "X",
-                                &mut self.general_job_setup.xy_offset_x,
-                                self.general_job_setup.xy_use_offset,
-                            );
-                            general_offset_row(
-                                ui,
-                                "Y",
-                                &mut self.general_job_setup.xy_offset_y,
-                                self.general_job_setup.xy_use_offset,
-                            );
-                        });
-                    });
+                    ui.vertical_centered(|ui| draw_general_xy_datum(ui));
+                    ui.checkbox(&mut self.general_job_setup.xy_use_offset, "Use Offset");
+                    general_offset_row(
+                        ui,
+                        "X",
+                        &mut self.general_job_setup.xy_offset_x,
+                        self.general_job_setup.xy_use_offset,
+                    );
+                    general_offset_row(
+                        ui,
+                        "Y",
+                        &mut self.general_job_setup.xy_offset_y,
+                        self.general_job_setup.xy_use_offset,
+                    );
                 });
 
                 general_setup_group(ui, "Modeling Resolution", |ui| {
                     egui::ComboBox::from_id_salt("general-modeling-resolution")
                         .selected_text("Standard (fastest)")
-                        .width(ui.available_width().max(100.0))
+                        .width(ui.available_width())
                         .show_ui(ui, |ui| {
                             ui.selectable_value(
                                 &mut self.general_job_setup.modeling_resolution,
@@ -3756,9 +3752,13 @@ fn full_width_button(ui: &mut egui::Ui, label: &str, enabled: bool) -> bool {
 }
 
 fn general_setup_group(ui: &mut egui::Ui, title: &str, add_contents: impl FnOnce(&mut egui::Ui)) {
+    let width = (ui.available_width() - 24.0).max(0.0);
     egui::Frame::group(ui.style())
         .inner_margin(egui::Margin::same(6))
         .show(ui, |ui| {
+            ui.set_max_width(width);
+            ui.set_min_width(width);
+            ui.set_width(width);
             ui.strong(title);
             ui.add_space(2.0);
             add_contents(ui);
@@ -3770,7 +3770,7 @@ fn general_dimension_row(ui: &mut egui::Ui, label: &str, value: &mut f64) {
     ui.horizontal(|ui| {
         ui.label(label);
         ui.add_sized(
-            egui::vec2(62.0, 22.0),
+            egui::vec2(48.0, 22.0),
             egui::DragValue::new(value).speed(0.1).range(0.0..=f64::MAX),
         );
     });
@@ -3781,7 +3781,7 @@ fn general_offset_row(ui: &mut egui::Ui, label: &str, value: &mut f64, enabled: 
         ui.label(label);
         ui.add_enabled_ui(enabled, |ui| {
             ui.add_sized(
-                egui::vec2(62.0, 22.0),
+                egui::vec2(48.0, 22.0),
                 egui::DragValue::new(value).speed(0.1),
             );
         });

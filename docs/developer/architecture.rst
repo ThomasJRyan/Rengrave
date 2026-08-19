@@ -200,7 +200,10 @@ first Tool Panel tab now owns a local ``GeneralJobSetup`` presentation state
 for job type, dimensions, units, Z zero, XY offset, and modeling resolution.
 This state is intentionally not included in ``BatchRequest``, project
 persistence, geometry, or export until the general workbench contract defines
-its backend behavior.
+its backend behavior. The presentation form is width-bounded by the Tool
+Panel's content area; fixed-size inputs are kept compact and the datum block
+uses a vertical arrangement so native egui controls cannot expand beyond the
+15% panel boundary.
 
 .. code-block:: text
 
