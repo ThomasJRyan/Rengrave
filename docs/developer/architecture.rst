@@ -194,7 +194,7 @@ persisted using the ``general-purpose`` workbench identifier but is not part
 of ``ToolView::ALL`` and therefore does not receive a machining-tool icon.
 Its renderer owns only two UI state values: the selected one of three neutral
 Tool Panel tabs and the selected 2D/3D Editor/Preview tab. The renderer
-allocates the available width as 15%, 70%, and 15% and leaves the panels
+allocates the available width as 20%, 65%, and 15% and leaves the panels
 otherwise unimplemented until future requirements define their contents. The
 first Tool Panel tab now owns a local ``GeneralJobSetup`` presentation state
 for job type, dimensions, units, Z zero, XY offset, and modeling resolution.
@@ -203,7 +203,7 @@ persistence, geometry, or export until the general workbench contract defines
 its backend behavior. The presentation form is width-bounded by the Tool
 Panel's content area; fixed-size inputs are kept compact and the datum block
 uses a vertical arrangement so native egui controls cannot expand beyond the
-15% panel boundary.
+20% panel boundary.
 
 .. code-block:: text
 

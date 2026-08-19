@@ -2346,8 +2346,8 @@ impl RengraveApp {
 
     fn show_general_workbench(&mut self, ui: &mut egui::Ui) {
         let available = ui.available_rect_before_wrap();
-        let left_width = available.width() * 0.15;
-        let center_width = available.width() * 0.70;
+        let left_width = available.width() * 0.20;
+        let center_width = available.width() * 0.65;
         let left_rect =
             egui::Rect::from_min_size(available.min, egui::vec2(left_width, available.height()));
         let center_rect = egui::Rect::from_min_size(

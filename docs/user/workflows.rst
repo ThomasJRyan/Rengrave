@@ -32,8 +32,8 @@ General Purpose workbench
 -------------------------
 
 The General Purpose workbench is a layout foundation for the future shared
-workbench. It contains three horizontal panels: a 15%-wide Tool Panel, a
-70%-wide Editor/Preview Panel, and a 15%-wide Toolpath Panel. The Tool Panel
+workbench. It contains three horizontal panels: a 20%-wide Tool Panel, a
+65%-wide Editor/Preview Panel, and a 15%-wide Toolpath Panel. The Tool Panel
 has three switchable vertical tabs labelled **Job Setup**, **Tab 2**, and
 **Tab 3**. The Editor/Preview Panel has **2D View** and **3D View** tabs.
 These tabs currently switch layout state only; no tools or additional
