@@ -195,7 +195,12 @@ of ``ToolView::ALL`` and therefore does not receive a machining-tool icon.
 Its renderer owns only two UI state values: the selected one of three neutral
 Tool Panel tabs and the selected 2D/3D Editor/Preview tab. The renderer
 allocates the available width as 15%, 70%, and 15% and leaves the panels
-otherwise unimplemented until future requirements define their contents.
+otherwise unimplemented until future requirements define their contents. The
+first Tool Panel tab now owns a local ``GeneralJobSetup`` presentation state
+for job type, dimensions, units, Z zero, XY offset, and modeling resolution.
+This state is intentionally not included in ``BatchRequest``, project
+persistence, geometry, or export until the general workbench contract defines
+its backend behavior.
 
 .. code-block:: text
 

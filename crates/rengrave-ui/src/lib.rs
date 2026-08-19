@@ -92,6 +92,65 @@ enum GeneralView {
     ThreeD,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum GeneralJobType {
+    #[default]
+    SingleSided,
+    DoubleSided,
+    Rotary,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum GeneralUnits {
+    #[default]
+    Inches,
+    Millimetres,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum GeneralZZero {
+    #[default]
+    MaterialSurface,
+    MachineBed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum GeneralModelingResolution {
+    #[default]
+    StandardFastest,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct GeneralJobSetup {
+    job_type: GeneralJobType,
+    width: f64,
+    height: f64,
+    thickness: f64,
+    units: GeneralUnits,
+    z_zero: GeneralZZero,
+    xy_use_offset: bool,
+    xy_offset_x: f64,
+    xy_offset_y: f64,
+    modeling_resolution: GeneralModelingResolution,
+}
+
+impl Default for GeneralJobSetup {
+    fn default() -> Self {
+        Self {
+            job_type: GeneralJobType::SingleSided,
+            width: 25.0,
+            height: 25.0,
+            thickness: 0.75,
+            units: GeneralUnits::Inches,
+            z_zero: GeneralZZero::MaterialSurface,
+            xy_use_offset: false,
+            xy_offset_x: 0.0,
+            xy_offset_y: 0.0,
+            modeling_resolution: GeneralModelingResolution::StandardFastest,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct UiLaunchOptions {
     pub gcode_file: Option<PathBuf>,
@@ -119,6 +178,7 @@ struct RengraveApp {
     screen: AppScreen,
     general_tool_tab: GeneralToolTab,
     general_view: GeneralView,
+    general_job_setup: GeneralJobSetup,
     text: String,
     transform: ViewTransform,
     preview_pitch_degrees: f64,
@@ -270,6 +330,7 @@ impl RengraveApp {
             },
             general_tool_tab: GeneralToolTab::Tab1,
             general_view: GeneralView::TwoD,
+            general_job_setup: GeneralJobSetup::default(),
             text: document.text,
             transform: ViewTransform {
                 zoom: DEFAULT_PREVIEW_ZOOM,
@@ -2306,19 +2367,34 @@ impl RengraveApp {
                     ui.add_space(12.0);
                     ui.vertical_centered(|ui| ui.strong("Tool Panel"));
                     ui.add_space(8.0);
+                    let tab_area_height = ui.available_height();
                     ui.horizontal(|ui| {
-                        ui.vertical(|ui| {
-                            for (tab, label) in [
-                                (GeneralToolTab::Tab1, "Tab 1"),
-                                (GeneralToolTab::Tab2, "Tab 2"),
-                                (GeneralToolTab::Tab3, "Tab 3"),
-                            ] {
-                                if vertical_general_tab(ui, self.general_tool_tab == tab, label) {
-                                    self.general_tool_tab = tab;
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(GENERAL_TAB_WIDTH, tab_area_height),
+                            egui::Layout::top_down(egui::Align::Min),
+                            |ui| {
+                                for (tab, label) in [
+                                    (GeneralToolTab::Tab1, "Job Setup"),
+                                    (GeneralToolTab::Tab2, "Tab 2"),
+                                    (GeneralToolTab::Tab3, "Tab 3"),
+                                ] {
+                                    if vertical_general_tab(ui, self.general_tool_tab == tab, label)
+                                    {
+                                        self.general_tool_tab = tab;
+                                    }
                                 }
-                            }
-                        });
-                        ui.allocate_space(egui::vec2(ui.available_width(), 1.0));
+                            },
+                        );
+                        ui.separator();
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(ui.available_width(), tab_area_height),
+                            egui::Layout::top_down(egui::Align::Min),
+                            |ui| {
+                                if self.general_tool_tab == GeneralToolTab::Tab1 {
+                                    self.show_general_job_setup(ui);
+                                }
+                            },
+                        );
                     });
                 });
 
@@ -2360,6 +2436,104 @@ impl RengraveApp {
                     ],
                     egui::Stroke::new(1.0, separator_color),
                 );
+            });
+    }
+
+    fn show_general_job_setup(&mut self, ui: &mut egui::Ui) {
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.strong("Job Setup");
+                ui.add_space(4.0);
+
+                general_setup_group(ui, "Job Type", |ui| {
+                    ui.radio_value(
+                        &mut self.general_job_setup.job_type,
+                        GeneralJobType::SingleSided,
+                        "Single Sided",
+                    );
+                    ui.radio_value(
+                        &mut self.general_job_setup.job_type,
+                        GeneralJobType::DoubleSided,
+                        "Double Sided",
+                    );
+                    ui.radio_value(
+                        &mut self.general_job_setup.job_type,
+                        GeneralJobType::Rotary,
+                        "Rotary",
+                    );
+                });
+
+                general_setup_group(ui, "Job Size", |ui| {
+                    general_dimension_row(ui, "Width (X)", &mut self.general_job_setup.width);
+                    general_dimension_row(ui, "Height (Y)", &mut self.general_job_setup.height);
+                    general_dimension_row(
+                        ui,
+                        "Thickness (Z)",
+                        &mut self.general_job_setup.thickness,
+                    );
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label("Units");
+                        ui.radio_value(
+                            &mut self.general_job_setup.units,
+                            GeneralUnits::Inches,
+                            "inches",
+                        );
+                        ui.radio_value(
+                            &mut self.general_job_setup.units,
+                            GeneralUnits::Millimetres,
+                            "mm",
+                        );
+                    });
+                });
+
+                general_setup_group(ui, "Z Zero Position", |ui| {
+                    ui.radio_value(
+                        &mut self.general_job_setup.z_zero,
+                        GeneralZZero::MaterialSurface,
+                        "Material Surface",
+                    );
+                    ui.radio_value(
+                        &mut self.general_job_setup.z_zero,
+                        GeneralZZero::MachineBed,
+                        "Machine Bed",
+                    );
+                });
+
+                general_setup_group(ui, "XY Datum Position", |ui| {
+                    ui.horizontal(|ui| {
+                        draw_general_xy_datum(ui);
+                        ui.vertical(|ui| {
+                            ui.checkbox(&mut self.general_job_setup.xy_use_offset, "Use Offset");
+                            general_offset_row(
+                                ui,
+                                "X",
+                                &mut self.general_job_setup.xy_offset_x,
+                                self.general_job_setup.xy_use_offset,
+                            );
+                            general_offset_row(
+                                ui,
+                                "Y",
+                                &mut self.general_job_setup.xy_offset_y,
+                                self.general_job_setup.xy_use_offset,
+                            );
+                        });
+                    });
+                });
+
+                general_setup_group(ui, "Modeling Resolution", |ui| {
+                    egui::ComboBox::from_id_salt("general-modeling-resolution")
+                        .selected_text("Standard (fastest)")
+                        .width(ui.available_width().max(100.0))
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut self.general_job_setup.modeling_resolution,
+                                GeneralModelingResolution::StandardFastest,
+                                "Standard (fastest)",
+                            );
+                        });
+                    ui.weak("1 million points");
+                });
             });
     }
 
@@ -3581,6 +3755,67 @@ fn full_width_button(ui: &mut egui::Ui, label: &str, enabled: bool) -> bool {
     .clicked()
 }
 
+fn general_setup_group(ui: &mut egui::Ui, title: &str, add_contents: impl FnOnce(&mut egui::Ui)) {
+    egui::Frame::group(ui.style())
+        .inner_margin(egui::Margin::same(6))
+        .show(ui, |ui| {
+            ui.strong(title);
+            ui.add_space(2.0);
+            add_contents(ui);
+        });
+    ui.add_space(4.0);
+}
+
+fn general_dimension_row(ui: &mut egui::Ui, label: &str, value: &mut f64) {
+    ui.horizontal(|ui| {
+        ui.label(label);
+        ui.add_sized(
+            egui::vec2(62.0, 22.0),
+            egui::DragValue::new(value).speed(0.1).range(0.0..=f64::MAX),
+        );
+    });
+}
+
+fn general_offset_row(ui: &mut egui::Ui, label: &str, value: &mut f64, enabled: bool) {
+    ui.horizontal(|ui| {
+        ui.label(label);
+        ui.add_enabled_ui(enabled, |ui| {
+            ui.add_sized(
+                egui::vec2(62.0, 22.0),
+                egui::DragValue::new(value).speed(0.1),
+            );
+        });
+    });
+}
+
+fn draw_general_xy_datum(ui: &mut egui::Ui) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(48.0, 56.0), egui::Sense::hover());
+    let painter = ui.painter();
+    let stock = egui::Rect::from_min_size(
+        egui::pos2(rect.left() + 10.0, rect.top() + 14.0),
+        egui::vec2(30.0, 28.0),
+    );
+    painter.rect_filled(stock, 1.0, egui::Color32::from_rgb(176, 140, 105));
+    painter.rect_stroke(
+        stock,
+        1.0,
+        egui::Stroke::new(1.0, egui::Color32::from_rgb(214, 220, 224)),
+        egui::StrokeKind::Inside,
+    );
+    painter.line_segment(
+        [
+            stock.left_top(),
+            egui::pos2(stock.left() - 8.0, stock.bottom() + 5.0),
+        ],
+        egui::Stroke::new(1.0, egui::Color32::from_rgb(214, 220, 224)),
+    );
+    painter.circle_filled(
+        egui::pos2(stock.left() - 1.0, stock.bottom() + 1.0),
+        3.5,
+        egui::Color32::from_rgb(194, 57, 57),
+    );
+}
+
 fn vertical_general_tab(ui: &mut egui::Ui, selected: bool, label: &str) -> bool {
     let (rect, response) =
         ui.allocate_exact_size(egui::vec2(GENERAL_TAB_WIDTH, 92.0), egui::Sense::click());
@@ -3752,6 +3987,7 @@ mod tests {
             screen: AppScreen::Workbench,
             general_tool_tab: GeneralToolTab::Tab1,
             general_view: GeneralView::TwoD,
+            general_job_setup: GeneralJobSetup::default(),
             text: document.text,
             transform: ViewTransform {
                 zoom: DEFAULT_PREVIEW_ZOOM,
@@ -5925,14 +6161,22 @@ mod tests {
 
         for label in [
             "Tool Panel",
-            "Tab 1",
+            "Job Setup",
             "Tab 2",
             "Tab 3",
             "2D View",
             "3D View",
             "Toolpath Panel",
+            "Job Type",
+            "Job Size",
+            "Z Zero Position",
+            "XY Datum Position",
+            "Modeling Resolution",
         ] {
-            assert!(harness.query_by_label(label).is_some(), "missing {label}");
+            assert!(
+                harness.query_all_by_label(label).next().is_some(),
+                "missing {label}"
+            );
         }
         assert!(harness.query_by_label("Run").is_none());
         assert!(harness.query_by_label("Calculate").is_none());

@@ -34,10 +34,15 @@ General Purpose workbench
 The General Purpose workbench is a layout foundation for the future shared
 workbench. It contains three horizontal panels: a 15%-wide Tool Panel, a
 70%-wide Editor/Preview Panel, and a 15%-wide Toolpath Panel. The Tool Panel
-has three switchable vertical tabs labelled **Tab 1**, **Tab 2**, and
+has three switchable vertical tabs labelled **Job Setup**, **Tab 2**, and
 **Tab 3**. The Editor/Preview Panel has **2D View** and **3D View** tabs.
 These tabs currently switch layout state only; no tools or additional
 functionality are provided yet.
+
+The **Job Setup** tab presents the planned job setup surface with controls for
+job type, job size and units, Z zero position, XY datum offset, and modeling
+resolution. These controls are UI scaffolding only and do not yet change
+geometry, calculations, or machine output.
 
 Layout and coordinate choices
 -----------------------------
