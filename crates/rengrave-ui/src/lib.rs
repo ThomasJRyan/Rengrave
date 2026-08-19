@@ -2305,15 +2305,20 @@ impl RengraveApp {
                     ui.add_space(12.0);
                     ui.vertical_centered(|ui| ui.strong("Tool Panel"));
                     ui.add_space(8.0);
-                    for (tab, label) in [
-                        (GeneralToolTab::Tab1, "Tab 1"),
-                        (GeneralToolTab::Tab2, "Tab 2"),
-                        (GeneralToolTab::Tab3, "Tab 3"),
-                    ] {
-                        if vertical_general_tab(ui, self.general_tool_tab == tab, label) {
-                            self.general_tool_tab = tab;
-                        }
-                    }
+                    ui.horizontal(|ui| {
+                        ui.vertical(|ui| {
+                            for (tab, label) in [
+                                (GeneralToolTab::Tab1, "Tab 1"),
+                                (GeneralToolTab::Tab2, "Tab 2"),
+                                (GeneralToolTab::Tab3, "Tab 3"),
+                            ] {
+                                if vertical_general_tab(ui, self.general_tool_tab == tab, label) {
+                                    self.general_tool_tab = tab;
+                                }
+                            }
+                        });
+                        ui.allocate_space(egui::vec2(ui.available_width(), 1.0));
+                    });
                 });
 
                 ui.scope_builder(egui::UiBuilder::new().max_rect(center_rect), |ui| {
@@ -3576,8 +3581,7 @@ fn full_width_button(ui: &mut egui::Ui, label: &str, enabled: bool) -> bool {
 }
 
 fn vertical_general_tab(ui: &mut egui::Ui, selected: bool, label: &str) -> bool {
-    let (rect, response) =
-        ui.allocate_exact_size(egui::vec2(ui.available_width(), 72.0), egui::Sense::click());
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(42.0, 92.0), egui::Sense::click());
     let visuals = ui.visuals();
     let fill = if selected {
         visuals.selection.bg_fill
