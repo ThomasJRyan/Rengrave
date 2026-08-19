@@ -2310,10 +2310,7 @@ impl RengraveApp {
                         (GeneralToolTab::Tab2, "Tab 2"),
                         (GeneralToolTab::Tab3, "Tab 3"),
                     ] {
-                        if ui
-                            .selectable_label(self.general_tool_tab == tab, label)
-                            .clicked()
-                        {
+                        if vertical_general_tab(ui, self.general_tool_tab == tab, label) {
                             self.general_tool_tab = tab;
                         }
                     }
@@ -3576,6 +3573,41 @@ fn full_width_button(ui: &mut egui::Ui, label: &str, enabled: bool) -> bool {
         egui::Button::new(label).min_size(egui::vec2(width, 26.0)),
     )
     .clicked()
+}
+
+fn vertical_general_tab(ui: &mut egui::Ui, selected: bool, label: &str) -> bool {
+    let (rect, response) =
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), 72.0), egui::Sense::click());
+    let visuals = ui.visuals();
+    let fill = if selected {
+        visuals.selection.bg_fill
+    } else if response.hovered() {
+        visuals.widgets.hovered.bg_fill
+    } else {
+        egui::Color32::TRANSPARENT
+    };
+    if fill != egui::Color32::TRANSPARENT {
+        ui.painter().rect_filled(rect, 2.0, fill);
+    }
+
+    let text_color = if selected {
+        visuals.selection.stroke.color
+    } else {
+        visuals.text_color()
+    };
+    let galley = ui.painter().layout_no_wrap(
+        label.to_owned(),
+        egui::FontId::proportional(13.0),
+        text_color,
+    );
+    ui.painter().add(
+        egui::epaint::TextShape::new(rect.center(), galley, text_color)
+            .with_angle_and_anchor(-std::f32::consts::FRAC_PI_2, egui::Align2::CENTER_CENTER),
+    );
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::SelectableLabel, ui.is_enabled(), label)
+    });
+    response.clicked()
 }
 
 fn tool_icon_bytes(tool_view: ToolView) -> (&'static str, &'static [u8]) {
