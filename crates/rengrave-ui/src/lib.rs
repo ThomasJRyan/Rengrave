@@ -3606,10 +3606,13 @@ fn vertical_general_tab(ui: &mut egui::Ui, selected: bool, label: &str) -> bool 
         egui::FontId::proportional(13.0),
         text_color,
     );
-    ui.painter().add(
-        egui::epaint::TextShape::new(rect.center(), galley, text_color)
-            .with_angle_and_anchor(-std::f32::consts::FRAC_PI_2, egui::Align2::CENTER_CENTER),
-    );
+    let angle = -std::f32::consts::FRAC_PI_2;
+    let rotated_bounds = galley
+        .mesh_bounds
+        .rotate_bb(egui::emath::Rot2::from_angle(angle));
+    let text_pos = rect.center() - rotated_bounds.center().to_vec2();
+    ui.painter()
+        .add(egui::epaint::TextShape::new(text_pos, galley, text_color).with_angle(angle));
     response.widget_info(|| {
         egui::WidgetInfo::labeled(egui::WidgetType::SelectableLabel, ui.is_enabled(), label)
     });
