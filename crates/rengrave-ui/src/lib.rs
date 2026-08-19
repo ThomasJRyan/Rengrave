@@ -71,6 +71,7 @@ const FORM_CONTROL_WIDTH: f32 = 170.0;
 const PATH_CONTROL_WIDTH: f32 = 244.0;
 const LOGO_SIZE: f32 = 40.0;
 const GENERAL_TAB_WIDTH: f32 = 28.0;
+const GENERAL_TOOL_PANEL_RATIO: f32 = 0.20;
 const MAX_RECENT_PROJECTS: usize = 10;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2346,7 +2347,7 @@ impl RengraveApp {
 
     fn show_general_workbench(&mut self, ui: &mut egui::Ui) {
         let available = ui.available_rect_before_wrap();
-        let left_width = available.width() * 0.20;
+        let left_width = (available.width() * GENERAL_TOOL_PANEL_RATIO).min(available.width());
         let center_width = available.width() * 0.65;
         let left_rect =
             egui::Rect::from_min_size(available.min, egui::vec2(left_width, available.height()));
@@ -2369,6 +2370,7 @@ impl RengraveApp {
                     ui.add_space(8.0);
                     let tab_area_height = ui.available_height();
                     ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 0.0;
                         ui.allocate_ui_with_layout(
                             egui::vec2(GENERAL_TAB_WIDTH, tab_area_height),
                             egui::Layout::top_down(egui::Align::Min),
