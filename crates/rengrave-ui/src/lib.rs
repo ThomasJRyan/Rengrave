@@ -2506,16 +2506,22 @@ impl RengraveApp {
                         GeneralJobType::SingleSided,
                         "Single Sided",
                     );
-                    ui.radio_value(
-                        &mut self.general_job_setup.job_type,
-                        GeneralJobType::DoubleSided,
-                        "Double Sided",
-                    );
-                    ui.radio_value(
-                        &mut self.general_job_setup.job_type,
-                        GeneralJobType::Rotary,
-                        "Rotary",
-                    );
+                    ui.add_enabled_ui(false, |ui| {
+                        ui.radio_value(
+                            &mut self.general_job_setup.job_type,
+                            GeneralJobType::DoubleSided,
+                            "Double Sided",
+                        )
+                        .on_hover_text("Double Sided is not currently implemented.");
+                    });
+                    ui.add_enabled_ui(false, |ui| {
+                        ui.radio_value(
+                            &mut self.general_job_setup.job_type,
+                            GeneralJobType::Rotary,
+                            "Rotary",
+                        )
+                        .on_hover_text("Rotary is not currently implemented.");
+                    });
                 });
 
                 general_setup_group(ui, "Job Size", |ui| {
