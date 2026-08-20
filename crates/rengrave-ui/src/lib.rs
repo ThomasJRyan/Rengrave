@@ -185,7 +185,6 @@ struct RengraveApp {
     text: String,
     transform: ViewTransform,
     preview_pitch_degrees: f64,
-    general_2d_rotation_drag_start: Option<(f64, f64)>,
     status: String,
     settings_count: usize,
     project_path: String,
@@ -342,7 +341,6 @@ impl RengraveApp {
                 ..ViewTransform::default()
             },
             preview_pitch_degrees: -35.0,
-            general_2d_rotation_drag_start: None,
             status,
             settings_count: document.settings.entries.len(),
             project_path: String::new(),
@@ -2453,32 +2451,11 @@ impl RengraveApp {
     fn show_general_2d_view(&mut self, ui: &mut egui::Ui, rect: egui::Rect) {
         let response = ui.allocate_rect(rect, egui::Sense::click_and_drag());
         let hover_pos = response.hover_pos();
-        if response.drag_started_by(egui::PointerButton::Middle) {
-            self.general_2d_rotation_drag_start = Some((
-                self.transform.viewport_rotation_degrees,
-                self.preview_pitch_degrees,
-            ));
-        }
-        if response.dragged_by(egui::PointerButton::Middle) {
-            let (start_rotation, start_pitch) = self.general_2d_rotation_drag_start.unwrap_or((
-                self.transform.viewport_rotation_degrees,
-                self.preview_pitch_degrees,
-            ));
-            let delta = response.drag_delta();
-            let rotation_step = (f64::from(delta.x) * 0.35 / 5.0).round() * 5.0;
-            let pitch_step = (f64::from(delta.y) * 0.35 / 5.0).round() * 5.0;
-            self.transform.viewport_rotation_degrees = start_rotation + rotation_step;
-            self.preview_pitch_degrees =
-                (start_pitch + pitch_step).clamp(-MAX_PREVIEW_PITCH_DEGREES, 0.0);
-            ui.ctx().request_repaint();
-        } else if response.dragged_by(egui::PointerButton::Secondary) {
+        if response.dragged_by(egui::PointerButton::Secondary) {
             let delta = response.drag_delta();
             self.transform.pan.x += f64::from(delta.x);
             self.transform.pan.y += f64::from(delta.y);
             ui.ctx().request_repaint();
-        }
-        if response.drag_stopped_by(egui::PointerButton::Middle) {
-            self.general_2d_rotation_drag_start = None;
         }
         if response.hovered() {
             let (scroll_y, zoom_delta) =
@@ -4101,7 +4078,6 @@ mod tests {
                 ..ViewTransform::default()
             },
             preview_pitch_degrees: -35.0,
-            general_2d_rotation_drag_start: None,
             status: "Ready".to_owned(),
             settings_count: document.settings.entries.len(),
             project_path: String::new(),
