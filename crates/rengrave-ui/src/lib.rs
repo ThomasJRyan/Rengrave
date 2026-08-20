@@ -76,6 +76,7 @@ const GENERAL_SETUP_MAX_WIDTH: f32 = 198.0;
 const GENERAL_SETUP_CONTENT_WIDTH: f32 = 186.0;
 const GENERAL_RULER_TOP_HEIGHT: f32 = 24.0;
 const GENERAL_RULER_LEFT_WIDTH: f32 = GENERAL_RULER_TOP_HEIGHT;
+const GENERAL_FIT_PADDING: f32 = 24.0;
 const MAX_RECENT_PROJECTS: usize = 10;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -185,6 +186,7 @@ struct RengraveApp {
     general_view: GeneralView,
     general_job_setup: GeneralJobSetup,
     general_2d_transform: ViewTransform,
+    general_2d_view_initialized: bool,
     text: String,
     transform: ViewTransform,
     preview_pitch_degrees: f64,
@@ -341,6 +343,7 @@ impl RengraveApp {
                 zoom: DEFAULT_PREVIEW_ZOOM / 4.0,
                 ..ViewTransform::default()
             },
+            general_2d_view_initialized: false,
             text: document.text,
             transform: ViewTransform {
                 zoom: DEFAULT_PREVIEW_ZOOM,
@@ -2367,6 +2370,26 @@ impl RengraveApp {
         self.general_job_setup.units = units;
     }
 
+    fn center_general_job(&mut self, viewport_rect: egui::Rect) {
+        let width = general_display_value(
+            self.general_job_setup.width.max(0.001),
+            self.general_job_setup.units,
+        );
+        let height = general_display_value(
+            self.general_job_setup.height.max(0.001),
+            self.general_job_setup.units,
+        );
+        let available_width =
+            f64::from((viewport_rect.width() - GENERAL_FIT_PADDING * 2.0).max(1.0));
+        let available_height =
+            f64::from((viewport_rect.height() - GENERAL_FIT_PADDING * 2.0).max(1.0));
+        self.general_2d_transform.zoom = (available_width / width)
+            .min(available_height / height)
+            .clamp(1.0, 500.0);
+        self.general_2d_transform.pan = Point::default();
+        self.general_2d_transform.viewport_rotation_degrees = 0.0;
+    }
+
     fn show_general_workbench(&mut self, ui: &mut egui::Ui) {
         let available = ui.available_rect_before_wrap();
         let left_width = GENERAL_TOOL_PANEL_WIDTH.min(available.width());
@@ -2424,6 +2447,7 @@ impl RengraveApp {
                 });
 
                 ui.scope_builder(egui::UiBuilder::new().max_rect(center_rect), |ui| {
+                    let mut center_job = false;
                     ui.horizontal(|ui| {
                         if ui
                             .selectable_label(self.general_view == GeneralView::TwoD, "2D View")
@@ -2437,9 +2461,15 @@ impl RengraveApp {
                         {
                             self.general_view = GeneralView::ThreeD;
                         }
+                        ui.add_space((ui.available_width() - 100.0).max(0.0));
+                        center_job = ui.button("Center Job").clicked();
                     });
                     let viewport_rect = ui.available_rect_before_wrap();
                     if self.general_view == GeneralView::TwoD {
+                        if center_job || !self.general_2d_view_initialized {
+                            self.center_general_job(viewport_rect);
+                            self.general_2d_view_initialized = true;
+                        }
                         self.show_general_2d_view(ui, viewport_rect);
                     }
                 });
@@ -4343,6 +4373,7 @@ mod tests {
                 zoom: DEFAULT_PREVIEW_ZOOM / 4.0,
                 ..ViewTransform::default()
             },
+            general_2d_view_initialized: false,
             text: document.text,
             transform: ViewTransform {
                 zoom: DEFAULT_PREVIEW_ZOOM,
@@ -6521,6 +6552,7 @@ mod tests {
             "Tab 3",
             "2D View",
             "3D View",
+            "Center Job",
             "Toolpath Panel",
             "Job Type",
             "Job Size",
@@ -6535,6 +6567,8 @@ mod tests {
         }
         assert!(harness.query_by_label("Run").is_none());
         assert!(harness.query_by_label("Calculate").is_none());
+        assert!(harness.state().general_2d_view_initialized);
+        assert!(harness.state().general_2d_transform.zoom < DEFAULT_PREVIEW_ZOOM / 4.0);
 
         harness.get_by_label("Double Sided").hover();
         harness.run();
