@@ -2506,22 +2506,36 @@ impl RengraveApp {
                         GeneralJobType::SingleSided,
                         "Single Sided",
                     );
-                    ui.add_enabled_ui(false, |ui| {
-                        ui.radio_value(
-                            &mut self.general_job_setup.job_type,
-                            GeneralJobType::DoubleSided,
-                            "Double Sided",
-                        )
-                        .on_hover_text("Double Sided is not currently implemented.");
-                    });
-                    ui.add_enabled_ui(false, |ui| {
-                        ui.radio_value(
-                            &mut self.general_job_setup.job_type,
-                            GeneralJobType::Rotary,
-                            "Rotary",
-                        )
-                        .on_hover_text("Rotary is not currently implemented.");
-                    });
+                    let double_sided = ui
+                        .add_enabled_ui(false, |ui| {
+                            ui.radio_value(
+                                &mut self.general_job_setup.job_type,
+                                GeneralJobType::DoubleSided,
+                                "Double Sided",
+                            )
+                        })
+                        .inner;
+                    ui.interact(
+                        double_sided.rect,
+                        ui.id().with("double-sided-tooltip"),
+                        egui::Sense::hover(),
+                    )
+                    .on_hover_text("Double Sided is not currently implemented.");
+                    let rotary = ui
+                        .add_enabled_ui(false, |ui| {
+                            ui.radio_value(
+                                &mut self.general_job_setup.job_type,
+                                GeneralJobType::Rotary,
+                                "Rotary",
+                            )
+                        })
+                        .inner;
+                    ui.interact(
+                        rotary.rect,
+                        ui.id().with("rotary-tooltip"),
+                        egui::Sense::hover(),
+                    )
+                    .on_hover_text("Rotary is not currently implemented.");
                 });
 
                 general_setup_group(ui, "Job Size", |ui| {
@@ -6270,6 +6284,14 @@ mod tests {
         }
         assert!(harness.query_by_label("Run").is_none());
         assert!(harness.query_by_label("Calculate").is_none());
+
+        harness.get_by_label("Double Sided").hover();
+        harness.run();
+        assert!(
+            harness
+                .query_by_label("Double Sided is not currently implemented.")
+                .is_some()
+        );
 
         harness.get_by_label("Tab 2").click();
         harness.run();
