@@ -49,8 +49,11 @@ use up to two decimal places when zoomed in closely.
 
 The **Job Setup** tab presents the planned job setup surface with controls for
 job type, job size and units, Z zero position, XY datum offset, and modeling
-resolution. These controls are UI scaffolding only and do not yet change
-geometry, calculations, or machine output. The setup form stays within the
+resolution. Job dimensions and datum offsets are stored internally in
+millimetres. The controls display those values in the selected **inches** or
+**mm** unit, and changing units preserves the physical job dimensions while
+updating the canvas and ruler labels. These controls are UI scaffolding only
+and do not yet change machining geometry, calculations, or machine output. The setup form stays within the
 Tool Panel: fields use a compact aligned column, groups fill the panel width,
 and horizontal rows distribute their controls across the available group
 width. The XY datum illustration stacks above its controls when the panel is

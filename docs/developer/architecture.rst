@@ -57,6 +57,23 @@ Dependency direction
 calculation and compatibility contract usable from both entry points and
 testable without a native window.
 
+General workbench units
+-----------------------
+
+The General Purpose workbench keeps its job dimensions and XY datum offsets
+in millimetres in ``GeneralJobSetup``. ``general_display_value`` and
+``general_storage_value`` form the UI boundary: controls convert to the
+selected inches or millimetres display unit for editing, then immediately
+convert edits back to millimetres. This prevents unit changes from mutating
+the physical project dimensions.
+
+The 2D canvas and rulers use the selected display unit for screen coordinates
+and labels. When the unit selection changes, the workbench inversely rescales
+its view zoom by ``25.4`` so the same physical canvas remains the same size on
+screen while ruler values change to the new unit. The conversion is currently
+local to the layout-only General workbench; it should become part of the
+shared project model when that workbench gains a functional backend.
+
 Core data flow
 --------------
 

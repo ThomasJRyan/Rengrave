@@ -143,10 +143,10 @@ impl Default for GeneralJobSetup {
     fn default() -> Self {
         Self {
             job_type: GeneralJobType::SingleSided,
-            width: 25.0,
-            height: 25.0,
-            thickness: 0.75,
-            units: GeneralUnits::Inches,
+            width: 100.0,
+            height: 100.0,
+            thickness: 19.05,
+            units: GeneralUnits::Millimetres,
             z_zero: GeneralZZero::MaterialSurface,
             xy_use_offset: false,
             xy_offset_x: 0.0,
@@ -2354,6 +2354,19 @@ impl RengraveApp {
             });
     }
 
+    fn set_general_units(&mut self, units: GeneralUnits) {
+        if self.general_job_setup.units == units {
+            return;
+        }
+
+        self.general_2d_transform.zoom *= match (self.general_job_setup.units, units) {
+            (GeneralUnits::Inches, GeneralUnits::Millimetres) => 1.0 / MM_PER_INCH,
+            (GeneralUnits::Millimetres, GeneralUnits::Inches) => MM_PER_INCH,
+            _ => 1.0,
+        };
+        self.general_job_setup.units = units;
+    }
+
     fn show_general_workbench(&mut self, ui: &mut egui::Ui) {
         let available = ui.available_rect_before_wrap();
         let left_width = GENERAL_TOOL_PANEL_WIDTH.min(available.width());
@@ -2512,8 +2525,14 @@ impl RengraveApp {
                 )
             },
         );
-        let canvas_width = self.general_job_setup.width.max(0.0) * self.general_2d_transform.zoom;
-        let canvas_height = self.general_job_setup.height.max(0.0) * self.general_2d_transform.zoom;
+        let canvas_width = general_display_value(
+            self.general_job_setup.width.max(0.0),
+            self.general_job_setup.units,
+        ) * self.general_2d_transform.zoom;
+        let canvas_height = general_display_value(
+            self.general_job_setup.height.max(0.0),
+            self.general_job_setup.units,
+        ) * self.general_2d_transform.zoom;
         if canvas_width.is_finite() && canvas_height.is_finite() {
             let canvas_center = canvas_rect.center()
                 + egui::vec2(
@@ -2587,29 +2606,28 @@ impl RengraveApp {
                 });
 
                 general_setup_group(ui, "Job Size", |ui| {
-                    general_dimension_row(ui, "Width (X)", &mut self.general_job_setup.width);
-                    general_dimension_row(ui, "Height (Y)", &mut self.general_job_setup.height);
+                    let units = self.general_job_setup.units;
+                    general_dimension_row(
+                        ui,
+                        "Width (X)",
+                        &mut self.general_job_setup.width,
+                        units,
+                    );
+                    general_dimension_row(
+                        ui,
+                        "Height (Y)",
+                        &mut self.general_job_setup.height,
+                        units,
+                    );
                     general_dimension_row(
                         ui,
                         "Thickness (Z)",
                         &mut self.general_job_setup.thickness,
+                        units,
                     );
                     general_justified_row(ui, |ui| {
                         ui.label("Units");
                         let gap = ((ui.available_width() - 86.0) / 2.0).max(0.0);
-                        ui.add_space(gap);
-                        if ui
-                            .add_sized(
-                                egui::vec2(54.0, 22.0),
-                                egui::RadioButton::new(
-                                    self.general_job_setup.units == GeneralUnits::Inches,
-                                    "inches",
-                                ),
-                            )
-                            .clicked()
-                        {
-                            self.general_job_setup.units = GeneralUnits::Inches;
-                        }
                         ui.add_space(gap);
                         if ui
                             .add_sized(
@@ -2621,7 +2639,20 @@ impl RengraveApp {
                             )
                             .clicked()
                         {
-                            self.general_job_setup.units = GeneralUnits::Millimetres;
+                            self.set_general_units(GeneralUnits::Millimetres);
+                        }
+                        ui.add_space(gap);
+                        if ui
+                            .add_sized(
+                                egui::vec2(54.0, 22.0),
+                                egui::RadioButton::new(
+                                    self.general_job_setup.units == GeneralUnits::Inches,
+                                    "inches",
+                                ),
+                            )
+                            .clicked()
+                        {
+                            self.set_general_units(GeneralUnits::Inches);
                         }
                     });
                 });
@@ -2640,18 +2671,21 @@ impl RengraveApp {
                 });
 
                 general_setup_group(ui, "XY Datum Position", |ui| {
+                    let units = self.general_job_setup.units;
                     ui.vertical_centered(|ui| draw_general_xy_datum(ui));
                     ui.checkbox(&mut self.general_job_setup.xy_use_offset, "Use Offset");
                     general_offset_row(
                         ui,
                         "X",
                         &mut self.general_job_setup.xy_offset_x,
+                        units,
                         self.general_job_setup.xy_use_offset,
                     );
                     general_offset_row(
                         ui,
                         "Y",
                         &mut self.general_job_setup.xy_offset_y,
+                        units,
                         self.general_job_setup.xy_use_offset,
                     );
                 });
@@ -3908,27 +3942,58 @@ fn general_setup_group(ui: &mut egui::Ui, title: &str, add_contents: impl FnOnce
     ui.add_space(4.0);
 }
 
-fn general_dimension_row(ui: &mut egui::Ui, label: &str, value: &mut f64) {
+fn general_display_value(value_mm: f64, units: GeneralUnits) -> f64 {
+    match units {
+        GeneralUnits::Inches => value_mm / MM_PER_INCH,
+        GeneralUnits::Millimetres => value_mm,
+    }
+}
+
+fn general_storage_value(display_value: f64, units: GeneralUnits) -> f64 {
+    match units {
+        GeneralUnits::Inches => display_value * MM_PER_INCH,
+        GeneralUnits::Millimetres => display_value,
+    }
+}
+
+fn general_dimension_row(ui: &mut egui::Ui, label: &str, value_mm: &mut f64, units: GeneralUnits) {
     general_justified_row(ui, |ui| {
         ui.label(label);
         ui.add_space((ui.available_width() - 48.0).max(0.0));
-        ui.add_sized(
-            egui::vec2(48.0, 22.0),
-            egui::DragValue::new(value).speed(0.1).range(0.0..=f64::MAX),
-        );
+        let mut display_value = general_display_value(*value_mm, units);
+        if ui
+            .add_sized(
+                egui::vec2(48.0, 22.0),
+                egui::DragValue::new(&mut display_value)
+                    .speed(0.1)
+                    .range(0.0..=f64::MAX),
+            )
+            .changed()
+        {
+            *value_mm = general_storage_value(display_value, units);
+        }
     });
 }
 
-fn general_offset_row(ui: &mut egui::Ui, label: &str, value: &mut f64, enabled: bool) {
+fn general_offset_row(
+    ui: &mut egui::Ui,
+    label: &str,
+    value_mm: &mut f64,
+    units: GeneralUnits,
+    enabled: bool,
+) {
     general_justified_row(ui, |ui| {
         ui.label(label);
         ui.add_space((ui.available_width() - 48.0).max(0.0));
+        let mut display_value = general_display_value(*value_mm, units);
         ui.add_enabled_ui(enabled, |ui| {
             ui.add_sized(
                 egui::vec2(48.0, 22.0),
-                egui::DragValue::new(value).speed(0.1),
-            );
+                egui::DragValue::new(&mut display_value).speed(0.1),
+            )
+            .changed();
         });
+        *value_mm = general_storage_value(display_value, units);
     });
 }
 
@@ -4243,6 +4308,26 @@ mod tests {
             (actual - expected).abs() < 1e-9,
             "expected {expected}, got {actual}"
         );
+    }
+
+    #[test]
+    fn general_units_convert_through_millimetres() {
+        assert_close(general_display_value(635.0, GeneralUnits::Inches), 25.0);
+        assert_close(general_storage_value(25.0, GeneralUnits::Inches), 635.0);
+        assert_close(general_display_value(19.05, GeneralUnits::Inches), 0.75);
+        assert_close(
+            general_display_value(635.0, GeneralUnits::Millimetres),
+            635.0,
+        );
+    }
+
+    #[test]
+    fn general_job_setup_defaults_to_100_millimetres() {
+        let setup = GeneralJobSetup::default();
+        assert_eq!(setup.units, GeneralUnits::Millimetres);
+        assert_close(general_display_value(setup.width, setup.units), 100.0);
+        assert_close(general_display_value(setup.height, setup.units), 100.0);
+        assert_close(general_display_value(setup.thickness, setup.units), 19.05);
     }
 
     fn test_app() -> RengraveApp {
