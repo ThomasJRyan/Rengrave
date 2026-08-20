@@ -4037,6 +4037,13 @@ fn draw_general_rulers(
             crosshair_stroke,
         );
     }
+
+    let ruler_corner = egui::Rect::from_min_size(
+        viewport_rect.min,
+        egui::vec2(GENERAL_RULER_LEFT_WIDTH, GENERAL_RULER_TOP_HEIGHT),
+    );
+    painter.rect_filled(ruler_corner, 0.0, ruler_fill);
+    painter.rect_stroke(ruler_corner, 0.0, ruler_stroke, egui::StrokeKind::Inside);
 }
 
 fn general_ruler_label(value: f64, step: f64) -> String {
