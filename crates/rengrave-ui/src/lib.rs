@@ -182,6 +182,7 @@ struct RengraveApp {
     general_tool_tab: GeneralToolTab,
     general_view: GeneralView,
     general_job_setup: GeneralJobSetup,
+    general_2d_transform: ViewTransform,
     text: String,
     transform: ViewTransform,
     preview_pitch_degrees: f64,
@@ -334,6 +335,10 @@ impl RengraveApp {
             general_tool_tab: GeneralToolTab::Tab1,
             general_view: GeneralView::TwoD,
             general_job_setup: GeneralJobSetup::default(),
+            general_2d_transform: ViewTransform {
+                zoom: DEFAULT_PREVIEW_ZOOM / 4.0,
+                ..ViewTransform::default()
+            },
             text: document.text,
             transform: ViewTransform {
                 zoom: DEFAULT_PREVIEW_ZOOM,
@@ -2453,8 +2458,8 @@ impl RengraveApp {
         let hover_pos = response.hover_pos();
         if response.dragged_by(egui::PointerButton::Secondary) {
             let delta = response.drag_delta();
-            self.transform.pan.x += f64::from(delta.x);
-            self.transform.pan.y += f64::from(delta.y);
+            self.general_2d_transform.pan.x += f64::from(delta.x);
+            self.general_2d_transform.pan.y += f64::from(delta.y);
             ui.ctx().request_repaint();
         }
         if response.hovered() {
@@ -2471,7 +2476,7 @@ impl RengraveApp {
                 && let Some(anchor) = hover_pos
             {
                 preview::zoom_transform_at_screen_point(
-                    &mut self.transform,
+                    &mut self.general_2d_transform,
                     rect,
                     anchor,
                     zoom_factor,
@@ -2482,15 +2487,37 @@ impl RengraveApp {
 
         let painter = ui.painter().with_clip_rect(rect);
         painter.rect_filled(rect, 0.0, egui::Color32::from_rgb(28, 30, 32));
-        preview::draw_preview_grid(&painter, rect, self.transform, &|point| {
-            let (sin, cos) = self.transform.total_rotation_radians().sin_cos();
+        preview::draw_preview_grid(&painter, rect, self.general_2d_transform, &|point| {
+            let (sin, cos) = self.general_2d_transform.total_rotation_radians().sin_cos();
             let rotated = Point::new(point.x * cos - point.y * sin, point.x * sin + point.y * cos);
             egui::pos2(
-                rect.center().x + (rotated.x * self.transform.zoom + self.transform.pan.x) as f32,
-                rect.center().y - (rotated.y * self.transform.zoom) as f32
-                    + self.transform.pan.y as f32,
+                rect.center().x
+                    + (rotated.x * self.general_2d_transform.zoom + self.general_2d_transform.pan.x)
+                        as f32,
+                rect.center().y - (rotated.y * self.general_2d_transform.zoom) as f32
+                    + self.general_2d_transform.pan.y as f32,
             )
         });
+        let canvas_width = self.general_job_setup.width.max(0.0) * self.general_2d_transform.zoom;
+        let canvas_height = self.general_job_setup.height.max(0.0) * self.general_2d_transform.zoom;
+        if canvas_width.is_finite() && canvas_height.is_finite() {
+            let canvas_center = rect.center()
+                + egui::vec2(
+                    self.general_2d_transform.pan.x as f32,
+                    self.general_2d_transform.pan.y as f32,
+                );
+            let canvas_rect = egui::Rect::from_center_size(
+                canvas_center,
+                egui::vec2(canvas_width as f32, canvas_height as f32),
+            );
+            painter.rect_filled(canvas_rect, 0.0, egui::Color32::WHITE);
+            painter.rect_stroke(
+                canvas_rect,
+                0.0,
+                egui::Stroke::new(1.0, egui::Color32::from_rgb(150, 150, 150)),
+                egui::StrokeKind::Inside,
+            );
+        }
     }
 
     fn show_general_job_setup(&mut self, ui: &mut egui::Ui) {
@@ -4092,6 +4119,10 @@ mod tests {
             general_tool_tab: GeneralToolTab::Tab1,
             general_view: GeneralView::TwoD,
             general_job_setup: GeneralJobSetup::default(),
+            general_2d_transform: ViewTransform {
+                zoom: DEFAULT_PREVIEW_ZOOM / 4.0,
+                ..ViewTransform::default()
+            },
             text: document.text,
             transform: ViewTransform {
                 zoom: DEFAULT_PREVIEW_ZOOM,

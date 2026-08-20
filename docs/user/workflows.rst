@@ -38,9 +38,10 @@ The Tool Panel has three switchable vertical tabs labelled **Job Setup**, **Tab 
 **Tab 3**. The Editor/Preview Panel has **2D View** and **3D View** tabs.
 These tabs currently switch layout state only; no tools or additional
 functionality are provided yet. The **2D View** now shows a simple grid and
-uses the same navigation controls as the existing preview: primary or middle
-drag rotates the view, secondary drag pans it, and the mouse wheel zooms around
-the cursor.
+uses the same navigation controls as the existing preview for panning and
+zooming: secondary drag pans the view, and the mouse wheel zooms around the
+cursor. The white canvas rectangle is centered in the viewport and its
+width and height follow the **Width (X)** and **Height (Y)** Job Size values.
 
 The **Job Setup** tab presents the planned job setup surface with controls for
 job type, job size and units, Z zero position, XY datum offset, and modeling
