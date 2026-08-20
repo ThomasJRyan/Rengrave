@@ -2451,9 +2451,7 @@ impl RengraveApp {
     fn show_general_2d_view(&mut self, ui: &mut egui::Ui, rect: egui::Rect) {
         let response = ui.allocate_rect(rect, egui::Sense::click_and_drag());
         let hover_pos = response.hover_pos();
-        if response.dragged_by(egui::PointerButton::Primary)
-            || response.dragged_by(egui::PointerButton::Middle)
-        {
+        if response.dragged_by(egui::PointerButton::Middle) {
             let delta = response.drag_delta();
             self.transform.viewport_rotation_degrees += f64::from(delta.x) * 0.35;
             self.preview_pitch_degrees = (self.preview_pitch_degrees + f64::from(delta.y) * 0.35)
