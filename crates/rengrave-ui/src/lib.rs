@@ -74,6 +74,8 @@ const GENERAL_TAB_WIDTH: f32 = 28.0;
 const GENERAL_TOOL_PANEL_WIDTH: f32 = 256.0;
 const GENERAL_SETUP_MAX_WIDTH: f32 = 198.0;
 const GENERAL_SETUP_CONTENT_WIDTH: f32 = 186.0;
+const GENERAL_RULER_TOP_HEIGHT: f32 = 24.0;
+const GENERAL_RULER_LEFT_WIDTH: f32 = 44.0;
 const MAX_RECENT_PROJECTS: usize = 10;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2454,7 +2456,11 @@ impl RengraveApp {
     }
 
     fn show_general_2d_view(&mut self, ui: &mut egui::Ui, rect: egui::Rect) {
-        let response = ui.allocate_rect(rect, egui::Sense::click_and_drag());
+        let canvas_rect = egui::Rect::from_min_max(
+            rect.min + egui::vec2(GENERAL_RULER_LEFT_WIDTH, GENERAL_RULER_TOP_HEIGHT),
+            rect.max,
+        );
+        let response = ui.allocate_rect(canvas_rect, egui::Sense::click_and_drag());
         let hover_pos = response.hover_pos();
         if response.dragged_by(egui::PointerButton::Secondary) {
             let delta = response.drag_delta();
@@ -2477,7 +2483,7 @@ impl RengraveApp {
             {
                 preview::zoom_transform_at_screen_point(
                     &mut self.general_2d_transform,
-                    rect,
+                    canvas_rect,
                     anchor,
                     zoom_factor,
                 );
@@ -2487,21 +2493,28 @@ impl RengraveApp {
 
         let painter = ui.painter().with_clip_rect(rect);
         painter.rect_filled(rect, 0.0, egui::Color32::from_rgb(28, 30, 32));
-        preview::draw_preview_grid(&painter, rect, self.general_2d_transform, &|point| {
-            let (sin, cos) = self.general_2d_transform.total_rotation_radians().sin_cos();
-            let rotated = Point::new(point.x * cos - point.y * sin, point.x * sin + point.y * cos);
-            egui::pos2(
-                rect.center().x
-                    + (rotated.x * self.general_2d_transform.zoom + self.general_2d_transform.pan.x)
-                        as f32,
-                rect.center().y - (rotated.y * self.general_2d_transform.zoom) as f32
-                    + self.general_2d_transform.pan.y as f32,
-            )
-        });
+        let canvas_painter = painter.with_clip_rect(canvas_rect);
+        preview::draw_preview_grid(
+            &canvas_painter,
+            canvas_rect,
+            self.general_2d_transform,
+            &|point| {
+                let (sin, cos) = self.general_2d_transform.total_rotation_radians().sin_cos();
+                let rotated =
+                    Point::new(point.x * cos - point.y * sin, point.x * sin + point.y * cos);
+                egui::pos2(
+                    canvas_rect.center().x
+                        + (rotated.x * self.general_2d_transform.zoom
+                            + self.general_2d_transform.pan.x) as f32,
+                    canvas_rect.center().y - (rotated.y * self.general_2d_transform.zoom) as f32
+                        + self.general_2d_transform.pan.y as f32,
+                )
+            },
+        );
         let canvas_width = self.general_job_setup.width.max(0.0) * self.general_2d_transform.zoom;
         let canvas_height = self.general_job_setup.height.max(0.0) * self.general_2d_transform.zoom;
         if canvas_width.is_finite() && canvas_height.is_finite() {
-            let canvas_center = rect.center()
+            let canvas_center = canvas_rect.center()
                 + egui::vec2(
                     self.general_2d_transform.pan.x as f32,
                     self.general_2d_transform.pan.y as f32,
@@ -2510,14 +2523,21 @@ impl RengraveApp {
                 canvas_center,
                 egui::vec2(canvas_width as f32, canvas_height as f32),
             );
-            painter.rect_filled(canvas_rect, 0.0, egui::Color32::WHITE);
-            painter.rect_stroke(
+            canvas_painter.rect_filled(canvas_rect, 0.0, egui::Color32::WHITE);
+            canvas_painter.rect_stroke(
                 canvas_rect,
                 0.0,
                 egui::Stroke::new(1.0, egui::Color32::from_rgb(150, 150, 150)),
                 egui::StrokeKind::Inside,
             );
         }
+        draw_general_rulers(
+            &painter,
+            rect,
+            canvas_rect,
+            self.general_2d_transform,
+            hover_pos,
+        );
     }
 
     fn show_general_job_setup(&mut self, ui: &mut egui::Ui) {
@@ -3917,6 +3937,120 @@ fn general_justified_row(ui: &mut egui::Ui, add_contents: impl FnOnce(&mut egui:
         egui::Layout::left_to_right(egui::Align::Center),
         add_contents,
     );
+}
+
+fn draw_general_rulers(
+    painter: &egui::Painter,
+    viewport_rect: egui::Rect,
+    canvas_rect: egui::Rect,
+    transform: ViewTransform,
+    hover_pos: Option<egui::Pos2>,
+) {
+    let ruler_fill = egui::Color32::from_rgb(36, 39, 42);
+    let ruler_stroke = egui::Stroke::new(1.0, egui::Color32::from_rgb(70, 76, 80));
+    let tick_stroke = egui::Stroke::new(0.8, egui::Color32::from_rgb(126, 134, 139));
+    let major_tick_stroke = egui::Stroke::new(1.0, egui::Color32::from_rgb(181, 188, 192));
+    let label_color = egui::Color32::from_rgb(190, 196, 199);
+    let crosshair_stroke = egui::Stroke::new(1.0, egui::Color32::from_rgb(93, 127, 143));
+    let top_ruler = egui::Rect::from_min_max(
+        viewport_rect.min,
+        egui::pos2(viewport_rect.right(), canvas_rect.top()),
+    );
+    let left_ruler = egui::Rect::from_min_max(
+        viewport_rect.min,
+        egui::pos2(canvas_rect.left(), viewport_rect.bottom()),
+    );
+
+    painter.rect_filled(top_ruler, 0.0, ruler_fill);
+    painter.rect_filled(left_ruler, 0.0, ruler_fill);
+    painter.rect_stroke(top_ruler, 0.0, ruler_stroke, egui::StrokeKind::Inside);
+    painter.rect_stroke(left_ruler, 0.0, ruler_stroke, egui::StrokeKind::Inside);
+
+    let step = preview::nice_grid_step(transform.zoom);
+    let x_min =
+        (f64::from(canvas_rect.left() - canvas_rect.center().x) - transform.pan.x) / transform.zoom;
+    let x_max = (f64::from(canvas_rect.right() - canvas_rect.center().x) - transform.pan.x)
+        / transform.zoom;
+    let y_max =
+        (f64::from(canvas_rect.center().y - canvas_rect.top()) + transform.pan.y) / transform.zoom;
+    let y_min = (f64::from(canvas_rect.center().y - canvas_rect.bottom()) + transform.pan.y)
+        / transform.zoom;
+    let x_start = (x_min / step).floor() * step;
+    let y_start = (y_min / step).floor() * step;
+
+    let mut x = x_start;
+    while x <= x_max + step * 0.5 {
+        let screen_x = canvas_rect.center().x + (x * transform.zoom + transform.pan.x) as f32;
+        let major = (x / step).round().rem_euclid(5.0).abs() < f64::EPSILON;
+        let tick_height = if major { 10.0 } else { 6.0 };
+        painter.line_segment(
+            [
+                egui::pos2(screen_x, top_ruler.bottom() - tick_height),
+                egui::pos2(screen_x, top_ruler.bottom()),
+            ],
+            if major {
+                major_tick_stroke
+            } else {
+                tick_stroke
+            },
+        );
+        if major {
+            painter.text(
+                egui::pos2(screen_x + 3.0, top_ruler.top() + 3.0),
+                egui::Align2::LEFT_TOP,
+                preview::format_preview_coord(x),
+                egui::FontId::monospace(10.0),
+                label_color,
+            );
+        }
+        x += step;
+    }
+
+    let mut y = y_start;
+    while y <= y_max + step * 0.5 {
+        let screen_y =
+            canvas_rect.center().y - (y * transform.zoom) as f32 + transform.pan.y as f32;
+        let major = (y / step).round().rem_euclid(5.0).abs() < f64::EPSILON;
+        let tick_width = if major { 10.0 } else { 6.0 };
+        painter.line_segment(
+            [
+                egui::pos2(left_ruler.right() - tick_width, screen_y),
+                egui::pos2(left_ruler.right(), screen_y),
+            ],
+            if major {
+                major_tick_stroke
+            } else {
+                tick_stroke
+            },
+        );
+        if major {
+            painter.text(
+                egui::pos2(left_ruler.left() + 3.0, screen_y - 2.0),
+                egui::Align2::LEFT_BOTTOM,
+                preview::format_preview_coord(y),
+                egui::FontId::monospace(10.0),
+                label_color,
+            );
+        }
+        y += step;
+    }
+
+    if let Some(pointer) = hover_pos {
+        painter.line_segment(
+            [
+                egui::pos2(pointer.x, top_ruler.top()),
+                egui::pos2(pointer.x, canvas_rect.bottom()),
+            ],
+            crosshair_stroke,
+        );
+        painter.line_segment(
+            [
+                egui::pos2(left_ruler.left(), pointer.y),
+                egui::pos2(canvas_rect.right(), pointer.y),
+            ],
+            crosshair_stroke,
+        );
+    }
 }
 
 fn draw_general_xy_datum(ui: &mut egui::Ui) {

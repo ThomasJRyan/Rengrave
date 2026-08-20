@@ -202,6 +202,10 @@ transform, and ``ViewTransform`` state. Its painter is clipped to the center
 panel rect so transformed grid endpoints cannot paint into neighboring panels.
 The canvas is rendered from the local ``GeneralJobSetup`` width and height,
 centered at the viewport origin, and scaled by the General Purpose transform.
+Top and left rulers derive their tick positions from the same transform and
+canvas-centered coordinate system. When the pointer is over the canvas, the
+renderer draws clipped horizontal and vertical crosshair lines through the
+corresponding ruler positions.
 The
 first Tool Panel tab now owns a local ``GeneralJobSetup`` presentation state
 for job type, dimensions, units, Z zero, XY offset, and modeling resolution.

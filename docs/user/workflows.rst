@@ -42,6 +42,9 @@ uses the same navigation controls as the existing preview for panning and
 zooming: secondary drag pans the view, and the mouse wheel zooms around the
 cursor. The white canvas rectangle is centered in the viewport and its
 width and height follow the **Width (X)** and **Height (Y)** Job Size values.
+The 2D View also includes top and left rulers. Their zero point is the center
+of the canvas, and pointer crosshair lines track the cursor through the ruler
+and canvas area.
 
 The **Job Setup** tab presents the planned job setup surface with controls for
 job type, job size and units, Z zero position, XY datum offset, and modeling
