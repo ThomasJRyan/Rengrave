@@ -44,7 +44,8 @@ job type, job size and units, Z zero position, XY datum offset, and modeling
 resolution. These controls are UI scaffolding only and do not yet change
 geometry, calculations, or machine output. The setup form stays within the
 Tool Panel: fields use a compact aligned column, groups fill the panel width,
-and the XY datum illustration stacks above its controls when the panel is
+and horizontal rows distribute their controls across the available group
+width. The XY datum illustration stacks above its controls when the panel is
 narrow.
 
 Layout and coordinate choices

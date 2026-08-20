@@ -203,8 +203,9 @@ This state is intentionally not included in ``BatchRequest``, project
 persistence, geometry, or export until the general workbench contract defines
 its backend behavior. The presentation form is width-bounded by the Tool
 Panel's content area; fixed-size inputs are kept compact and the datum block
-uses a vertical arrangement so native egui controls cannot expand beyond the
-fixed-width panel boundary.
+uses a vertical arrangement. Horizontal setup rows use explicit inner-width
+spacing to align values at the right edge without allowing native egui
+controls to expand beyond the fixed-width panel boundary.
 
 .. code-block:: text
 

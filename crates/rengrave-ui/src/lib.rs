@@ -72,6 +72,8 @@ const PATH_CONTROL_WIDTH: f32 = 244.0;
 const LOGO_SIZE: f32 = 40.0;
 const GENERAL_TAB_WIDTH: f32 = 28.0;
 const GENERAL_TOOL_PANEL_WIDTH: f32 = 256.0;
+const GENERAL_SETUP_MAX_WIDTH: f32 = 210.0;
+const GENERAL_SETUP_CONTENT_WIDTH: f32 = 198.0;
 const MAX_RECENT_PROJECTS: usize = 10;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2475,18 +2477,35 @@ impl RengraveApp {
                         "Thickness (Z)",
                         &mut self.general_job_setup.thickness,
                     );
-                    ui.horizontal_wrapped(|ui| {
+                    general_justified_row(ui, |ui| {
                         ui.label("Units");
-                        ui.radio_value(
-                            &mut self.general_job_setup.units,
-                            GeneralUnits::Inches,
-                            "inches",
-                        );
-                        ui.radio_value(
-                            &mut self.general_job_setup.units,
-                            GeneralUnits::Millimetres,
-                            "mm",
-                        );
+                        let gap = ((ui.available_width() - 86.0) / 2.0).max(0.0);
+                        ui.add_space(gap);
+                        if ui
+                            .add_sized(
+                                egui::vec2(54.0, 22.0),
+                                egui::RadioButton::new(
+                                    self.general_job_setup.units == GeneralUnits::Inches,
+                                    "inches",
+                                ),
+                            )
+                            .clicked()
+                        {
+                            self.general_job_setup.units = GeneralUnits::Inches;
+                        }
+                        ui.add_space(gap);
+                        if ui
+                            .add_sized(
+                                egui::vec2(32.0, 22.0),
+                                egui::RadioButton::new(
+                                    self.general_job_setup.units == GeneralUnits::Millimetres,
+                                    "mm",
+                                ),
+                            )
+                            .clicked()
+                        {
+                            self.general_job_setup.units = GeneralUnits::Millimetres;
+                        }
                     });
                 });
 
@@ -3755,23 +3774,27 @@ fn full_width_button(ui: &mut egui::Ui, label: &str, enabled: bool) -> bool {
 }
 
 fn general_setup_group(ui: &mut egui::Ui, title: &str, add_contents: impl FnOnce(&mut egui::Ui)) {
-    let width = (ui.available_width() - 24.0).max(0.0);
-    egui::Frame::group(ui.style())
-        .inner_margin(egui::Margin::same(6))
-        .show(ui, |ui| {
-            ui.set_max_width(width);
-            ui.set_min_width(width);
-            ui.set_width(width);
-            ui.strong(title);
-            ui.add_space(2.0);
-            add_contents(ui);
-        });
+    let group_rect = egui::Rect::from_min_size(
+        ui.cursor().min,
+        egui::vec2(GENERAL_SETUP_MAX_WIDTH, ui.available_height()),
+    );
+    ui.scope_builder(egui::UiBuilder::new().max_rect(group_rect), |ui| {
+        egui::Frame::group(ui.style())
+            .inner_margin(egui::Margin::same(6))
+            .show(ui, |ui| {
+                ui.set_width(GENERAL_SETUP_MAX_WIDTH);
+                ui.strong(title);
+                ui.add_space(2.0);
+                add_contents(ui);
+            });
+    });
     ui.add_space(4.0);
 }
 
 fn general_dimension_row(ui: &mut egui::Ui, label: &str, value: &mut f64) {
-    ui.horizontal(|ui| {
+    general_justified_row(ui, |ui| {
         ui.label(label);
+        ui.add_space((ui.available_width() - 48.0).max(0.0));
         ui.add_sized(
             egui::vec2(48.0, 22.0),
             egui::DragValue::new(value).speed(0.1).range(0.0..=f64::MAX),
@@ -3780,8 +3803,9 @@ fn general_dimension_row(ui: &mut egui::Ui, label: &str, value: &mut f64) {
 }
 
 fn general_offset_row(ui: &mut egui::Ui, label: &str, value: &mut f64, enabled: bool) {
-    ui.horizontal(|ui| {
+    general_justified_row(ui, |ui| {
         ui.label(label);
+        ui.add_space((ui.available_width() - 48.0).max(0.0));
         ui.add_enabled_ui(enabled, |ui| {
             ui.add_sized(
                 egui::vec2(48.0, 22.0),
@@ -3789,6 +3813,14 @@ fn general_offset_row(ui: &mut egui::Ui, label: &str, value: &mut f64, enabled: 
             );
         });
     });
+}
+
+fn general_justified_row(ui: &mut egui::Ui, add_contents: impl FnOnce(&mut egui::Ui)) {
+    ui.allocate_ui_with_layout(
+        egui::vec2(GENERAL_SETUP_CONTENT_WIDTH, 22.0),
+        egui::Layout::left_to_right(egui::Align::Center),
+        add_contents,
+    );
 }
 
 fn draw_general_xy_datum(ui: &mut egui::Ui) {
