@@ -145,7 +145,7 @@ impl Default for GeneralJobSetup {
             job_type: GeneralJobType::SingleSided,
             width: 100.0,
             height: 100.0,
-            thickness: 19.05,
+            thickness: 10.0,
             units: GeneralUnits::Millimetres,
             z_zero: GeneralZZero::MaterialSurface,
             xy_use_offset: false,
@@ -4327,7 +4327,7 @@ mod tests {
         assert_eq!(setup.units, GeneralUnits::Millimetres);
         assert_close(general_display_value(setup.width, setup.units), 100.0);
         assert_close(general_display_value(setup.height, setup.units), 100.0);
-        assert_close(general_display_value(setup.thickness, setup.units), 19.05);
+        assert_close(general_display_value(setup.thickness, setup.units), 10.0);
     }
 
     fn test_app() -> RengraveApp {
