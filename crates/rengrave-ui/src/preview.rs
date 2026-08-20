@@ -1256,7 +1256,22 @@ pub(crate) fn draw_preview_grid(
     transform: ViewTransform,
     to_screen: &impl Fn(Point) -> egui::Pos2,
 ) {
-    let step = nice_grid_step(transform.zoom);
+    draw_preview_grid_with_step(
+        painter,
+        rect,
+        transform,
+        nice_grid_step(transform.zoom),
+        to_screen,
+    );
+}
+
+pub(crate) fn draw_preview_grid_with_step(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    transform: ViewTransform,
+    step: f64,
+    to_screen: &impl Fn(Point) -> egui::Pos2,
+) {
     let corners = [
         screen_point_to_model(rect, transform, rect.left_top()),
         screen_point_to_model(rect, transform, rect.right_top()),

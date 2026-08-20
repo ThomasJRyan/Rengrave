@@ -206,6 +206,9 @@ Top and left rulers derive their tick positions from the same transform and
 canvas-centered coordinate system. When the pointer is over the canvas, the
 renderer draws clipped horizontal and vertical crosshair lines through the
 corresponding ruler positions.
+Ruler and grid spacing use a denser variant of the preview's readable step;
+labels are integer-rounded while the step is at least one model unit and are
+formatted to a maximum of two decimal places for fractional steps.
 The
 first Tool Panel tab now owns a local ``GeneralJobSetup`` presentation state
 for job type, dimensions, units, Z zero, XY offset, and modeling resolution.

@@ -75,7 +75,7 @@ const GENERAL_TOOL_PANEL_WIDTH: f32 = 256.0;
 const GENERAL_SETUP_MAX_WIDTH: f32 = 198.0;
 const GENERAL_SETUP_CONTENT_WIDTH: f32 = 186.0;
 const GENERAL_RULER_TOP_HEIGHT: f32 = 24.0;
-const GENERAL_RULER_LEFT_WIDTH: f32 = 44.0;
+const GENERAL_RULER_LEFT_WIDTH: f32 = GENERAL_RULER_TOP_HEIGHT;
 const MAX_RECENT_PROJECTS: usize = 10;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2494,10 +2494,11 @@ impl RengraveApp {
         let painter = ui.painter().with_clip_rect(rect);
         painter.rect_filled(rect, 0.0, egui::Color32::from_rgb(28, 30, 32));
         let canvas_painter = painter.with_clip_rect(canvas_rect);
-        preview::draw_preview_grid(
+        preview::draw_preview_grid_with_step(
             &canvas_painter,
             canvas_rect,
             self.general_2d_transform,
+            preview::nice_grid_step(self.general_2d_transform.zoom * 2.0),
             &|point| {
                 let (sin, cos) = self.general_2d_transform.total_rotation_radians().sin_cos();
                 let rotated =
@@ -3948,7 +3949,6 @@ fn draw_general_rulers(
 ) {
     let ruler_fill = egui::Color32::from_rgb(36, 39, 42);
     let ruler_stroke = egui::Stroke::new(1.0, egui::Color32::from_rgb(70, 76, 80));
-    let tick_stroke = egui::Stroke::new(0.8, egui::Color32::from_rgb(126, 134, 139));
     let major_tick_stroke = egui::Stroke::new(1.0, egui::Color32::from_rgb(181, 188, 192));
     let label_color = egui::Color32::from_rgb(190, 196, 199);
     let crosshair_stroke = egui::Stroke::new(1.0, egui::Color32::from_rgb(93, 127, 143));
@@ -3966,7 +3966,7 @@ fn draw_general_rulers(
     painter.rect_stroke(top_ruler, 0.0, ruler_stroke, egui::StrokeKind::Inside);
     painter.rect_stroke(left_ruler, 0.0, ruler_stroke, egui::StrokeKind::Inside);
 
-    let step = preview::nice_grid_step(transform.zoom);
+    let step = preview::nice_grid_step(transform.zoom * 2.0);
     let x_min =
         (f64::from(canvas_rect.left() - canvas_rect.center().x) - transform.pan.x) / transform.zoom;
     let x_max = (f64::from(canvas_rect.right() - canvas_rect.center().x) - transform.pan.x)
@@ -3981,28 +3981,21 @@ fn draw_general_rulers(
     let mut x = x_start;
     while x <= x_max + step * 0.5 {
         let screen_x = canvas_rect.center().x + (x * transform.zoom + transform.pan.x) as f32;
-        let major = (x / step).round().rem_euclid(5.0).abs() < f64::EPSILON;
-        let tick_height = if major { 10.0 } else { 6.0 };
+        let tick_height = 9.0;
         painter.line_segment(
             [
                 egui::pos2(screen_x, top_ruler.bottom() - tick_height),
                 egui::pos2(screen_x, top_ruler.bottom()),
             ],
-            if major {
-                major_tick_stroke
-            } else {
-                tick_stroke
-            },
+            major_tick_stroke,
         );
-        if major {
-            painter.text(
-                egui::pos2(screen_x + 3.0, top_ruler.top() + 3.0),
-                egui::Align2::LEFT_TOP,
-                preview::format_preview_coord(x),
-                egui::FontId::monospace(10.0),
-                label_color,
-            );
-        }
+        painter.text(
+            egui::pos2(screen_x + 3.0, top_ruler.top() + 3.0),
+            egui::Align2::LEFT_TOP,
+            general_ruler_label(x, step),
+            egui::FontId::monospace(10.0),
+            label_color,
+        );
         x += step;
     }
 
@@ -4010,28 +4003,21 @@ fn draw_general_rulers(
     while y <= y_max + step * 0.5 {
         let screen_y =
             canvas_rect.center().y - (y * transform.zoom) as f32 + transform.pan.y as f32;
-        let major = (y / step).round().rem_euclid(5.0).abs() < f64::EPSILON;
-        let tick_width = if major { 10.0 } else { 6.0 };
+        let tick_width = 9.0;
         painter.line_segment(
             [
                 egui::pos2(left_ruler.right() - tick_width, screen_y),
                 egui::pos2(left_ruler.right(), screen_y),
             ],
-            if major {
-                major_tick_stroke
-            } else {
-                tick_stroke
-            },
+            major_tick_stroke,
         );
-        if major {
-            painter.text(
-                egui::pos2(left_ruler.left() + 3.0, screen_y - 2.0),
-                egui::Align2::LEFT_BOTTOM,
-                preview::format_preview_coord(y),
-                egui::FontId::monospace(10.0),
-                label_color,
-            );
-        }
+        painter.text(
+            egui::pos2(left_ruler.left() + 3.0, screen_y - 2.0),
+            egui::Align2::LEFT_BOTTOM,
+            general_ruler_label(y, step),
+            egui::FontId::monospace(10.0),
+            label_color,
+        );
         y += step;
     }
 
@@ -4050,6 +4036,14 @@ fn draw_general_rulers(
             ],
             crosshair_stroke,
         );
+    }
+}
+
+fn general_ruler_label(value: f64, step: f64) -> String {
+    if step >= 1.0 {
+        format!("{:.0}", value.round())
+    } else {
+        format!("{value:.2}")
     }
 }
 
