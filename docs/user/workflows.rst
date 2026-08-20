@@ -37,7 +37,10 @@ Tool Panel, a flexible Editor/Preview Panel, and a 15%-wide Toolpath Panel.
 The Tool Panel has three switchable vertical tabs labelled **Job Setup**, **Tab 2**, and
 **Tab 3**. The Editor/Preview Panel has **2D View** and **3D View** tabs.
 These tabs currently switch layout state only; no tools or additional
-functionality are provided yet.
+functionality are provided yet. The **2D View** now shows a simple grid and
+uses the same navigation controls as the existing preview: primary or middle
+drag rotates the view, secondary drag pans it, and the mouse wheel zooms around
+the cursor.
 
 The **Job Setup** tab presents the planned job setup surface with controls for
 job type, job size and units, Z zero position, XY datum offset, and modeling

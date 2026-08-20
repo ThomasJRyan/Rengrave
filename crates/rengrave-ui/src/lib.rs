@@ -2418,6 +2418,10 @@ impl RengraveApp {
                             self.general_view = GeneralView::ThreeD;
                         }
                     });
+                    let viewport_rect = ui.available_rect_before_wrap();
+                    if self.general_view == GeneralView::TwoD {
+                        self.show_general_2d_view(ui, viewport_rect);
+                    }
                 });
 
                 ui.scope_builder(egui::UiBuilder::new().max_rect(right_rect), |ui| {
@@ -2442,6 +2446,59 @@ impl RengraveApp {
                     egui::Stroke::new(1.0, separator_color),
                 );
             });
+    }
+
+    fn show_general_2d_view(&mut self, ui: &mut egui::Ui, rect: egui::Rect) {
+        let response = ui.allocate_rect(rect, egui::Sense::click_and_drag());
+        let hover_pos = response.hover_pos();
+        if response.dragged_by(egui::PointerButton::Primary)
+            || response.dragged_by(egui::PointerButton::Middle)
+        {
+            let delta = response.drag_delta();
+            self.transform.viewport_rotation_degrees += f64::from(delta.x) * 0.35;
+            self.preview_pitch_degrees = (self.preview_pitch_degrees + f64::from(delta.y) * 0.35)
+                .clamp(-MAX_PREVIEW_PITCH_DEGREES, 0.0);
+            ui.ctx().request_repaint();
+        } else if response.dragged_by(egui::PointerButton::Secondary) {
+            let delta = response.drag_delta();
+            self.transform.pan.x += f64::from(delta.x);
+            self.transform.pan.y += f64::from(delta.y);
+            ui.ctx().request_repaint();
+        }
+        if response.hovered() {
+            let (scroll_y, zoom_delta) =
+                ui.input(|input| (input.smooth_scroll_delta().y, input.zoom_delta()));
+            let zoom_factor = if (zoom_delta - 1.0).abs() > f32::EPSILON {
+                f64::from(zoom_delta)
+            } else if scroll_y.abs() > 0.0 {
+                2.0_f64.powf(f64::from(scroll_y) / 240.0)
+            } else {
+                1.0
+            };
+            if (zoom_factor - 1.0).abs() > f64::EPSILON
+                && let Some(anchor) = hover_pos
+            {
+                preview::zoom_transform_at_screen_point(
+                    &mut self.transform,
+                    rect,
+                    anchor,
+                    zoom_factor,
+                );
+                ui.ctx().request_repaint();
+            }
+        }
+
+        let painter = ui.painter().with_clip_rect(rect);
+        painter.rect_filled(rect, 0.0, egui::Color32::from_rgb(28, 30, 32));
+        preview::draw_preview_grid(&painter, rect, self.transform, &|point| {
+            let (sin, cos) = self.transform.total_rotation_radians().sin_cos();
+            let rotated = Point::new(point.x * cos - point.y * sin, point.x * sin + point.y * cos);
+            egui::pos2(
+                rect.center().x + (rotated.x * self.transform.zoom + self.transform.pan.x) as f32,
+                rect.center().y - (rotated.y * self.transform.zoom) as f32
+                    + self.transform.pan.y as f32,
+            )
+        });
     }
 
     fn show_general_job_setup(&mut self, ui: &mut egui::Ui) {

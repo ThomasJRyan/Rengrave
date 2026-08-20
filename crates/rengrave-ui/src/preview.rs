@@ -1250,7 +1250,7 @@ fn preview_background_color() -> egui::Color32 {
     egui::Color32::from_rgb(28, 30, 32)
 }
 
-fn draw_preview_grid(
+pub(crate) fn draw_preview_grid(
     painter: &egui::Painter,
     rect: egui::Rect,
     transform: ViewTransform,

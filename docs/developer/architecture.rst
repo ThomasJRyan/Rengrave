@@ -197,6 +197,10 @@ Tool Panel tabs and the selected 2D/3D Editor/Preview tab. The renderer
 allocates approximately 256 pixels to the Tool Panel, 15% to the Toolpath
 Panel, and the remaining width to the Editor/Preview Panel, leaving the panels
 otherwise unimplemented until future requirements define their contents. The
+2D Editor/Preview tab reuses the preview module's grid renderer, zoom-anchor
+transform, and ``ViewTransform`` state. Its painter is clipped to the center
+panel rect so transformed grid endpoints cannot paint into neighboring panels.
+The
 first Tool Panel tab now owns a local ``GeneralJobSetup`` presentation state
 for job type, dimensions, units, Z zero, XY offset, and modeling resolution.
 This state is intentionally not included in ``BatchRequest``, project
