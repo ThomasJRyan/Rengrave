@@ -2645,15 +2645,16 @@ impl RengraveApp {
             self.general_job_setup.height,
             self.general_job_setup.thickness,
         );
+        let viewport_painter = ui.painter().with_clip_rect(rect);
         preview::draw_general_scene_3d(
-            ui.painter(),
+            &viewport_painter,
             rect,
             self.general_3d_transform,
             self.general_3d_pitch_degrees,
             &scene,
         );
         let gizmo_rect = preview::draw_general_orientation_gizmo(
-            ui.painter(),
+            &viewport_painter,
             rect,
             self.general_3d_transform,
             self.general_3d_pitch_degrees,
@@ -4478,6 +4479,31 @@ mod tests {
 
         let tilted = orientation_gizmo_directions(35.0_f64.to_radians(), -35.0_f64.to_radians());
         assert!(tilted[2].y < -0.5);
+    }
+
+    #[test]
+    fn general_scene_depth_places_top_face_in_front_of_bottom() {
+        let yaw = 35.0_f64.to_radians();
+        let pitch = -35.0_f64.to_radians();
+        let top = general_camera_depth(
+            PreviewPoint3d {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+            },
+            yaw,
+            pitch,
+        );
+        let bottom = general_camera_depth(
+            PreviewPoint3d {
+                x: 0.0,
+                y: 0.0,
+                z: -10.0,
+            },
+            yaw,
+            pitch,
+        );
+        assert!(top > bottom);
     }
 
     fn test_app() -> RengraveApp {

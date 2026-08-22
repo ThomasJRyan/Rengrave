@@ -1286,6 +1286,165 @@ pub(crate) fn draw_preview_3d(
     );
 }
 
+#[derive(Debug, Clone, Copy)]
+struct GeneralSceneFace {
+    vertices: [PreviewPoint3d; 4],
+    fill: egui::Color32,
+}
+
+fn general_stock_faces(width_mm: f64, height_mm: f64, thickness_mm: f64) -> [GeneralSceneFace; 5] {
+    let x0 = -width_mm / 2.0;
+    let x1 = width_mm / 2.0;
+    let y0 = -height_mm / 2.0;
+    let y1 = height_mm / 2.0;
+    let z0 = -thickness_mm;
+    let z1 = 0.0;
+    [
+        GeneralSceneFace {
+            vertices: [
+                PreviewPoint3d {
+                    x: x0,
+                    y: y0,
+                    z: z0,
+                },
+                PreviewPoint3d {
+                    x: x1,
+                    y: y0,
+                    z: z0,
+                },
+                PreviewPoint3d {
+                    x: x1,
+                    y: y0,
+                    z: z1,
+                },
+                PreviewPoint3d {
+                    x: x0,
+                    y: y0,
+                    z: z1,
+                },
+            ],
+            fill: egui::Color32::from_rgb(139, 108, 81),
+        },
+        GeneralSceneFace {
+            vertices: [
+                PreviewPoint3d {
+                    x: x1,
+                    y: y0,
+                    z: z0,
+                },
+                PreviewPoint3d {
+                    x: x1,
+                    y: y1,
+                    z: z0,
+                },
+                PreviewPoint3d {
+                    x: x1,
+                    y: y1,
+                    z: z1,
+                },
+                PreviewPoint3d {
+                    x: x1,
+                    y: y0,
+                    z: z1,
+                },
+            ],
+            fill: egui::Color32::from_rgb(166, 128, 94),
+        },
+        GeneralSceneFace {
+            vertices: [
+                PreviewPoint3d {
+                    x: x0,
+                    y: y1,
+                    z: z0,
+                },
+                PreviewPoint3d {
+                    x: x0,
+                    y: y0,
+                    z: z0,
+                },
+                PreviewPoint3d {
+                    x: x0,
+                    y: y0,
+                    z: z1,
+                },
+                PreviewPoint3d {
+                    x: x0,
+                    y: y1,
+                    z: z1,
+                },
+            ],
+            fill: egui::Color32::from_rgb(121, 94, 72),
+        },
+        GeneralSceneFace {
+            vertices: [
+                PreviewPoint3d {
+                    x: x1,
+                    y: y1,
+                    z: z0,
+                },
+                PreviewPoint3d {
+                    x: x0,
+                    y: y1,
+                    z: z0,
+                },
+                PreviewPoint3d {
+                    x: x0,
+                    y: y1,
+                    z: z1,
+                },
+                PreviewPoint3d {
+                    x: x1,
+                    y: y1,
+                    z: z1,
+                },
+            ],
+            fill: egui::Color32::from_rgb(151, 116, 86),
+        },
+        GeneralSceneFace {
+            vertices: [
+                PreviewPoint3d {
+                    x: x0,
+                    y: y0,
+                    z: z1,
+                },
+                PreviewPoint3d {
+                    x: x1,
+                    y: y0,
+                    z: z1,
+                },
+                PreviewPoint3d {
+                    x: x1,
+                    y: y1,
+                    z: z1,
+                },
+                PreviewPoint3d {
+                    x: x0,
+                    y: y1,
+                    z: z1,
+                },
+            ],
+            fill: egui::Color32::from_rgb(205, 173, 137),
+        },
+    ]
+}
+
+pub(crate) fn general_camera_depth(
+    point: PreviewPoint3d,
+    yaw_radians: f64,
+    pitch_radians: f64,
+) -> f64 {
+    let rotated_y = point.x * yaw_radians.sin() + point.y * yaw_radians.cos();
+    rotated_y * pitch_radians.sin() + point.z * 2.0 * pitch_radians.cos()
+}
+
+fn general_face_camera_depth(face: &GeneralSceneFace, yaw_radians: f64, pitch_radians: f64) -> f64 {
+    face.vertices
+        .iter()
+        .map(|point| general_camera_depth(*point, yaw_radians, pitch_radians))
+        .sum::<f64>()
+        / face.vertices.len() as f64
+}
+
 pub(crate) fn draw_general_scene_3d(
     painter: &egui::Painter,
     rect: egui::Rect,
@@ -1322,14 +1481,7 @@ pub(crate) fn draw_general_scene_3d(
         )
     };
 
-    let draw_face = |face: [PreviewPoint3d; 4], fill: egui::Color32| {
-        painter.add(egui::Shape::convex_polygon(
-            face.into_iter().map(project).collect(),
-            fill,
-            egui::Stroke::new(0.8, egui::Color32::from_rgb(112, 104, 96)),
-        ));
-    };
-
+    let mut faces = Vec::with_capacity(scene.objects.len() * 5);
     for object in &scene.objects {
         match object {
             GeneralSceneObject::JobStock {
@@ -1337,138 +1489,20 @@ pub(crate) fn draw_general_scene_3d(
                 height_mm,
                 thickness_mm,
             } => {
-                let x0 = -width_mm / 2.0;
-                let x1 = width_mm / 2.0;
-                let y0 = -height_mm / 2.0;
-                let y1 = height_mm / 2.0;
-                let z0 = -thickness_mm;
-                let z1 = 0.0;
-                let top = [
-                    PreviewPoint3d {
-                        x: x0,
-                        y: y0,
-                        z: z1,
-                    },
-                    PreviewPoint3d {
-                        x: x1,
-                        y: y0,
-                        z: z1,
-                    },
-                    PreviewPoint3d {
-                        x: x1,
-                        y: y1,
-                        z: z1,
-                    },
-                    PreviewPoint3d {
-                        x: x0,
-                        y: y1,
-                        z: z1,
-                    },
-                ];
-
-                draw_face(
-                    [
-                        PreviewPoint3d {
-                            x: x0,
-                            y: y0,
-                            z: z0,
-                        },
-                        PreviewPoint3d {
-                            x: x1,
-                            y: y0,
-                            z: z0,
-                        },
-                        PreviewPoint3d {
-                            x: x1,
-                            y: y0,
-                            z: z1,
-                        },
-                        PreviewPoint3d {
-                            x: x0,
-                            y: y0,
-                            z: z1,
-                        },
-                    ],
-                    egui::Color32::from_rgb(139, 108, 81),
-                );
-                draw_face(
-                    [
-                        PreviewPoint3d {
-                            x: x1,
-                            y: y0,
-                            z: z0,
-                        },
-                        PreviewPoint3d {
-                            x: x1,
-                            y: y1,
-                            z: z0,
-                        },
-                        PreviewPoint3d {
-                            x: x1,
-                            y: y1,
-                            z: z1,
-                        },
-                        PreviewPoint3d {
-                            x: x1,
-                            y: y0,
-                            z: z1,
-                        },
-                    ],
-                    egui::Color32::from_rgb(166, 128, 94),
-                );
-                draw_face(
-                    [
-                        PreviewPoint3d {
-                            x: x0,
-                            y: y1,
-                            z: z0,
-                        },
-                        PreviewPoint3d {
-                            x: x0,
-                            y: y0,
-                            z: z0,
-                        },
-                        PreviewPoint3d {
-                            x: x0,
-                            y: y0,
-                            z: z1,
-                        },
-                        PreviewPoint3d {
-                            x: x0,
-                            y: y1,
-                            z: z1,
-                        },
-                    ],
-                    egui::Color32::from_rgb(121, 94, 72),
-                );
-                draw_face(
-                    [
-                        PreviewPoint3d {
-                            x: x1,
-                            y: y1,
-                            z: z0,
-                        },
-                        PreviewPoint3d {
-                            x: x0,
-                            y: y1,
-                            z: z0,
-                        },
-                        PreviewPoint3d {
-                            x: x0,
-                            y: y1,
-                            z: z1,
-                        },
-                        PreviewPoint3d {
-                            x: x1,
-                            y: y1,
-                            z: z1,
-                        },
-                    ],
-                    egui::Color32::from_rgb(151, 116, 86),
-                );
-                draw_face(top, egui::Color32::from_rgb(205, 173, 137));
+                faces.extend(general_stock_faces(*width_mm, *height_mm, *thickness_mm));
             }
         }
+    }
+    faces.sort_by(|left, right| {
+        general_face_camera_depth(left, yaw, pitch)
+            .total_cmp(&general_face_camera_depth(right, yaw, pitch))
+    });
+    for face in faces {
+        painter.add(egui::Shape::convex_polygon(
+            face.vertices.into_iter().map(project).collect(),
+            face.fill,
+            egui::Stroke::new(0.8, egui::Color32::from_rgb(112, 104, 96)),
+        ));
     }
 }
 

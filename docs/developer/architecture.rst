@@ -89,6 +89,10 @@ CPU-side face list and egui painter polygons; it has no grid or ruler pass.
 The upper-right orientation gizmo projects the three world-axis unit vectors
 through the same yaw and pitch transform as the scene. Lettered endpoints
 keep the axes distinguishable without relying on color alone.
+Stock faces are sorted from farthest to nearest in camera space before they
+are painted, preserving solid-face occlusion without a GPU depth buffer. The
+entire 3D pass uses the Editor/Preview rectangle as its painter clip, so pan
+and zoom cannot draw over either side panel.
 
 Core data flow
 --------------
