@@ -257,6 +257,10 @@ formatted to a maximum of two decimal places for fractional steps.
 The
 first Tool Panel tab now owns a local ``GeneralJobSetup`` presentation state
 for job type, dimensions, units, Z zero, XY offset, and modeling resolution.
+The job-type and modeling-resolution state is retained for later work, but
+their render groups are currently disabled by the
+``GENERAL_JOB_TYPE_VISIBLE`` and
+``GENERAL_MODELING_RESOLUTION_VISIBLE`` visibility constants.
 This state is intentionally not included in ``BatchRequest``, project
 persistence, geometry, or export until the general workbench contract defines
 its backend behavior. The presentation form is width-bounded by the Tool

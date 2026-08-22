@@ -60,16 +60,17 @@ camera and identifies the red X, green Y, and blue Z axes. Stock faces are
 opaque; rear-facing and edge-on faces are omitted to keep direct elevation
 views clean. Zoomed geometry is clipped to the Editor/Preview Panel.
 
-The **Job Setup** tab presents the planned job setup surface with controls for
-job type, job size and units, Z zero position, XY datum offset, and modeling
-resolution. Job dimensions and datum offsets are stored internally in
-millimetres. The controls display those values in the selected **inches** or
-**mm** unit, and changing units preserves the physical job dimensions while
-updating the canvas and ruler labels. These controls are UI scaffolding only
-and do not yet change machining geometry, calculations, or machine output. The setup form stays within the
-Tool Panel: fields use a compact aligned column, groups fill the panel width,
-and horizontal rows distribute their controls across the available group
-width. The XY datum illustration stacks above its controls when the panel is
+The **Job Setup** tab currently presents controls for job size and units, Z
+zero position, and XY datum offset. Job Type and Modeling Resolution are
+temporarily hidden. Job dimensions and datum offsets are stored internally in
+millimetres. The visible controls display those values in the selected
+**inches** or **mm** unit, and changing units preserves the physical job
+dimensions while updating the canvas and ruler labels. These controls are UI
+scaffolding only and do not yet change machining geometry, calculations, or
+machine output. The setup form stays within the Tool Panel: fields use a
+compact aligned column, groups fill the panel width, and horizontal rows
+distribute their controls across the available group width. The XY datum
+illustration stacks above its controls when the panel is
 narrow.
 
 Layout and coordinate choices

@@ -74,6 +74,8 @@ const GENERAL_TAB_WIDTH: f32 = 28.0;
 const GENERAL_TOOL_PANEL_WIDTH: f32 = 256.0;
 const GENERAL_SETUP_MAX_WIDTH: f32 = 198.0;
 const GENERAL_SETUP_CONTENT_WIDTH: f32 = 186.0;
+const GENERAL_JOB_TYPE_VISIBLE: bool = false;
+const GENERAL_MODELING_RESOLUTION_VISIBLE: bool = false;
 const GENERAL_RULER_TOP_HEIGHT: f32 = 24.0;
 const GENERAL_RULER_LEFT_WIDTH: f32 = GENERAL_RULER_TOP_HEIGHT;
 const GENERAL_FIT_MARGIN: f32 = 0.12;
@@ -2687,43 +2689,45 @@ impl RengraveApp {
                 ui.strong("Job Setup");
                 ui.add_space(4.0);
 
-                general_setup_group(ui, "Job Type", |ui| {
-                    ui.radio_value(
-                        &mut self.general_job_setup.job_type,
-                        GeneralJobType::SingleSided,
-                        "Single Sided",
-                    );
-                    let double_sided = ui
-                        .add_enabled_ui(false, |ui| {
-                            ui.radio_value(
-                                &mut self.general_job_setup.job_type,
-                                GeneralJobType::DoubleSided,
-                                "Double Sided",
-                            )
-                        })
-                        .inner;
-                    ui.interact(
-                        double_sided.rect,
-                        ui.id().with("double-sided-tooltip"),
-                        egui::Sense::hover(),
-                    )
-                    .on_hover_text("Double Sided is not currently implemented.");
-                    let rotary = ui
-                        .add_enabled_ui(false, |ui| {
-                            ui.radio_value(
-                                &mut self.general_job_setup.job_type,
-                                GeneralJobType::Rotary,
-                                "Rotary",
-                            )
-                        })
-                        .inner;
-                    ui.interact(
-                        rotary.rect,
-                        ui.id().with("rotary-tooltip"),
-                        egui::Sense::hover(),
-                    )
-                    .on_hover_text("Rotary is not currently implemented.");
-                });
+                if GENERAL_JOB_TYPE_VISIBLE {
+                    general_setup_group(ui, "Job Type", |ui| {
+                        ui.radio_value(
+                            &mut self.general_job_setup.job_type,
+                            GeneralJobType::SingleSided,
+                            "Single Sided",
+                        );
+                        let double_sided = ui
+                            .add_enabled_ui(false, |ui| {
+                                ui.radio_value(
+                                    &mut self.general_job_setup.job_type,
+                                    GeneralJobType::DoubleSided,
+                                    "Double Sided",
+                                )
+                            })
+                            .inner;
+                        ui.interact(
+                            double_sided.rect,
+                            ui.id().with("double-sided-tooltip"),
+                            egui::Sense::hover(),
+                        )
+                        .on_hover_text("Double Sided is not currently implemented.");
+                        let rotary = ui
+                            .add_enabled_ui(false, |ui| {
+                                ui.radio_value(
+                                    &mut self.general_job_setup.job_type,
+                                    GeneralJobType::Rotary,
+                                    "Rotary",
+                                )
+                            })
+                            .inner;
+                        ui.interact(
+                            rotary.rect,
+                            ui.id().with("rotary-tooltip"),
+                            egui::Sense::hover(),
+                        )
+                        .on_hover_text("Rotary is not currently implemented.");
+                    });
+                }
 
                 general_setup_group(ui, "Job Size", |ui| {
                     let units = self.general_job_setup.units;
@@ -2810,19 +2814,21 @@ impl RengraveApp {
                     );
                 });
 
-                general_setup_group(ui, "Modeling Resolution", |ui| {
-                    egui::ComboBox::from_id_salt("general-modeling-resolution")
-                        .selected_text("Standard (fastest)")
-                        .width(ui.available_width())
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(
-                                &mut self.general_job_setup.modeling_resolution,
-                                GeneralModelingResolution::StandardFastest,
-                                "Standard (fastest)",
-                            );
-                        });
-                    ui.weak("1 million points");
-                });
+                if GENERAL_MODELING_RESOLUTION_VISIBLE {
+                    general_setup_group(ui, "Modeling Resolution", |ui| {
+                        egui::ComboBox::from_id_salt("general-modeling-resolution")
+                            .selected_text("Standard (fastest)")
+                            .width(ui.available_width())
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(
+                                    &mut self.general_job_setup.modeling_resolution,
+                                    GeneralModelingResolution::StandardFastest,
+                                    "Standard (fastest)",
+                                );
+                            });
+                        ui.weak("1 million points");
+                    });
+                }
             });
     }
 
@@ -6817,11 +6823,9 @@ mod tests {
             "3D View",
             "Centre Job (F7)",
             "Toolpath Panel",
-            "Job Type",
             "Job Size",
             "Z Zero Position",
             "XY Datum Position",
-            "Modeling Resolution",
         ] {
             assert!(
                 harness.query_all_by_label(label).next().is_some(),
@@ -6830,6 +6834,20 @@ mod tests {
         }
         assert!(harness.query_by_label("Run").is_none());
         assert!(harness.query_by_label("Calculate").is_none());
+        for hidden_label in [
+            "Job Type",
+            "Single Sided",
+            "Double Sided",
+            "Rotary",
+            "Modeling Resolution",
+            "Standard (fastest)",
+            "1 million points",
+        ] {
+            assert!(
+                harness.query_by_label(hidden_label).is_none(),
+                "unexpected visible control: {hidden_label}"
+            );
+        }
         assert!(harness.state().general_2d_view_initialized);
         assert!(harness.state().general_2d_transform.zoom < DEFAULT_PREVIEW_ZOOM / 4.0);
 
@@ -6839,14 +6857,6 @@ mod tests {
         harness.run();
         assert_eq!(harness.state().general_2d_transform.pan, Point::default());
         assert!(harness.state().general_2d_transform.zoom < 12.0);
-
-        harness.get_by_label("Double Sided").hover();
-        harness.run();
-        assert!(
-            harness
-                .query_by_label("Double Sided is not currently implemented.")
-                .is_some()
-        );
 
         harness.get_by_label("Tab 2").click();
         harness.run();
