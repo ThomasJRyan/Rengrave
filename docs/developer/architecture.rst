@@ -91,12 +91,16 @@ through the same yaw and pitch transform as the scene. Lettered endpoints
 keep the axes distinguishable without relying on color alone.
 Stock faces are sorted from farthest to nearest in camera space before they
 are painted, preserving solid-face occlusion without a GPU depth buffer. The
-renderer culls faces whose shortest screen-space dimension is narrower than
-their outline before polygon tessellation. Visible faces are filled without a
-joined polygon stroke, then outlined with finite line segments. Together these
-rules prevent both nearly edge-on faces and stroke joins from extending beyond
-the stock. The entire 3D pass uses the Editor/Preview rectangle as its painter
-clip, so pan and zoom cannot draw over either side panel.
+renderer computes each face's outward normal in the same Z-scaled camera space
+as projection and submits only camera-facing faces with a normalized alignment
+above ``0.01``. ``GeneralSceneFace`` vertices must therefore remain wound
+counter-clockwise when viewed from outside the solid. The renderer also culls
+faces whose shortest screen-space dimension is narrower than their outline
+before polygon tessellation. Visible faces are filled without a joined polygon
+stroke, then outlined with finite line segments. Together these rules prevent
+rear, nearly edge-on, or degenerate stroke geometry from extending beyond the
+stock. The entire 3D pass uses the Editor/Preview rectangle as its painter clip,
+so pan and zoom cannot draw over either side panel.
 
 Core data flow
 --------------

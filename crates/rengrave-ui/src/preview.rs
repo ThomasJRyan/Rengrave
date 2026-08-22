@@ -1445,6 +1445,46 @@ fn general_face_camera_depth(face: &GeneralSceneFace, yaw_radians: f64, pitch_ra
         / face.vertices.len() as f64
 }
 
+pub(crate) fn general_face_camera_alignment(
+    vertices: [PreviewPoint3d; 4],
+    yaw_radians: f64,
+    pitch_radians: f64,
+) -> f64 {
+    let scaled = |point: PreviewPoint3d| [point.x, point.y, point.z * 2.0];
+    let origin = scaled(vertices[0]);
+    let first = scaled(vertices[1]);
+    let second = scaled(vertices[2]);
+    let first_edge = [
+        first[0] - origin[0],
+        first[1] - origin[1],
+        first[2] - origin[2],
+    ];
+    let second_edge = [
+        second[0] - origin[0],
+        second[1] - origin[1],
+        second[2] - origin[2],
+    ];
+    let normal = [
+        first_edge[1] * second_edge[2] - first_edge[2] * second_edge[1],
+        first_edge[2] * second_edge[0] - first_edge[0] * second_edge[2],
+        first_edge[0] * second_edge[1] - first_edge[1] * second_edge[0],
+    ];
+    let normal_length =
+        (normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2]).sqrt();
+    if normal_length <= f64::EPSILON {
+        return 0.0;
+    }
+    let camera_depth_direction = [
+        yaw_radians.sin() * pitch_radians.sin(),
+        yaw_radians.cos() * pitch_radians.sin(),
+        pitch_radians.cos(),
+    ];
+    (normal[0] * camera_depth_direction[0]
+        + normal[1] * camera_depth_direction[1]
+        + normal[2] * camera_depth_direction[2])
+        / normal_length
+}
+
 pub(crate) fn projected_face_area(vertices: [egui::Pos2; 4]) -> f32 {
     vertices
         .iter()
@@ -1518,6 +1558,7 @@ pub(crate) fn draw_general_scene_3d(
             }
         }
     }
+    faces.retain(|face| general_face_camera_alignment(face.vertices, yaw, pitch) > 0.01);
     faces.sort_by(|left, right| {
         general_face_camera_depth(left, yaw, pitch)
             .total_cmp(&general_face_camera_depth(right, yaw, pitch))

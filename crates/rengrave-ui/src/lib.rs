@@ -4507,6 +4507,89 @@ mod tests {
     }
 
     #[test]
+    fn general_face_alignment_culls_horizontal_face_at_side_elevation() {
+        let top_face = [
+            PreviewPoint3d {
+                x: -1.0,
+                y: -1.0,
+                z: 0.0,
+            },
+            PreviewPoint3d {
+                x: 1.0,
+                y: -1.0,
+                z: 0.0,
+            },
+            PreviewPoint3d {
+                x: 1.0,
+                y: 1.0,
+                z: 0.0,
+            },
+            PreviewPoint3d {
+                x: -1.0,
+                y: 1.0,
+                z: 0.0,
+            },
+        ];
+        let yaw = 48.0_f64.to_radians();
+
+        assert!(general_face_camera_alignment(top_face, yaw, -90.0_f64.to_radians()).abs() < 1e-12);
+        assert!(general_face_camera_alignment(top_face, yaw, -35.0_f64.to_radians()) > 0.5);
+    }
+
+    #[test]
+    fn general_face_alignment_keeps_only_camera_facing_opposite_wall() {
+        let front_wall = [
+            PreviewPoint3d {
+                x: -1.0,
+                y: -1.0,
+                z: -1.0,
+            },
+            PreviewPoint3d {
+                x: 1.0,
+                y: -1.0,
+                z: -1.0,
+            },
+            PreviewPoint3d {
+                x: 1.0,
+                y: -1.0,
+                z: 0.0,
+            },
+            PreviewPoint3d {
+                x: -1.0,
+                y: -1.0,
+                z: 0.0,
+            },
+        ];
+        let back_wall = [
+            PreviewPoint3d {
+                x: 1.0,
+                y: 1.0,
+                z: -1.0,
+            },
+            PreviewPoint3d {
+                x: -1.0,
+                y: 1.0,
+                z: -1.0,
+            },
+            PreviewPoint3d {
+                x: -1.0,
+                y: 1.0,
+                z: 0.0,
+            },
+            PreviewPoint3d {
+                x: 1.0,
+                y: 1.0,
+                z: 0.0,
+            },
+        ];
+        let yaw = 48.0_f64.to_radians();
+        let pitch = -90.0_f64.to_radians();
+
+        assert!(general_face_camera_alignment(front_wall, yaw, pitch) > 0.5);
+        assert!(general_face_camera_alignment(back_wall, yaw, pitch) < -0.5);
+    }
+
+    #[test]
     fn projected_face_thickness_rejects_edge_on_and_subpixel_quads() {
         let edge_on = [
             egui::pos2(10.0, 20.0),
