@@ -19,6 +19,84 @@ pub(crate) struct PreviewPoint3d {
     pub(crate) z: f64,
 }
 
+/// Read-only geometry presented by the General workbench's 3D viewport.
+///
+/// The scene is intentionally independent from generated toolpaths. Future
+/// 2D design objects, toolpaths, finished-stock views, and animation tracks
+/// can become additional scene objects without changing the viewport's
+/// navigation or projection code.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(crate) struct GeneralScene {
+    pub(crate) objects: Vec<GeneralSceneObject>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum GeneralSceneObject {
+    JobStock {
+        width_mm: f64,
+        height_mm: f64,
+        thickness_mm: f64,
+    },
+}
+
+impl GeneralScene {
+    pub(crate) fn from_job_setup(width_mm: f64, height_mm: f64, thickness_mm: f64) -> Self {
+        Self {
+            objects: vec![GeneralSceneObject::JobStock {
+                width_mm: width_mm.max(0.001),
+                height_mm: height_mm.max(0.001),
+                thickness_mm: thickness_mm.max(0.001),
+            }],
+        }
+    }
+
+    pub(crate) fn bounds(&self) -> Option<(PreviewPoint3d, PreviewPoint3d)> {
+        let mut min = PreviewPoint3d {
+            x: f64::INFINITY,
+            y: f64::INFINITY,
+            z: f64::INFINITY,
+        };
+        let mut max = PreviewPoint3d {
+            x: f64::NEG_INFINITY,
+            y: f64::NEG_INFINITY,
+            z: f64::NEG_INFINITY,
+        };
+        let mut has_points = false;
+
+        for object in &self.objects {
+            let points = match object {
+                GeneralSceneObject::JobStock {
+                    width_mm,
+                    height_mm,
+                    thickness_mm,
+                } => [
+                    PreviewPoint3d {
+                        x: -width_mm / 2.0,
+                        y: -height_mm / 2.0,
+                        z: -thickness_mm,
+                    },
+                    PreviewPoint3d {
+                        x: width_mm / 2.0,
+                        y: height_mm / 2.0,
+                        z: 0.0,
+                    },
+                ],
+            };
+            for point in points {
+                min.x = min.x.min(point.x);
+                min.y = min.y.min(point.y);
+                min.z = min.z.min(point.z);
+                max.x = max.x.max(point.x);
+                max.y = max.y.max(point.y);
+                max.z = max.z.max(point.z);
+                has_points = true;
+            }
+        }
+
+        has_points.then_some((min, max))
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct PreviewSegment3d {
     pub(crate) start: PreviewPoint3d,
@@ -1206,6 +1284,192 @@ pub(crate) fn draw_preview_3d(
         egui::FontId::monospace(10.0),
         egui::Color32::from_rgb(150, 158, 164),
     );
+}
+
+pub(crate) fn draw_general_scene_3d(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    transform: ViewTransform,
+    pitch_degrees: f64,
+    scene: &GeneralScene,
+) {
+    painter.rect_filled(rect, 0.0, preview_background_color());
+    let Some((min, max)) = scene.bounds() else {
+        return;
+    };
+
+    let yaw = transform.total_rotation_radians();
+    let pitch = pitch_degrees.to_radians();
+    let xy_span = (max.x - min.x).max(max.y - min.y).max(0.001);
+    let z_span = (max.z - min.z).max(0.001);
+    let scale = (rect.width().min(rect.height()) as f64 * 0.72 / (xy_span + z_span * 0.8))
+        * (transform.zoom / 80.0);
+    let center = PreviewPoint3d {
+        x: (min.x + max.x) / 2.0,
+        y: (min.y + max.y) / 2.0,
+        z: (min.z + max.z) / 2.0,
+    };
+    let project = |point: PreviewPoint3d| {
+        let x = point.x - center.x;
+        let y = point.y - center.y;
+        let z = (point.z - center.z) * 2.0;
+        let rotated_x = x * yaw.cos() - y * yaw.sin();
+        let rotated_y = x * yaw.sin() + y * yaw.cos();
+        let vertical = rotated_y * pitch.cos() - z * pitch.sin();
+        egui::pos2(
+            rect.center().x + (rotated_x * scale) as f32 + transform.pan.x as f32,
+            rect.center().y - (vertical * scale) as f32 + transform.pan.y as f32,
+        )
+    };
+
+    let draw_face = |face: [PreviewPoint3d; 4], fill: egui::Color32| {
+        painter.add(egui::Shape::convex_polygon(
+            face.into_iter().map(project).collect(),
+            fill,
+            egui::Stroke::new(0.8, egui::Color32::from_rgb(112, 104, 96)),
+        ));
+    };
+
+    for object in &scene.objects {
+        match object {
+            GeneralSceneObject::JobStock {
+                width_mm,
+                height_mm,
+                thickness_mm,
+            } => {
+                let x0 = -width_mm / 2.0;
+                let x1 = width_mm / 2.0;
+                let y0 = -height_mm / 2.0;
+                let y1 = height_mm / 2.0;
+                let z0 = -thickness_mm;
+                let z1 = 0.0;
+                let top = [
+                    PreviewPoint3d {
+                        x: x0,
+                        y: y0,
+                        z: z1,
+                    },
+                    PreviewPoint3d {
+                        x: x1,
+                        y: y0,
+                        z: z1,
+                    },
+                    PreviewPoint3d {
+                        x: x1,
+                        y: y1,
+                        z: z1,
+                    },
+                    PreviewPoint3d {
+                        x: x0,
+                        y: y1,
+                        z: z1,
+                    },
+                ];
+
+                draw_face(
+                    [
+                        PreviewPoint3d {
+                            x: x0,
+                            y: y0,
+                            z: z0,
+                        },
+                        PreviewPoint3d {
+                            x: x1,
+                            y: y0,
+                            z: z0,
+                        },
+                        PreviewPoint3d {
+                            x: x1,
+                            y: y0,
+                            z: z1,
+                        },
+                        PreviewPoint3d {
+                            x: x0,
+                            y: y0,
+                            z: z1,
+                        },
+                    ],
+                    egui::Color32::from_rgb(139, 108, 81),
+                );
+                draw_face(
+                    [
+                        PreviewPoint3d {
+                            x: x1,
+                            y: y0,
+                            z: z0,
+                        },
+                        PreviewPoint3d {
+                            x: x1,
+                            y: y1,
+                            z: z0,
+                        },
+                        PreviewPoint3d {
+                            x: x1,
+                            y: y1,
+                            z: z1,
+                        },
+                        PreviewPoint3d {
+                            x: x1,
+                            y: y0,
+                            z: z1,
+                        },
+                    ],
+                    egui::Color32::from_rgb(166, 128, 94),
+                );
+                draw_face(
+                    [
+                        PreviewPoint3d {
+                            x: x0,
+                            y: y1,
+                            z: z0,
+                        },
+                        PreviewPoint3d {
+                            x: x0,
+                            y: y0,
+                            z: z0,
+                        },
+                        PreviewPoint3d {
+                            x: x0,
+                            y: y0,
+                            z: z1,
+                        },
+                        PreviewPoint3d {
+                            x: x0,
+                            y: y1,
+                            z: z1,
+                        },
+                    ],
+                    egui::Color32::from_rgb(121, 94, 72),
+                );
+                draw_face(
+                    [
+                        PreviewPoint3d {
+                            x: x1,
+                            y: y1,
+                            z: z0,
+                        },
+                        PreviewPoint3d {
+                            x: x0,
+                            y: y1,
+                            z: z0,
+                        },
+                        PreviewPoint3d {
+                            x: x0,
+                            y: y1,
+                            z: z1,
+                        },
+                        PreviewPoint3d {
+                            x: x1,
+                            y: y1,
+                            z: z1,
+                        },
+                    ],
+                    egui::Color32::from_rgb(151, 116, 86),
+                );
+                draw_face(top, egui::Color32::from_rgb(205, 173, 137));
+            }
+        }
+    }
 }
 
 pub(crate) fn view_cube_interaction(ui: &mut egui::Ui, rect: egui::Rect) -> Option<()> {

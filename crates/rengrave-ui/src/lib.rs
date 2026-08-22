@@ -187,6 +187,8 @@ struct RengraveApp {
     general_job_setup: GeneralJobSetup,
     general_2d_transform: ViewTransform,
     general_2d_view_initialized: bool,
+    general_3d_transform: ViewTransform,
+    general_3d_pitch_degrees: f64,
     text: String,
     transform: ViewTransform,
     preview_pitch_degrees: f64,
@@ -344,6 +346,12 @@ impl RengraveApp {
                 ..ViewTransform::default()
             },
             general_2d_view_initialized: false,
+            general_3d_transform: ViewTransform {
+                viewport_rotation_degrees: 35.0,
+                zoom: DEFAULT_PREVIEW_ZOOM,
+                ..ViewTransform::default()
+            },
+            general_3d_pitch_degrees: -35.0,
             text: document.text,
             transform: ViewTransform {
                 zoom: DEFAULT_PREVIEW_ZOOM,
@@ -2470,6 +2478,8 @@ impl RengraveApp {
                             self.general_2d_view_initialized = true;
                         }
                         self.show_general_2d_view(ui, viewport_rect);
+                    } else {
+                        self.show_general_3d_view(ui, viewport_rect);
                     }
                 });
 
@@ -2586,6 +2596,61 @@ impl RengraveApp {
             canvas_rect,
             self.general_2d_transform,
             hover_pos,
+        );
+    }
+
+    fn show_general_3d_view(&mut self, ui: &mut egui::Ui, rect: egui::Rect) {
+        let response = ui.allocate_rect(rect, egui::Sense::click_and_drag());
+        if response.dragged_by(egui::PointerButton::Primary)
+            || response.dragged_by(egui::PointerButton::Middle)
+        {
+            let delta = response.drag_delta();
+            self.general_3d_transform.viewport_rotation_degrees += f64::from(delta.x) * 0.35;
+            self.general_3d_pitch_degrees = (self.general_3d_pitch_degrees
+                + f64::from(delta.y) * 0.35)
+                .clamp(-MAX_PREVIEW_PITCH_DEGREES, 0.0);
+            ui.ctx().request_repaint();
+        } else if response.dragged_by(egui::PointerButton::Secondary) {
+            let delta = response.drag_delta();
+            self.general_3d_transform.pan.x += f64::from(delta.x);
+            self.general_3d_transform.pan.y += f64::from(delta.y);
+            ui.ctx().request_repaint();
+        }
+
+        if response.hovered() {
+            let (scroll_y, zoom_delta) =
+                ui.input(|input| (input.smooth_scroll_delta().y, input.zoom_delta()));
+            let zoom_factor = if (zoom_delta - 1.0).abs() > f32::EPSILON {
+                f64::from(zoom_delta)
+            } else if scroll_y.abs() > 0.0 {
+                2.0_f64.powf(f64::from(scroll_y) / 240.0)
+            } else {
+                1.0
+            };
+            if (zoom_factor - 1.0).abs() > f64::EPSILON
+                && let Some(anchor) = response.hover_pos()
+            {
+                preview::zoom_transform_at_screen_point(
+                    &mut self.general_3d_transform,
+                    rect,
+                    anchor,
+                    zoom_factor,
+                );
+                ui.ctx().request_repaint();
+            }
+        }
+
+        let scene = GeneralScene::from_job_setup(
+            self.general_job_setup.width,
+            self.general_job_setup.height,
+            self.general_job_setup.thickness,
+        );
+        preview::draw_general_scene_3d(
+            ui.painter(),
+            rect,
+            self.general_3d_transform,
+            self.general_3d_pitch_degrees,
+            &scene,
         );
     }
 
@@ -4359,6 +4424,26 @@ mod tests {
         assert_close(general_display_value(setup.thickness, setup.units), 10.0);
     }
 
+    #[test]
+    fn general_scene_tracks_job_setup_dimensions_in_millimetres() {
+        let scene = GeneralScene::from_job_setup(120.0, 80.0, 10.0);
+        assert_eq!(
+            scene.objects,
+            vec![GeneralSceneObject::JobStock {
+                width_mm: 120.0,
+                height_mm: 80.0,
+                thickness_mm: 10.0,
+            }]
+        );
+        let (min, max) = scene.bounds().expect("job stock has bounds");
+        assert_close(min.x, -60.0);
+        assert_close(max.x, 60.0);
+        assert_close(min.y, -40.0);
+        assert_close(max.y, 40.0);
+        assert_close(min.z, -10.0);
+        assert_close(max.z, 0.0);
+    }
+
     fn test_app() -> RengraveApp {
         let document = RengraveDocument::default();
         let (gcode_path, svg_path, dxf_path) = default_output_paths(&None);
@@ -4373,6 +4458,12 @@ mod tests {
                 ..ViewTransform::default()
             },
             general_2d_view_initialized: false,
+            general_3d_transform: ViewTransform {
+                viewport_rotation_degrees: 35.0,
+                zoom: DEFAULT_PREVIEW_ZOOM,
+                ..ViewTransform::default()
+            },
+            general_3d_pitch_degrees: -35.0,
             text: document.text,
             transform: ViewTransform {
                 zoom: DEFAULT_PREVIEW_ZOOM,

@@ -50,6 +50,13 @@ The **Centre Job (F7)** button, or the ``F7`` hotkey, restores a centered view
 of the current job with a comfortable responsive margin; the same fitting is
 applied automatically the first time the 2D View opens.
 
+The **3D View** presents the current job stock as a read-only shaded solid.
+It is generated from the same job dimensions as the 2D canvas, so changes to
+width, height, or thickness appear automatically. Drag with the left or
+middle mouse button to orbit, drag with the right mouse button to pan, and
+use the mouse wheel to zoom. The General 3D View intentionally has no grid or
+rulers.
+
 The **Job Setup** tab presents the planned job setup surface with controls for
 job type, job size and units, Z zero position, XY datum offset, and modeling
 resolution. Job dimensions and datum offsets are stored internally in

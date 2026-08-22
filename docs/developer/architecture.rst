@@ -80,6 +80,13 @@ padding. They leave a 12 percent margin based on the smaller viewport
 dimension, then clear pan and rotation so the job's center aligns with the
 viewport's center. The button and ``F7`` key path share the same action.
 
+The General 3D View consumes a ``GeneralScene`` built from the same canonical
+millimetre job setup. Its object list is deliberately separate from the
+legacy G-code preview layers: the first object is a shaded ``JobStock`` solid,
+and future design geometry, toolpaths, finished-stock views, or animation
+layers can be added without changing navigation. The renderer uses a small
+CPU-side face list and egui painter polygons; it has no grid or ruler pass.
+
 Core data flow
 --------------
 
