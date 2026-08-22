@@ -34,10 +34,9 @@ General Purpose workbench
 The General Purpose workbench is a layout foundation for the future shared
 workbench. It contains three horizontal panels: an approximately 256-pixel
 Tool Panel, a flexible Editor/Preview Panel, and a 15%-wide Toolpath Panel.
-The Tool Panel has three switchable vertical tabs labelled **Job Setup**, **Tab 2**, and
-**Tab 3**. The Editor/Preview Panel has **2D View** and **3D View** tabs.
-These tabs currently switch layout state only; no tools or additional
-functionality are provided yet. The **2D View** now shows a simple grid and
+The Tool Panel has three switchable vertical tabs labelled **Job Setup**,
+**Design**, and **Tab 3**. The Editor/Preview Panel has **2D View** and
+**3D View** tabs. The **2D View** now shows a simple grid and
 uses the same navigation controls as the existing preview for panning and
 zooming: secondary drag pans the view, and the mouse wheel zooms around the
 cursor. The white canvas rectangle is centered in the viewport and its
@@ -72,6 +71,14 @@ compact aligned column, groups fill the panel width, and horizontal rows
 distribute their controls across the available group width. The XY datum
 illustration stacks above its controls when the panel is
 narrow.
+
+The **Design** tab organizes future editing controls into **Create Vectors**,
+**Transform Objects**, and **Edit Objects** categories. Each category uses the
+same compact five-column row of square tool buttons. **Create Vectors**
+currently contains a circle-icon button labelled **Create Circle** when
+hovered or read by assistive technology. This control is UI scaffolding only;
+it does not create canvas geometry yet. The other two categories are empty
+until their tools are defined.
 
 Layout and coordinate choices
 -----------------------------

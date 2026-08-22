@@ -237,8 +237,8 @@ thread responsive and prevents an older result from replacing newer controls.
 ``ToolView::GeneralPurpose`` is the layout-only workbench foundation. It is
 persisted using the ``general-purpose`` workbench identifier but is not part
 of ``ToolView::ALL`` and therefore does not receive a machining-tool icon.
-Its renderer owns only two UI state values: the selected one of three neutral
-Tool Panel tabs and the selected 2D/3D Editor/Preview tab. The renderer
+Its renderer owns the selected Tool Panel tab and the selected 2D/3D
+Editor/Preview tab. The renderer
 allocates approximately 256 pixels to the Tool Panel, 15% to the Toolpath
 Panel, and the remaining width to the Editor/Preview Panel, leaving the panels
 otherwise unimplemented until future requirements define their contents. The
@@ -268,6 +268,24 @@ Panel's content area; fixed-size inputs are kept compact and the datum block
 uses a vertical arrangement. Horizontal setup rows use explicit inner-width
 spacing to align values at the right edge without allowing native egui
 controls to expand beyond the fixed-width panel boundary.
+
+The second Tool Panel tab is the Design presentation surface. Its
+``show_general_design_tools`` renderer defines three fixed categories:
+Create Vectors, Transform Objects, and Edit Objects. Every category delegates
+to the same five-column grid helper, which calculates a square button size
+from the bounded content width and fixed inter-button gaps. Empty grid cells
+reserve the same row geometry, so tools added later remain aligned across
+categories.
+
+Design tool artwork is stored as SVG under
+``crates/rengrave-ui/assets/tool-icons``. The circle asset is parsed by the
+portable core SVG parser, cached in a ``OnceLock``, and projected into the
+egui button painter as line segments. This keeps SVG as the source of truth
+without parsing on each frame or adding a separate rasterization pipeline.
+Each icon-only button supplies an accessible label and matching hover text.
+The current circle button has no document mutation or 2D editing behavior;
+that backend is intentionally deferred until the vector-creation workflow is
+specified.
 
 .. code-block:: text
 

@@ -6,6 +6,7 @@
 *.jpeg
 *.jpg
 *.svg
+!crates/rengrave-ui/assets/tool-icons/*.svg
 *.rgrv
 !crates/rengrave-core/tests/fixtures/**/*.dxf
 !crates/rengrave-core/tests/fixtures/**/*.svg

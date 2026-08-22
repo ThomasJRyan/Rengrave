@@ -2,7 +2,7 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{
-    Arc,
+    Arc, OnceLock,
     atomic::{AtomicBool, Ordering},
     mpsc::{self, Receiver, TryRecvError},
 };
@@ -30,7 +30,7 @@ use rengrave_core::settings::{
     DEFAULT_GCODE_POSTAMBLE, DEFAULT_GCODE_PREAMBLE, LegacySetting, LegacySettings,
     default_legacy_settings, get_legacy_bool, legacy_bool_value,
 };
-use rengrave_core::svg::read_svg_font;
+use rengrave_core::svg::{parse_svg_segments, read_svg_font};
 use rengrave_core::toolbit::{Toolbit, ToolbitLibrary, default_library_path};
 use rfd::FileDialog;
 
@@ -74,6 +74,8 @@ const GENERAL_TAB_WIDTH: f32 = 28.0;
 const GENERAL_TOOL_PANEL_WIDTH: f32 = 256.0;
 const GENERAL_SETUP_MAX_WIDTH: f32 = 198.0;
 const GENERAL_SETUP_CONTENT_WIDTH: f32 = 186.0;
+const GENERAL_DESIGN_GRID_COLUMNS: usize = 5;
+const GENERAL_DESIGN_TOOL_GAP: f32 = 4.0;
 const GENERAL_JOB_TYPE_VISIBLE: bool = false;
 const GENERAL_MODELING_RESOLUTION_VISIBLE: bool = false;
 const GENERAL_RULER_TOP_HEIGHT: f32 = 24.0;
@@ -89,9 +91,28 @@ enum AppScreen {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum GeneralToolTab {
-    Tab1,
-    Tab2,
+    JobSetup,
+    Design,
     Tab3,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GeneralDesignTool {
+    Circle,
+}
+
+impl GeneralDesignTool {
+    fn accessible_label(self) -> &'static str {
+        match self {
+            Self::Circle => "Create Circle",
+        }
+    }
+
+    fn icon_strokes(self) -> &'static [Stroke] {
+        match self {
+            Self::Circle => general_circle_icon_strokes(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -340,7 +361,7 @@ impl RengraveApp {
             } else {
                 AppScreen::Startup
             },
-            general_tool_tab: GeneralToolTab::Tab1,
+            general_tool_tab: GeneralToolTab::JobSetup,
             general_view: GeneralView::TwoD,
             general_job_setup: GeneralJobSetup::default(),
             general_2d_transform: ViewTransform {
@@ -2431,8 +2452,8 @@ impl RengraveApp {
                             egui::Layout::top_down(egui::Align::Min),
                             |ui| {
                                 for (tab, label) in [
-                                    (GeneralToolTab::Tab1, "Job Setup"),
-                                    (GeneralToolTab::Tab2, "Tab 2"),
+                                    (GeneralToolTab::JobSetup, "Job Setup"),
+                                    (GeneralToolTab::Design, "Design"),
                                     (GeneralToolTab::Tab3, "Tab 3"),
                                 ] {
                                     if vertical_general_tab(ui, self.general_tool_tab == tab, label)
@@ -2446,10 +2467,10 @@ impl RengraveApp {
                         ui.allocate_ui_with_layout(
                             egui::vec2(ui.available_width(), tab_area_height),
                             egui::Layout::top_down(egui::Align::Min),
-                            |ui| {
-                                if self.general_tool_tab == GeneralToolTab::Tab1 {
-                                    self.show_general_job_setup(ui);
-                                }
+                            |ui| match self.general_tool_tab {
+                                GeneralToolTab::JobSetup => self.show_general_job_setup(ui),
+                                GeneralToolTab::Design => self.show_general_design_tools(ui),
+                                GeneralToolTab::Tab3 => {}
                             },
                         );
                     });
@@ -2829,6 +2850,26 @@ impl RengraveApp {
                         ui.weak("1 million points");
                     });
                 }
+            });
+    }
+
+    fn show_general_design_tools(&mut self, ui: &mut egui::Ui) {
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.set_max_width(GENERAL_SETUP_MAX_WIDTH);
+                ui.strong("Design");
+                ui.add_space(4.0);
+
+                general_setup_group(ui, "Create Vectors", |ui| {
+                    general_design_tool_grid(ui, "create_vectors", &[GeneralDesignTool::Circle]);
+                });
+                general_setup_group(ui, "Transform Objects", |ui| {
+                    general_design_tool_grid(ui, "transform_objects", &[]);
+                });
+                general_setup_group(ui, "Edit Objects", |ui| {
+                    general_design_tool_grid(ui, "edit_objects", &[]);
+                });
             });
     }
 
@@ -4068,6 +4109,114 @@ fn general_setup_group(ui: &mut egui::Ui, title: &str, add_contents: impl FnOnce
     ui.add_space(4.0);
 }
 
+fn general_circle_icon_strokes() -> &'static [Stroke] {
+    static STROKES: OnceLock<Vec<Stroke>> = OnceLock::new();
+    STROKES
+        .get_or_init(|| {
+            parse_svg_segments(include_str!("../assets/tool-icons/circle.svg"))
+                .expect("the bundled circle tool icon must be valid SVG")
+        })
+        .as_slice()
+}
+
+fn general_design_tool_size(available_width: f32) -> f32 {
+    let total_gap = GENERAL_DESIGN_TOOL_GAP * (GENERAL_DESIGN_GRID_COLUMNS - 1) as f32;
+    ((available_width - total_gap) / GENERAL_DESIGN_GRID_COLUMNS as f32)
+        .floor()
+        .max(24.0)
+}
+
+fn general_design_tool_grid(ui: &mut egui::Ui, id: &str, tools: &[GeneralDesignTool]) {
+    let button_size = general_design_tool_size(ui.available_width());
+    let row_count = tools.len().max(1).div_ceil(GENERAL_DESIGN_GRID_COLUMNS);
+    egui::Grid::new(id)
+        .num_columns(GENERAL_DESIGN_GRID_COLUMNS)
+        .spacing(egui::vec2(GENERAL_DESIGN_TOOL_GAP, GENERAL_DESIGN_TOOL_GAP))
+        .show(ui, |ui| {
+            for row in 0..row_count {
+                for column in 0..GENERAL_DESIGN_GRID_COLUMNS {
+                    let index = row * GENERAL_DESIGN_GRID_COLUMNS + column;
+                    if let Some(tool) = tools.get(index).copied() {
+                        let _ = general_design_tool_button(ui, tool, button_size);
+                    } else {
+                        ui.allocate_space(egui::vec2(button_size, button_size));
+                    }
+                }
+                ui.end_row();
+            }
+        });
+}
+
+fn general_design_tool_button(
+    ui: &mut egui::Ui,
+    tool: GeneralDesignTool,
+    size: f32,
+) -> egui::Response {
+    let label = tool.accessible_label();
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::click());
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label)
+    });
+
+    if ui.is_rect_visible(rect) {
+        let visuals = ui.style().interact(&response);
+        ui.painter()
+            .rect_filled(rect, visuals.corner_radius, visuals.bg_fill);
+        ui.painter().rect_stroke(
+            rect,
+            visuals.corner_radius,
+            visuals.bg_stroke,
+            egui::StrokeKind::Inside,
+        );
+        draw_general_svg_icon(
+            ui.painter(),
+            rect.shrink(7.0),
+            tool.icon_strokes(),
+            visuals.fg_stroke.color,
+        );
+    }
+
+    response.on_hover_text(label)
+}
+
+fn draw_general_svg_icon(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    strokes: &[Stroke],
+    color: egui::Color32,
+) {
+    let Some(first) = strokes.first() else {
+        return;
+    };
+    let mut min_x = first.start.x.min(first.end.x);
+    let mut max_x = first.start.x.max(first.end.x);
+    let mut min_y = first.start.y.min(first.end.y);
+    let mut max_y = first.start.y.max(first.end.y);
+    for stroke in &strokes[1..] {
+        min_x = min_x.min(stroke.start.x).min(stroke.end.x);
+        max_x = max_x.max(stroke.start.x).max(stroke.end.x);
+        min_y = min_y.min(stroke.start.y).min(stroke.end.y);
+        max_y = max_y.max(stroke.start.y).max(stroke.end.y);
+    }
+
+    let source_width = (max_x - min_x).max(f64::EPSILON);
+    let source_height = (max_y - min_y).max(f64::EPSILON);
+    let scale = f64::from(rect.width()) / source_width.max(source_height);
+    let center_x = (min_x + max_x) * 0.5;
+    let center_y = (min_y + max_y) * 0.5;
+    let project = |point: Point| {
+        egui::pos2(
+            rect.center().x + ((point.x - center_x) * scale) as f32,
+            rect.center().y - ((point.y - center_y) * scale) as f32,
+        )
+    };
+
+    let icon_stroke = egui::Stroke::new(1.8, color);
+    for stroke in strokes {
+        painter.line_segment([project(stroke.start), project(stroke.end)], icon_stroke);
+    }
+}
+
 fn general_display_value(value_mm: f64, units: GeneralUnits) -> f64 {
     match units {
         GeneralUnits::Inches => value_mm / MM_PER_INCH,
@@ -4629,7 +4778,7 @@ mod tests {
 
         RengraveApp {
             screen: AppScreen::Workbench,
-            general_tool_tab: GeneralToolTab::Tab1,
+            general_tool_tab: GeneralToolTab::JobSetup,
             general_view: GeneralView::TwoD,
             general_job_setup: GeneralJobSetup::default(),
             general_2d_transform: ViewTransform {
@@ -6806,7 +6955,7 @@ mod tests {
     }
 
     #[test]
-    fn kittest_general_workbench_has_layout_tabs_without_tools() {
+    fn kittest_general_workbench_has_layout_tabs_and_design_tools() {
         let mut app = test_app();
         app.tool_view = ToolView::GeneralPurpose;
         let mut harness = Harness::builder()
@@ -6817,7 +6966,7 @@ mod tests {
         for label in [
             "Tool Panel",
             "Job Setup",
-            "Tab 2",
+            "Design",
             "Tab 3",
             "2D View",
             "3D View",
@@ -6858,9 +7007,22 @@ mod tests {
         assert_eq!(harness.state().general_2d_transform.pan, Point::default());
         assert!(harness.state().general_2d_transform.zoom < 12.0);
 
-        harness.get_by_label("Tab 2").click();
+        harness.get_by_label("Design").click();
         harness.run();
-        assert_eq!(harness.state().general_tool_tab, GeneralToolTab::Tab2);
+        assert_eq!(harness.state().general_tool_tab, GeneralToolTab::Design);
+        for label in [
+            "Create Vectors",
+            "Transform Objects",
+            "Edit Objects",
+            "Create Circle",
+        ] {
+            assert!(harness.query_by_label(label).is_some(), "missing {label}");
+        }
+        let circle_button = harness.get_by_label("Create Circle");
+        assert!(
+            (circle_button.rect().width() - circle_button.rect().height()).abs() < 0.5,
+            "circle tool button should be square"
+        );
         harness.get_by_label("3D View").click();
         harness.run();
         assert_eq!(harness.state().general_view, GeneralView::ThreeD);
@@ -6869,6 +7031,14 @@ mod tests {
                 .query_by_label("3D orientation gizmo: X, Y, Z")
                 .is_some()
         );
+    }
+
+    #[test]
+    fn general_circle_tool_svg_is_valid() {
+        let svg = include_str!("../assets/tool-icons/circle.svg");
+        assert!(svg.contains("viewBox=\"0 0 24 24\""));
+        assert!(svg.contains("<circle"));
+        assert_eq!(general_circle_icon_strokes().len(), 72);
     }
 
     #[test]
