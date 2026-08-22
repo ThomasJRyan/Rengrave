@@ -76,7 +76,7 @@ const GENERAL_SETUP_MAX_WIDTH: f32 = 198.0;
 const GENERAL_SETUP_CONTENT_WIDTH: f32 = 186.0;
 const GENERAL_RULER_TOP_HEIGHT: f32 = 24.0;
 const GENERAL_RULER_LEFT_WIDTH: f32 = GENERAL_RULER_TOP_HEIGHT;
-const GENERAL_FIT_PADDING: f32 = 24.0;
+const GENERAL_FIT_MARGIN: f32 = 0.12;
 const MAX_RECENT_PROJECTS: usize = 10;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2379,12 +2379,12 @@ impl RengraveApp {
             self.general_job_setup.height.max(0.001),
             self.general_job_setup.units,
         );
-        let available_width =
-            f64::from((viewport_rect.width() - GENERAL_FIT_PADDING * 2.0).max(1.0));
-        let available_height =
-            f64::from((viewport_rect.height() - GENERAL_FIT_PADDING * 2.0).max(1.0));
-        self.general_2d_transform.zoom =
-            ((available_width / width).min(available_height / height) / 4.0).clamp(1.0, 500.0);
+        let fit_margin = viewport_rect.width().min(viewport_rect.height()) * GENERAL_FIT_MARGIN;
+        let available_width = f64::from((viewport_rect.width() - fit_margin * 2.0).max(1.0));
+        let available_height = f64::from((viewport_rect.height() - fit_margin * 2.0).max(1.0));
+        self.general_2d_transform.zoom = (available_width / width)
+            .min(available_height / height)
+            .clamp(1.0, 500.0);
         self.general_2d_transform.pan = Point::default();
         self.general_2d_transform.viewport_rotation_degrees = 0.0;
     }

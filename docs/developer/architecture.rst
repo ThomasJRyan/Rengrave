@@ -76,9 +76,9 @@ shared project model when that workbench gains a functional backend.
 
 The initial 2D frame and the **Centre Job (F7)** action calculate a fit zoom from
 the displayed job width and height, the viewport size, and the fixed ruler
-padding, then divide that fit zoom by four to leave two zoom levels of
-breathing room. They clear pan and rotation so the job's center aligns with
-the viewport's center. The button and ``F7`` key path share the same action.
+padding. They leave a 12 percent margin based on the smaller viewport
+dimension, then clear pan and rotation so the job's center aligns with the
+viewport's center. The button and ``F7`` key path share the same action.
 
 Core data flow
 --------------
