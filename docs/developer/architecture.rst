@@ -272,15 +272,17 @@ controls to expand beyond the fixed-width panel boundary.
 The second Tool Panel tab is the Design presentation surface. Its
 ``show_general_design_tools`` renderer defines three fixed categories:
 Create Vectors, Transform Objects, and Edit Objects. Every category delegates
-to the same five-column grid helper, which calculates a square button size
+to the same bounded five-slot row helper, which calculates a square button size
 from the bounded content width and fixed inter-button gaps. Empty grid cells
 reserve the same row geometry, so tools added later remain aligned across
 categories. The Design scroll area preserves the full width allocated by the
 Tool Panel; it does not apply a second inner-width cap before group frame
 margins are calculated. This matches Job Setup and keeps category frame bounds
 inside the panel separator. The shared group helper treats its width limit as
-an outer bound and subtracts the frame's horizontal margins before assigning
-the inner content width.
+an outer bound and subtracts the frame's measured border and horizontal margins
+before assigning the inner content width. Horizontal setup rows consume that
+derived inner width rather than imposing a competing fixed width, so every
+Job Setup and Design category resolves to the same outer width.
 
 Design tool artwork is stored as SVG under
 ``crates/rengrave-ui/assets/tool-icons``. The circle asset is parsed by the

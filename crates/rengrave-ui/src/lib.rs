@@ -73,7 +73,6 @@ const LOGO_SIZE: f32 = 40.0;
 const GENERAL_TAB_WIDTH: f32 = 28.0;
 const GENERAL_TOOL_PANEL_WIDTH: f32 = 256.0;
 const GENERAL_SETUP_MAX_WIDTH: f32 = 198.0;
-const GENERAL_SETUP_CONTENT_WIDTH: f32 = 186.0;
 const GENERAL_DESIGN_GRID_COLUMNS: usize = 5;
 const GENERAL_DESIGN_TOOL_GAP: f32 = 4.0;
 const GENERAL_JOB_TYPE_VISIBLE: bool = false;
@@ -2711,7 +2710,7 @@ impl RengraveApp {
                 ui.add_space(4.0);
 
                 if GENERAL_JOB_TYPE_VISIBLE {
-                    general_setup_group(ui, "Job Type", |ui| {
+                    general_setup_group(ui, "Job Type", |ui, _| {
                         ui.radio_value(
                             &mut self.general_job_setup.job_type,
                             GeneralJobType::SingleSided,
@@ -2750,7 +2749,7 @@ impl RengraveApp {
                     });
                 }
 
-                general_setup_group(ui, "Job Size", |ui| {
+                general_setup_group(ui, "Job Size", |ui, _| {
                     let units = self.general_job_setup.units;
                     general_dimension_row(
                         ui,
@@ -2771,38 +2770,44 @@ impl RengraveApp {
                         units,
                     );
                     general_justified_row(ui, |ui| {
-                        ui.label("Units");
-                        let gap = ((ui.available_width() - 86.0) / 2.0).max(0.0);
-                        ui.add_space(gap);
-                        if ui
-                            .add_sized(
-                                egui::vec2(32.0, 22.0),
-                                egui::RadioButton::new(
-                                    self.general_job_setup.units == GeneralUnits::Millimetres,
-                                    "mm",
-                                ),
-                            )
-                            .clicked()
-                        {
-                            self.set_general_units(GeneralUnits::Millimetres);
-                        }
-                        ui.add_space(gap);
-                        if ui
-                            .add_sized(
-                                egui::vec2(54.0, 22.0),
-                                egui::RadioButton::new(
-                                    self.general_job_setup.units == GeneralUnits::Inches,
-                                    "inches",
-                                ),
-                            )
-                            .clicked()
-                        {
-                            self.set_general_units(GeneralUnits::Inches);
-                        }
+                        ui.columns(3, |columns| {
+                            columns[0].label("Units");
+                            if columns[1]
+                                .add_sized(
+                                    egui::vec2(32.0, 22.0),
+                                    egui::RadioButton::new(
+                                        self.general_job_setup.units == GeneralUnits::Millimetres,
+                                        "mm",
+                                    ),
+                                )
+                                .clicked()
+                            {
+                                self.set_general_units(GeneralUnits::Millimetres);
+                            }
+                            if columns[2]
+                                .with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        ui.add_sized(
+                                            egui::vec2(54.0, 22.0),
+                                            egui::RadioButton::new(
+                                                self.general_job_setup.units
+                                                    == GeneralUnits::Inches,
+                                                "inches",
+                                            ),
+                                        )
+                                    },
+                                )
+                                .inner
+                                .clicked()
+                            {
+                                self.set_general_units(GeneralUnits::Inches);
+                            }
+                        });
                     });
                 });
 
-                general_setup_group(ui, "Z Zero Position", |ui| {
+                general_setup_group(ui, "Z Zero Position", |ui, _| {
                     ui.radio_value(
                         &mut self.general_job_setup.z_zero,
                         GeneralZZero::MaterialSurface,
@@ -2815,7 +2820,7 @@ impl RengraveApp {
                     );
                 });
 
-                general_setup_group(ui, "XY Datum Position", |ui| {
+                general_setup_group(ui, "XY Datum Position", |ui, _| {
                     let units = self.general_job_setup.units;
                     ui.vertical_centered(|ui| draw_general_xy_datum(ui));
                     ui.checkbox(&mut self.general_job_setup.xy_use_offset, "Use Offset");
@@ -2836,7 +2841,7 @@ impl RengraveApp {
                 });
 
                 if GENERAL_MODELING_RESOLUTION_VISIBLE {
-                    general_setup_group(ui, "Modeling Resolution", |ui| {
+                    general_setup_group(ui, "Modeling Resolution", |ui, _| {
                         egui::ComboBox::from_id_salt("general-modeling-resolution")
                             .selected_text("Standard (fastest)")
                             .width(ui.available_width())
@@ -2860,14 +2865,19 @@ impl RengraveApp {
                 ui.strong("Design");
                 ui.add_space(4.0);
 
-                general_setup_group(ui, "Create Vectors", |ui| {
-                    general_design_tool_grid(ui, "create_vectors", &[GeneralDesignTool::Circle]);
+                general_setup_group(ui, "Create Vectors", |ui, content_width| {
+                    general_design_tool_grid(
+                        ui,
+                        "create_vectors",
+                        &[GeneralDesignTool::Circle],
+                        content_width,
+                    );
                 });
-                general_setup_group(ui, "Transform Objects", |ui| {
-                    general_design_tool_grid(ui, "transform_objects", &[]);
+                general_setup_group(ui, "Transform Objects", |ui, content_width| {
+                    general_design_tool_grid(ui, "transform_objects", &[], content_width);
                 });
-                general_setup_group(ui, "Edit Objects", |ui| {
-                    general_design_tool_grid(ui, "edit_objects", &[]);
+                general_setup_group(ui, "Edit Objects", |ui, content_width| {
+                    general_design_tool_grid(ui, "edit_objects", &[], content_width);
                 });
             });
     }
@@ -4090,30 +4100,46 @@ fn full_width_button(ui: &mut egui::Ui, label: &str, enabled: bool) -> bool {
     .clicked()
 }
 
-fn general_setup_group(ui: &mut egui::Ui, title: &str, add_contents: impl FnOnce(&mut egui::Ui)) {
-    let (outer_width, content_width) = general_setup_group_widths(ui.available_width());
-    let group_rect = egui::Rect::from_min_size(
-        ui.cursor().min,
-        egui::vec2(outer_width, ui.available_height()),
-    );
-    ui.scope_builder(egui::UiBuilder::new().max_rect(group_rect), |ui| {
-        egui::Frame::group(ui.style())
-            .inner_margin(egui::Margin::same(6))
-            .show(ui, |ui| {
-                ui.set_width(content_width);
-                ui.strong(title);
-                ui.add_space(2.0);
-                add_contents(ui);
-            });
+fn general_setup_group(
+    ui: &mut egui::Ui,
+    title: &str,
+    add_contents: impl FnOnce(&mut egui::Ui, f32),
+) {
+    let frame = egui::Frame::group(ui.style()).inner_margin(egui::Margin::same(6));
+    let frame_margin = frame.total_margin();
+    let horizontal_frame_margin = frame_margin.left + frame_margin.right;
+    let (outer_width, content_width) =
+        general_setup_group_widths(ui.available_width(), horizontal_frame_margin);
+    let frame_response = ui
+        .allocate_ui_with_layout(
+            egui::vec2(outer_width, 0.0),
+            egui::Layout::top_down(egui::Align::Min),
+            |ui| {
+                frame
+                    .show(ui, |ui| {
+                        ui.set_width(content_width);
+                        ui.strong(title);
+                        ui.add_space(2.0);
+                        add_contents(ui, content_width);
+                    })
+                    .response
+            },
+        )
+        .inner;
+    let panel_label = format!("{title} panel");
+    frame_response.widget_info(|| {
+        egui::WidgetInfo::labeled(
+            egui::WidgetType::Other,
+            ui.is_enabled(),
+            panel_label.clone(),
+        )
     });
     ui.add_space(4.0);
 }
 
-fn general_setup_group_widths(available_width: f32) -> (f32, f32) {
+fn general_setup_group_widths(available_width: f32, horizontal_frame_margin: f32) -> (f32, f32) {
     let outer_width = GENERAL_SETUP_MAX_WIDTH.min(available_width);
-    let content_width = (outer_width - 12.0)
-        .max(0.0)
-        .min(GENERAL_SETUP_CONTENT_WIDTH);
+    let content_width = (outer_width - horizontal_frame_margin).max(0.0);
     (outer_width, content_width)
 }
 
@@ -4134,25 +4160,32 @@ fn general_design_tool_size(available_width: f32) -> f32 {
         .max(24.0)
 }
 
-fn general_design_tool_grid(ui: &mut egui::Ui, id: &str, tools: &[GeneralDesignTool]) {
-    let button_size = general_design_tool_size(ui.available_width());
+fn general_design_tool_grid(
+    ui: &mut egui::Ui,
+    id: &str,
+    tools: &[GeneralDesignTool],
+    content_width: f32,
+) {
+    let button_size = general_design_tool_size(content_width);
     let row_count = tools.len().max(1).div_ceil(GENERAL_DESIGN_GRID_COLUMNS);
-    egui::Grid::new(id)
-        .num_columns(GENERAL_DESIGN_GRID_COLUMNS)
-        .spacing(egui::vec2(GENERAL_DESIGN_TOOL_GAP, GENERAL_DESIGN_TOOL_GAP))
-        .show(ui, |ui| {
+    ui.push_id(id, |ui| {
+        ui.spacing_mut().item_spacing.y = GENERAL_DESIGN_TOOL_GAP;
+        ui.vertical(|ui| {
             for row in 0..row_count {
-                for column in 0..GENERAL_DESIGN_GRID_COLUMNS {
-                    let index = row * GENERAL_DESIGN_GRID_COLUMNS + column;
-                    if let Some(tool) = tools.get(index).copied() {
-                        let _ = general_design_tool_button(ui, tool, button_size);
-                    } else {
-                        ui.allocate_space(egui::vec2(button_size, button_size));
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = GENERAL_DESIGN_TOOL_GAP;
+                    for column in 0..GENERAL_DESIGN_GRID_COLUMNS {
+                        let index = row * GENERAL_DESIGN_GRID_COLUMNS + column;
+                        if let Some(tool) = tools.get(index).copied() {
+                            let _ = general_design_tool_button(ui, tool, button_size);
+                        } else {
+                            ui.allocate_space(egui::vec2(button_size, button_size));
+                        }
                     }
-                }
-                ui.end_row();
+                });
             }
         });
+    });
 }
 
 fn general_design_tool_button(
@@ -4242,19 +4275,20 @@ fn general_storage_value(display_value: f64, units: GeneralUnits) -> f64 {
 fn general_dimension_row(ui: &mut egui::Ui, label: &str, value_mm: &mut f64, units: GeneralUnits) {
     general_justified_row(ui, |ui| {
         ui.label(label);
-        ui.add_space((ui.available_width() - 48.0).max(0.0));
-        let mut display_value = general_display_value(*value_mm, units);
-        if ui
-            .add_sized(
-                egui::vec2(48.0, 22.0),
-                egui::DragValue::new(&mut display_value)
-                    .speed(0.1)
-                    .range(0.0..=f64::MAX),
-            )
-            .changed()
-        {
-            *value_mm = general_storage_value(display_value, units);
-        }
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let mut display_value = general_display_value(*value_mm, units);
+            if ui
+                .add_sized(
+                    egui::vec2(48.0, 22.0),
+                    egui::DragValue::new(&mut display_value)
+                        .speed(0.1)
+                        .range(0.0..=f64::MAX),
+                )
+                .changed()
+            {
+                *value_mm = general_storage_value(display_value, units);
+            }
+        });
     });
 }
 
@@ -4267,22 +4301,24 @@ fn general_offset_row(
 ) {
     general_justified_row(ui, |ui| {
         ui.label(label);
-        ui.add_space((ui.available_width() - 48.0).max(0.0));
-        let mut display_value = general_display_value(*value_mm, units);
-        ui.add_enabled_ui(enabled, |ui| {
-            ui.add_sized(
-                egui::vec2(48.0, 22.0),
-                egui::DragValue::new(&mut display_value).speed(0.1),
-            )
-            .changed();
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let mut display_value = general_display_value(*value_mm, units);
+            ui.add_enabled_ui(enabled, |ui| {
+                ui.add_sized(
+                    egui::vec2(48.0, 22.0),
+                    egui::DragValue::new(&mut display_value).speed(0.1),
+                )
+                .changed();
+            });
+            *value_mm = general_storage_value(display_value, units);
         });
-        *value_mm = general_storage_value(display_value, units);
     });
 }
 
 fn general_justified_row(ui: &mut egui::Ui, add_contents: impl FnOnce(&mut egui::Ui)) {
+    let available_width = ui.available_width();
     ui.allocate_ui_with_layout(
-        egui::vec2(GENERAL_SETUP_CONTENT_WIDTH, 22.0),
+        egui::vec2(available_width, 22.0),
         egui::Layout::left_to_right(egui::Align::Center),
         add_contents,
     );
@@ -7008,6 +7044,20 @@ mod tests {
         assert!(harness.state().general_2d_view_initialized);
         assert!(harness.state().general_2d_transform.zoom < DEFAULT_PREVIEW_ZOOM / 4.0);
 
+        let job_panel_widths: Vec<f32> = [
+            "Job Size panel",
+            "Z Zero Position panel",
+            "XY Datum Position panel",
+        ]
+        .map(|label| harness.get_by_label(label).rect().width())
+        .into_iter()
+        .collect();
+        assert!(
+            job_panel_widths
+                .windows(2)
+                .all(|widths| { (widths[0] - widths[1]).abs() < 0.5 })
+        );
+
         harness.state_mut().general_2d_transform.zoom = 12.0;
         harness.state_mut().general_2d_transform.pan = Point::new(80.0, -40.0);
         harness.key_press(egui::Key::F7);
@@ -7026,6 +7076,23 @@ mod tests {
         ] {
             assert!(harness.query_by_label(label).is_some(), "missing {label}");
         }
+        let design_panel_widths: Vec<f32> = [
+            "Create Vectors panel",
+            "Transform Objects panel",
+            "Edit Objects panel",
+        ]
+        .map(|label| harness.get_by_label(label).rect().width())
+        .into_iter()
+        .collect();
+        assert!(
+            design_panel_widths
+                .windows(2)
+                .all(|widths| { (widths[0] - widths[1]).abs() < 0.5 })
+        );
+        assert!(
+            (design_panel_widths[0] - job_panel_widths[0]).abs() < 0.5,
+            "Design widths {design_panel_widths:?} should match Job Setup widths {job_panel_widths:?}"
+        );
         let circle_button = harness.get_by_label("Create Circle");
         assert!(
             (circle_button.rect().width() - circle_button.rect().height()).abs() < 0.5,
@@ -7055,10 +7122,12 @@ mod tests {
 
     #[test]
     fn general_setup_groups_include_frame_margins_inside_available_width() {
+        let horizontal_frame_margin = 14.0;
         for available_width in [220.0, GENERAL_SETUP_MAX_WIDTH, 150.0] {
-            let (outer_width, content_width) = general_setup_group_widths(available_width);
+            let (outer_width, content_width) =
+                general_setup_group_widths(available_width, horizontal_frame_margin);
             assert!(outer_width <= available_width);
-            assert!(content_width + 12.0 <= outer_width);
+            assert_eq!(content_width + horizontal_frame_margin, outer_width);
         }
     }
 
