@@ -4507,14 +4507,23 @@ mod tests {
     }
 
     #[test]
-    fn projected_face_area_rejects_edge_on_quads() {
+    fn projected_face_thickness_rejects_edge_on_and_subpixel_quads() {
         let edge_on = [
             egui::pos2(10.0, 20.0),
             egui::pos2(10.0, 40.0),
             egui::pos2(10.0, 60.0),
             egui::pos2(10.0, 80.0),
         ];
-        assert!(projected_face_area(edge_on) < 0.001);
+        assert!(projected_face_thickness(edge_on) < 0.001);
+
+        let subpixel_thin = [
+            egui::pos2(10.0, 20.0),
+            egui::pos2(10.4, 20.0),
+            egui::pos2(10.4, 1020.0),
+            egui::pos2(10.0, 1020.0),
+        ];
+        assert!(projected_face_area(subpixel_thin) > 0.5);
+        assert!(projected_face_thickness(subpixel_thin) < 0.8);
 
         let visible = [
             egui::pos2(10.0, 20.0),
@@ -4522,7 +4531,7 @@ mod tests {
             egui::pos2(40.0, 50.0),
             egui::pos2(10.0, 50.0),
         ];
-        assert!((projected_face_area(visible) - 900.0).abs() < 0.001);
+        assert!((projected_face_thickness(visible) - 30.0).abs() < 0.001);
     }
 
     fn test_app() -> RengraveApp {

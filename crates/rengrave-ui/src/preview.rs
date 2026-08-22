@@ -1456,6 +1456,20 @@ pub(crate) fn projected_face_area(vertices: [egui::Pos2; 4]) -> f32 {
         * 0.5
 }
 
+pub(crate) fn projected_face_thickness(vertices: [egui::Pos2; 4]) -> f32 {
+    let longest_edge = vertices
+        .iter()
+        .zip(vertices.iter().cycle().skip(1))
+        .take(vertices.len())
+        .map(|(current, next)| current.distance(*next))
+        .fold(0.0_f32, f32::max);
+    if longest_edge <= f32::EPSILON {
+        0.0
+    } else {
+        projected_face_area(vertices) / longest_edge
+    }
+}
+
 pub(crate) fn draw_general_scene_3d(
     painter: &egui::Painter,
     rect: egui::Rect,
@@ -1510,14 +1524,22 @@ pub(crate) fn draw_general_scene_3d(
     });
     for face in faces {
         let projected_vertices = face.vertices.map(project);
-        if projected_face_area(projected_vertices) < 0.5 {
+        let edge_stroke = egui::Stroke::new(0.8, egui::Color32::from_rgb(112, 104, 96));
+        if projected_face_thickness(projected_vertices) < edge_stroke.width {
             continue;
         }
         painter.add(egui::Shape::convex_polygon(
-            projected_vertices.into_iter().collect(),
+            projected_vertices.to_vec(),
             face.fill,
-            egui::Stroke::new(0.8, egui::Color32::from_rgb(112, 104, 96)),
+            egui::Stroke::NONE,
         ));
+        for (current, next) in projected_vertices
+            .iter()
+            .zip(projected_vertices.iter().cycle().skip(1))
+            .take(projected_vertices.len())
+        {
+            painter.line_segment([*current, *next], edge_stroke);
+        }
     }
 }
 
