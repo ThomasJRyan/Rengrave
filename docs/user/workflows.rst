@@ -78,7 +78,8 @@ same compact five-column row of square tool buttons. **Create Vectors**
 currently contains a circle-icon button labelled **Create Circle** when
 hovered or read by assistive technology. This control is UI scaffolding only;
 it does not create canvas geometry yet. The other two categories are empty
-until their tools are defined.
+until their tools are defined. Category frames conform to the Tool Panel's
+available content width and do not extend into the Editor/Preview Panel.
 
 Layout and coordinate choices
 -----------------------------

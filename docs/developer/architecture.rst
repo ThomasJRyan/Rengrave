@@ -275,7 +275,12 @@ Create Vectors, Transform Objects, and Edit Objects. Every category delegates
 to the same five-column grid helper, which calculates a square button size
 from the bounded content width and fixed inter-button gaps. Empty grid cells
 reserve the same row geometry, so tools added later remain aligned across
-categories.
+categories. The Design scroll area preserves the full width allocated by the
+Tool Panel; it does not apply a second inner-width cap before group frame
+margins are calculated. This matches Job Setup and keeps category frame bounds
+inside the panel separator. The shared group helper treats its width limit as
+an outer bound and subtracts the frame's horizontal margins before assigning
+the inner content width.
 
 Design tool artwork is stored as SVG under
 ``crates/rengrave-ui/assets/tool-icons``. The circle asset is parsed by the

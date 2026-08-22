@@ -2857,7 +2857,6 @@ impl RengraveApp {
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                ui.set_max_width(GENERAL_SETUP_MAX_WIDTH);
                 ui.strong("Design");
                 ui.add_space(4.0);
 
@@ -4092,21 +4091,30 @@ fn full_width_button(ui: &mut egui::Ui, label: &str, enabled: bool) -> bool {
 }
 
 fn general_setup_group(ui: &mut egui::Ui, title: &str, add_contents: impl FnOnce(&mut egui::Ui)) {
+    let (outer_width, content_width) = general_setup_group_widths(ui.available_width());
     let group_rect = egui::Rect::from_min_size(
         ui.cursor().min,
-        egui::vec2(GENERAL_SETUP_MAX_WIDTH, ui.available_height()),
+        egui::vec2(outer_width, ui.available_height()),
     );
     ui.scope_builder(egui::UiBuilder::new().max_rect(group_rect), |ui| {
         egui::Frame::group(ui.style())
             .inner_margin(egui::Margin::same(6))
             .show(ui, |ui| {
-                ui.set_width(GENERAL_SETUP_MAX_WIDTH);
+                ui.set_width(content_width);
                 ui.strong(title);
                 ui.add_space(2.0);
                 add_contents(ui);
             });
     });
     ui.add_space(4.0);
+}
+
+fn general_setup_group_widths(available_width: f32) -> (f32, f32) {
+    let outer_width = GENERAL_SETUP_MAX_WIDTH.min(available_width);
+    let content_width = (outer_width - 12.0)
+        .max(0.0)
+        .min(GENERAL_SETUP_CONTENT_WIDTH);
+    (outer_width, content_width)
 }
 
 fn general_circle_icon_strokes() -> &'static [Stroke] {
@@ -7023,6 +7031,10 @@ mod tests {
             (circle_button.rect().width() - circle_button.rect().height()).abs() < 0.5,
             "circle tool button should be square"
         );
+        assert!(
+            circle_button.rect().right() <= GENERAL_TOOL_PANEL_WIDTH,
+            "Design tools should remain inside the Tool Panel"
+        );
         harness.get_by_label("3D View").click();
         harness.run();
         assert_eq!(harness.state().general_view, GeneralView::ThreeD);
@@ -7039,6 +7051,15 @@ mod tests {
         assert!(svg.contains("viewBox=\"0 0 24 24\""));
         assert!(svg.contains("<circle"));
         assert_eq!(general_circle_icon_strokes().len(), 72);
+    }
+
+    #[test]
+    fn general_setup_groups_include_frame_margins_inside_available_width() {
+        for available_width in [220.0, GENERAL_SETUP_MAX_WIDTH, 150.0] {
+            let (outer_width, content_width) = general_setup_group_widths(available_width);
+            assert!(outer_width <= available_width);
+            assert!(content_width + 12.0 <= outer_width);
+        }
     }
 
     #[test]
