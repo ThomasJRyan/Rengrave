@@ -4506,6 +4506,25 @@ mod tests {
         assert!(top > bottom);
     }
 
+    #[test]
+    fn projected_face_area_rejects_edge_on_quads() {
+        let edge_on = [
+            egui::pos2(10.0, 20.0),
+            egui::pos2(10.0, 40.0),
+            egui::pos2(10.0, 60.0),
+            egui::pos2(10.0, 80.0),
+        ];
+        assert!(projected_face_area(edge_on) < 0.001);
+
+        let visible = [
+            egui::pos2(10.0, 20.0),
+            egui::pos2(40.0, 20.0),
+            egui::pos2(40.0, 50.0),
+            egui::pos2(10.0, 50.0),
+        ];
+        assert!((projected_face_area(visible) - 900.0).abs() < 0.001);
+    }
+
     fn test_app() -> RengraveApp {
         let document = RengraveDocument::default();
         let (gcode_path, svg_path, dxf_path) = default_output_paths(&None);

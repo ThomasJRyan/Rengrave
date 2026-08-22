@@ -1445,6 +1445,17 @@ fn general_face_camera_depth(face: &GeneralSceneFace, yaw_radians: f64, pitch_ra
         / face.vertices.len() as f64
 }
 
+pub(crate) fn projected_face_area(vertices: [egui::Pos2; 4]) -> f32 {
+    vertices
+        .iter()
+        .zip(vertices.iter().cycle().skip(1))
+        .take(vertices.len())
+        .map(|(current, next)| current.x * next.y - next.x * current.y)
+        .sum::<f32>()
+        .abs()
+        * 0.5
+}
+
 pub(crate) fn draw_general_scene_3d(
     painter: &egui::Painter,
     rect: egui::Rect,
@@ -1498,8 +1509,12 @@ pub(crate) fn draw_general_scene_3d(
             .total_cmp(&general_face_camera_depth(right, yaw, pitch))
     });
     for face in faces {
+        let projected_vertices = face.vertices.map(project);
+        if projected_face_area(projected_vertices) < 0.5 {
+            continue;
+        }
         painter.add(egui::Shape::convex_polygon(
-            face.vertices.into_iter().map(project).collect(),
+            projected_vertices.into_iter().collect(),
             face.fill,
             egui::Stroke::new(0.8, egui::Color32::from_rgb(112, 104, 96)),
         ));

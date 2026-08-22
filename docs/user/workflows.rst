@@ -57,7 +57,8 @@ middle mouse button to orbit, drag with the right mouse button to pan, and
 use the mouse wheel to zoom. The General 3D View intentionally has no grid or
 rulers. A labelled orientation gizmo in the upper-right corner follows the
 camera and identifies the red X, green Y, and blue Z axes. Stock faces are
-opaque, and zoomed geometry is clipped to the Editor/Preview Panel.
+opaque, edge-on faces are hidden to keep head-on views clean, and zoomed
+geometry is clipped to the Editor/Preview Panel.
 
 The **Job Setup** tab presents the planned job setup surface with controls for
 job type, job size and units, Z zero position, XY datum offset, and modeling
