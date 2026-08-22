@@ -1472,6 +1472,89 @@ pub(crate) fn draw_general_scene_3d(
     }
 }
 
+pub(crate) fn orientation_gizmo_directions(
+    yaw_radians: f64,
+    pitch_radians: f64,
+) -> [egui::Vec2; 3] {
+    let project_axis = |x: f64, y: f64, z: f64| {
+        let rotated_x = x * yaw_radians.cos() - y * yaw_radians.sin();
+        let rotated_y = x * yaw_radians.sin() + y * yaw_radians.cos();
+        let vertical = rotated_y * pitch_radians.cos() - z * pitch_radians.sin();
+        egui::vec2(rotated_x as f32, -vertical as f32)
+    };
+    [
+        project_axis(1.0, 0.0, 0.0),
+        project_axis(0.0, 1.0, 0.0),
+        project_axis(0.0, 0.0, 1.0),
+    ]
+}
+
+pub(crate) fn draw_general_orientation_gizmo(
+    painter: &egui::Painter,
+    viewport_rect: egui::Rect,
+    transform: ViewTransform,
+    pitch_degrees: f64,
+) -> egui::Rect {
+    const GIZMO_SIZE: f32 = 88.0;
+    const GIZMO_MARGIN: f32 = 12.0;
+    const AXIS_LENGTH: f32 = 28.0;
+    let gizmo_rect = egui::Rect::from_min_size(
+        viewport_rect.right_top() + egui::vec2(-GIZMO_SIZE - GIZMO_MARGIN, GIZMO_MARGIN),
+        egui::vec2(GIZMO_SIZE, GIZMO_SIZE),
+    );
+    let center = gizmo_rect.center();
+    painter.circle_filled(
+        center,
+        GIZMO_SIZE / 2.0,
+        egui::Color32::from_rgba_unmultiplied(18, 20, 22, 210),
+    );
+    painter.circle_stroke(
+        center,
+        GIZMO_SIZE / 2.0,
+        egui::Stroke::new(1.0, egui::Color32::from_rgb(58, 66, 70)),
+    );
+
+    let directions = orientation_gizmo_directions(
+        transform.total_rotation_radians(),
+        pitch_degrees.to_radians(),
+    );
+    let axes = [
+        ("X", egui::Color32::from_rgb(220, 72, 83)),
+        ("Y", egui::Color32::from_rgb(139, 190, 63)),
+        ("Z", egui::Color32::from_rgb(72, 133, 218)),
+    ];
+
+    for ((label, color), direction) in axes.into_iter().zip(directions) {
+        let projected_length = direction.length();
+        let axis_direction = if projected_length > 0.001 {
+            direction / projected_length
+        } else {
+            egui::Vec2::ZERO
+        };
+        let visible_length = AXIS_LENGTH * projected_length.clamp(0.0, 1.0);
+        let positive = center + axis_direction * visible_length;
+        let negative = center - axis_direction * visible_length;
+
+        painter.line_segment([negative, positive], egui::Stroke::new(2.0, color));
+        painter.circle_stroke(
+            negative,
+            5.0,
+            egui::Stroke::new(1.5, color.gamma_multiply(0.75)),
+        );
+        painter.circle_filled(positive, 10.0, color);
+        painter.text(
+            positive,
+            egui::Align2::CENTER_CENTER,
+            label,
+            egui::FontId::monospace(12.0),
+            egui::Color32::from_rgb(24, 27, 29),
+        );
+    }
+
+    painter.circle_filled(center, 3.0, egui::Color32::from_rgb(214, 220, 224));
+    gizmo_rect
+}
+
 pub(crate) fn view_cube_interaction(ui: &mut egui::Ui, rect: egui::Rect) -> Option<()> {
     let cube_rect = egui::Rect::from_min_size(
         rect.right_top() + egui::vec2(-122.0, 10.0),

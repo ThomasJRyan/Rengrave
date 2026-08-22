@@ -55,7 +55,8 @@ It is generated from the same job dimensions as the 2D canvas, so changes to
 width, height, or thickness appear automatically. Drag with the left or
 middle mouse button to orbit, drag with the right mouse button to pan, and
 use the mouse wheel to zoom. The General 3D View intentionally has no grid or
-rulers.
+rulers. A labelled orientation gizmo in the upper-right corner follows the
+camera and identifies the red X, green Y, and blue Z axes.
 
 The **Job Setup** tab presents the planned job setup surface with controls for
 job type, job size and units, Z zero position, XY datum offset, and modeling

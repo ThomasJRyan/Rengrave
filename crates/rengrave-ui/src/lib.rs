@@ -2652,6 +2652,31 @@ impl RengraveApp {
             self.general_3d_pitch_degrees,
             &scene,
         );
+        let gizmo_rect = preview::draw_general_orientation_gizmo(
+            ui.painter(),
+            rect,
+            self.general_3d_transform,
+            self.general_3d_pitch_degrees,
+        );
+        let gizmo_response = ui.interact(
+            gizmo_rect,
+            ui.id().with("general-3d-orientation-gizmo"),
+            egui::Sense::hover(),
+        );
+        gizmo_response.widget_info(|| {
+            egui::WidgetInfo::labeled(
+                egui::WidgetType::Other,
+                ui.is_enabled(),
+                "3D orientation gizmo: X, Y, Z",
+            )
+        });
+        gizmo_response.on_hover_text(format!(
+            "Orientation gizmo\nX red · Y green · Z blue\nYaw {:.0}° · Pitch {:.0}°",
+            self.general_3d_transform
+                .total_rotation_radians()
+                .to_degrees(),
+            self.general_3d_pitch_degrees,
+        ));
     }
 
     fn show_general_job_setup(&mut self, ui: &mut egui::Ui) {
@@ -4442,6 +4467,17 @@ mod tests {
         assert_close(max.y, 40.0);
         assert_close(min.z, -10.0);
         assert_close(max.z, 0.0);
+    }
+
+    #[test]
+    fn orientation_gizmo_projects_axes_with_camera_orientation() {
+        let top = orientation_gizmo_directions(0.0, 0.0);
+        assert!(top[0].x > 0.99);
+        assert!(top[1].y < -0.99);
+        assert!(top[2].length() < 0.001);
+
+        let tilted = orientation_gizmo_directions(35.0_f64.to_radians(), -35.0_f64.to_radians());
+        assert!(tilted[2].y < -0.5);
     }
 
     fn test_app() -> RengraveApp {
@@ -6681,6 +6717,11 @@ mod tests {
         harness.get_by_label("3D View").click();
         harness.run();
         assert_eq!(harness.state().general_view, GeneralView::ThreeD);
+        assert!(
+            harness
+                .query_by_label("3D orientation gizmo: X, Y, Z")
+                .is_some()
+        );
     }
 
     #[test]
