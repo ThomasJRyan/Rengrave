@@ -46,8 +46,9 @@ The 2D View also includes top and left rulers. Their zero point is the center
 of the canvas, and pointer crosshair lines track the cursor through the ruler
 and canvas area. Rulers show integer coordinates at normal zoom levels and
 use up to two decimal places when zoomed in closely.
-The **Center Job** button restores a centered, fitted view of the current job;
-the same fitting is applied automatically the first time the 2D View opens.
+The **Centre Job (F7)** button, or the ``F7`` hotkey, restores a centered view
+of the current job at two zoom levels farther out; the same fitting is applied
+automatically the first time the 2D View opens.
 
 The **Job Setup** tab presents the planned job setup surface with controls for
 job type, job size and units, Z zero position, XY datum offset, and modeling

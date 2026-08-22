@@ -2383,9 +2383,8 @@ impl RengraveApp {
             f64::from((viewport_rect.width() - GENERAL_FIT_PADDING * 2.0).max(1.0));
         let available_height =
             f64::from((viewport_rect.height() - GENERAL_FIT_PADDING * 2.0).max(1.0));
-        self.general_2d_transform.zoom = (available_width / width)
-            .min(available_height / height)
-            .clamp(1.0, 500.0);
+        self.general_2d_transform.zoom =
+            ((available_width / width).min(available_height / height) / 4.0).clamp(1.0, 500.0);
         self.general_2d_transform.pan = Point::default();
         self.general_2d_transform.viewport_rotation_degrees = 0.0;
     }
@@ -2447,7 +2446,7 @@ impl RengraveApp {
                 });
 
                 ui.scope_builder(egui::UiBuilder::new().max_rect(center_rect), |ui| {
-                    let mut center_job = false;
+                    let mut center_job = ui.input(|input| input.key_pressed(egui::Key::F7));
                     ui.horizontal(|ui| {
                         if ui
                             .selectable_label(self.general_view == GeneralView::TwoD, "2D View")
@@ -2462,7 +2461,7 @@ impl RengraveApp {
                             self.general_view = GeneralView::ThreeD;
                         }
                         ui.add_space((ui.available_width() - 100.0).max(0.0));
-                        center_job = ui.button("Center Job").clicked();
+                        center_job |= ui.button("Centre Job (F7)").clicked();
                     });
                     let viewport_rect = ui.available_rect_before_wrap();
                     if self.general_view == GeneralView::TwoD {
@@ -6552,7 +6551,7 @@ mod tests {
             "Tab 3",
             "2D View",
             "3D View",
-            "Center Job",
+            "Centre Job (F7)",
             "Toolpath Panel",
             "Job Type",
             "Job Size",
@@ -6569,6 +6568,13 @@ mod tests {
         assert!(harness.query_by_label("Calculate").is_none());
         assert!(harness.state().general_2d_view_initialized);
         assert!(harness.state().general_2d_transform.zoom < DEFAULT_PREVIEW_ZOOM / 4.0);
+
+        harness.state_mut().general_2d_transform.zoom = 12.0;
+        harness.state_mut().general_2d_transform.pan = Point::new(80.0, -40.0);
+        harness.key_press(egui::Key::F7);
+        harness.run();
+        assert_eq!(harness.state().general_2d_transform.pan, Point::default());
+        assert!(harness.state().general_2d_transform.zoom < 12.0);
 
         harness.get_by_label("Double Sided").hover();
         harness.run();

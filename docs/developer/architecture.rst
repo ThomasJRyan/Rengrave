@@ -74,10 +74,11 @@ screen while ruler values change to the new unit. The conversion is currently
 local to the layout-only General workbench; it should become part of the
 shared project model when that workbench gains a functional backend.
 
-The initial 2D frame and the **Center Job** action calculate a fit zoom from
+The initial 2D frame and the **Centre Job (F7)** action calculate a fit zoom from
 the displayed job width and height, the viewport size, and the fixed ruler
-padding. They clear pan and rotation so the job's center aligns with the
-viewport's center.
+padding, then divide that fit zoom by four to leave two zoom levels of
+breathing room. They clear pan and rotation so the job's center aligns with
+the viewport's center. The button and ``F7`` key path share the same action.
 
 Core data flow
 --------------
