@@ -76,10 +76,12 @@ The **Design** tab organizes future editing controls into **Create Vectors**,
 **Transform Objects**, and **Edit Objects** categories. Each category uses the
 same compact five-column row of square tool buttons. **Create Vectors**
 currently contains a circle-icon button labelled **Create Circle** when
-hovered or read by assistive technology. The other two categories are empty
-until their tools are defined. Category frames conform to the Tool Panel's
-available content width and do not extend into the Editor/Preview Panel. All
-sub-panels in both Design and Job Setup use one uniform width.
+hovered or read by assistive technology. **Edit Objects** contains an **Edit
+Vector Parameters** pencil button. Edit Object controls are disabled until a
+vector is selected. **Transform Objects** remains empty until its tools are
+defined. Category frames conform to the Tool Panel's available content width
+and do not extend into the Editor/Preview Panel. All sub-panels in both Design
+and Job Setup use one uniform width.
 
 Selecting **Create Circle** temporarily replaces the Design categories with a
 contained circle settings view. A live circle preview starts at the center of
@@ -100,6 +102,14 @@ outline easier to target without requiring pixel-perfect input. Repeated clicks
 on the same path keep selecting that path and do not cycle through enclosing
 objects. Press ``Delete`` to remove the selected circle. Blank clicks clear
 selection.
+
+With a circle selected, choose **Edit Vector Parameters** or double-click the
+circle path to reopen its parameter view. The current center and size populate
+the controls, and both 2D and 3D views preview changes immediately. **Update**
+applies the new values to the existing vector without changing its identity.
+**Cancel** or ``Escape`` discards the draft values. Updating a vector does not
+save the project automatically; use **File > Save** or **File > Save As** when
+you want to write the changes to the ``.rgrv`` file.
 
 The 3D View displays circles on the job surface but does not provide selection
 or editing. Saving a General Purpose project to an ``.rgrv`` file stores its

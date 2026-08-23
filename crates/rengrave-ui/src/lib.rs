@@ -17,7 +17,7 @@ use rengrave_core::batch::{
     prepare_batch_output_with_cancel_and_progress, secondary_output_path,
 };
 use rengrave_core::bitmap::{BitmapBackend, BitmapTraceStats, bitmap_trace_mask_and_stats};
-use rengrave_core::design::{DesignGeometry, DesignObjectId, VectorDocument};
+use rengrave_core::design::{DesignCircle, DesignGeometry, DesignObjectId, VectorDocument};
 use rengrave_core::dxf::read_dxf_font;
 use rengrave_core::external::is_bitmap_input;
 use rengrave_core::font::{Font, Stroke, read_cxf, read_ttf};
@@ -100,18 +100,21 @@ enum GeneralToolTab {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum GeneralDesignTool {
     Circle,
+    EditParameters,
 }
 
 impl GeneralDesignTool {
     fn accessible_label(self) -> &'static str {
         match self {
             Self::Circle => "Create Circle",
+            Self::EditParameters => "Edit Vector Parameters",
         }
     }
 
     fn icon_strokes(self) -> &'static [Stroke] {
         match self {
             Self::Circle => general_circle_icon_strokes(),
+            Self::EditParameters => general_edit_parameters_icon_strokes(),
         }
     }
 }
@@ -140,14 +143,36 @@ impl Default for CircleDraft {
     }
 }
 
+impl CircleDraft {
+    fn from_circle(circle: DesignCircle) -> Self {
+        Self {
+            center_mm: circle.center_mm,
+            radius_mm: circle.radius_mm,
+            measurement: CircleMeasurement::Diameter,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CircleToolMode {
+    Create,
+    Edit(DesignObjectId),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct CircleToolSession {
+    draft: CircleDraft,
+    mode: CircleToolMode,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum GeneralTemporaryTool {
-    Circle(CircleDraft),
+    Circle(CircleToolSession),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TemporaryToolAction {
-    Create,
+    Confirm,
     Cancel,
 }
 
@@ -2475,7 +2500,11 @@ impl RengraveApp {
             self.general_job_setup.height,
             self.general_job_setup.thickness,
         );
+        let edit_target = self.general_temporary_edit_target();
         for object in self.general_design_document.objects() {
+            if edit_target == Some(object.id) {
+                continue;
+            }
             let DesignGeometry::Circle(circle) = object.geometry;
             scene.objects.push(GeneralSceneObject::DesignCircle {
                 center_mm: circle.center_mm,
@@ -2483,14 +2512,37 @@ impl RengraveApp {
                 preview: false,
             });
         }
-        if let Some(GeneralTemporaryTool::Circle(draft)) = self.general_temporary_tool {
+        if let Some(GeneralTemporaryTool::Circle(session)) = self.general_temporary_tool {
             scene.objects.push(GeneralSceneObject::DesignCircle {
-                center_mm: draft.center_mm,
-                radius_mm: draft.radius_mm,
+                center_mm: session.draft.center_mm,
+                radius_mm: session.draft.radius_mm,
                 preview: true,
             });
         }
         scene
+    }
+
+    fn general_temporary_edit_target(&self) -> Option<DesignObjectId> {
+        match self.general_temporary_tool {
+            Some(GeneralTemporaryTool::Circle(CircleToolSession {
+                mode: CircleToolMode::Edit(id),
+                ..
+            })) => Some(id),
+            _ => None,
+        }
+    }
+
+    fn begin_general_object_edit(&mut self, id: DesignObjectId) {
+        let Some(object) = self.general_design_document.object(id) else {
+            return;
+        };
+        let DesignGeometry::Circle(circle) = object.geometry;
+        self.general_selected_object = Some(id);
+        self.general_tool_tab = GeneralToolTab::Design;
+        self.general_temporary_tool = Some(GeneralTemporaryTool::Circle(CircleToolSession {
+            draft: CircleDraft::from_circle(circle),
+            mode: CircleToolMode::Edit(id),
+        }));
     }
 
     fn show_general_workbench(&mut self, ui: &mut egui::Ui) {
@@ -2702,7 +2754,12 @@ impl RengraveApp {
         canvas_response: &egui::Response,
     ) {
         let mut selection_pointer = None;
+        let mut edit_requested = false;
+        let edit_target = self.general_temporary_edit_target();
         for object in self.general_design_document.objects() {
+            if edit_target == Some(object.id) {
+                continue;
+            }
             let DesignGeometry::Circle(circle) = object.geometry;
             let center = preview::model_point_to_screen(
                 canvas_rect,
@@ -2727,29 +2784,31 @@ impl RengraveApp {
             response.widget_info(|| {
                 egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label.clone())
             });
-            if response.clicked()
+            if (response.clicked() || response.double_clicked())
                 && response
                     .interact_pointer_pos()
                     .is_some_and(|pointer| pointer.distance(center) <= interaction_radius)
             {
                 selection_pointer = response.interact_pointer_pos();
+                edit_requested |= response.double_clicked();
             }
 
             let selected = self.general_selected_object == Some(object.id);
             draw_general_circle_2d(painter, center, radius, selected, false);
         }
 
-        if let Some(GeneralTemporaryTool::Circle(draft)) = self.general_temporary_tool {
+        if let Some(GeneralTemporaryTool::Circle(session)) = self.general_temporary_tool {
             let center = preview::model_point_to_screen(
                 canvas_rect,
                 self.general_2d_transform,
                 Point::new(
-                    general_display_value(draft.center_mm.x, self.general_job_setup.units),
-                    general_display_value(draft.center_mm.y, self.general_job_setup.units),
+                    general_display_value(session.draft.center_mm.x, self.general_job_setup.units),
+                    general_display_value(session.draft.center_mm.y, self.general_job_setup.units),
                 ),
             );
-            let radius = (general_display_value(draft.radius_mm, self.general_job_setup.units)
-                * self.general_2d_transform.zoom) as f32;
+            let radius =
+                (general_display_value(session.draft.radius_mm, self.general_job_setup.units)
+                    * self.general_2d_transform.zoom) as f32;
             draw_general_circle_2d(painter, center, radius, false, true);
         }
 
@@ -2764,9 +2823,13 @@ impl RengraveApp {
                 f64::from(GENERAL_SELECTION_BUFFER_PX) / self.general_2d_transform.zoom,
                 self.general_job_setup.units,
             );
-            self.general_selected_object = self
+            let selected = self
                 .general_design_document
                 .hit_test(point_mm, tolerance_mm);
+            self.general_selected_object = selected;
+            if edit_requested && let Some(id) = selected {
+                self.begin_general_object_edit(id);
+            }
         } else if canvas_response.clicked_by(egui::PointerButton::Primary) {
             self.general_selected_object = None;
         }
@@ -3008,18 +3071,33 @@ impl RengraveApp {
     fn show_general_design_tools(&mut self, ui: &mut egui::Ui) {
         if let Some(mut temporary_tool) = self.general_temporary_tool.take() {
             let action = match &mut temporary_tool {
-                GeneralTemporaryTool::Circle(draft) => {
-                    show_general_circle_settings(ui, draft, self.general_job_setup.units)
+                GeneralTemporaryTool::Circle(session) => {
+                    show_general_circle_settings(ui, session, self.general_job_setup.units)
                 }
             };
             match action {
-                Some(TemporaryToolAction::Create) => {
-                    let GeneralTemporaryTool::Circle(draft) = temporary_tool;
-                    if let Ok(id) = self
-                        .general_design_document
-                        .add_circle(draft.center_mm, draft.radius_mm)
-                    {
-                        self.general_selected_object = Some(id);
+                Some(TemporaryToolAction::Confirm) => {
+                    let GeneralTemporaryTool::Circle(session) = temporary_tool;
+                    match session.mode {
+                        CircleToolMode::Create => {
+                            if let Ok(id) = self
+                                .general_design_document
+                                .add_circle(session.draft.center_mm, session.draft.radius_mm)
+                            {
+                                self.general_selected_object = Some(id);
+                            }
+                        }
+                        CircleToolMode::Edit(id) => {
+                            if self
+                                .general_design_document
+                                .update_circle(id, session.draft.center_mm, session.draft.radius_mm)
+                                .is_ok()
+                            {
+                                self.general_selected_object = Some(id);
+                                self.status =
+                                    "Vector updated; save the project to keep changes".to_owned();
+                            }
+                        }
                     }
                 }
                 Some(TemporaryToolAction::Cancel) => {}
@@ -3041,18 +3119,44 @@ impl RengraveApp {
                         "create_vectors",
                         &[GeneralDesignTool::Circle],
                         content_width,
+                        true,
                     );
                 });
                 general_setup_group(ui, "Transform Objects", |ui, content_width| {
-                    let _ = general_design_tool_grid(ui, "transform_objects", &[], content_width);
+                    let _ = general_design_tool_grid(
+                        ui,
+                        "transform_objects",
+                        &[],
+                        content_width,
+                        self.general_selected_object.is_some(),
+                    );
                 });
                 general_setup_group(ui, "Edit Objects", |ui, content_width| {
-                    let _ = general_design_tool_grid(ui, "edit_objects", &[], content_width);
+                    if let Some(tool) = general_design_tool_grid(
+                        ui,
+                        "edit_objects",
+                        &[GeneralDesignTool::EditParameters],
+                        content_width,
+                        self.general_selected_object.is_some(),
+                    ) {
+                        selected_tool = Some(tool);
+                    }
                 });
             });
-        if selected_tool == Some(GeneralDesignTool::Circle) {
-            self.general_temporary_tool =
-                Some(GeneralTemporaryTool::Circle(CircleDraft::default()));
+        match selected_tool {
+            Some(GeneralDesignTool::Circle) => {
+                self.general_temporary_tool =
+                    Some(GeneralTemporaryTool::Circle(CircleToolSession {
+                        draft: CircleDraft::default(),
+                        mode: CircleToolMode::Create,
+                    }));
+            }
+            Some(GeneralDesignTool::EditParameters) => {
+                if let Some(id) = self.general_selected_object {
+                    self.begin_general_object_edit(id);
+                }
+            }
+            None => {}
         }
     }
 
@@ -4327,6 +4431,16 @@ fn general_circle_icon_strokes() -> &'static [Stroke] {
         .as_slice()
 }
 
+fn general_edit_parameters_icon_strokes() -> &'static [Stroke] {
+    static STROKES: OnceLock<Vec<Stroke>> = OnceLock::new();
+    STROKES
+        .get_or_init(|| {
+            parse_svg_segments(include_str!("../assets/tool-icons/edit-parameters.svg"))
+                .expect("the bundled edit-parameters tool icon must be valid SVG")
+        })
+        .as_slice()
+}
+
 fn general_design_tool_size(available_width: f32) -> f32 {
     let total_gap = GENERAL_DESIGN_TOOL_GAP * (GENERAL_DESIGN_GRID_COLUMNS - 1) as f32;
     ((available_width - total_gap) / GENERAL_DESIGN_GRID_COLUMNS as f32)
@@ -4339,6 +4453,7 @@ fn general_design_tool_grid(
     id: &str,
     tools: &[GeneralDesignTool],
     content_width: f32,
+    enabled: bool,
 ) -> Option<GeneralDesignTool> {
     let button_size = general_design_tool_size(content_width);
     let row_count = tools.len().max(1).div_ceil(GENERAL_DESIGN_GRID_COLUMNS);
@@ -4352,7 +4467,12 @@ fn general_design_tool_grid(
                     for column in 0..GENERAL_DESIGN_GRID_COLUMNS {
                         let index = row * GENERAL_DESIGN_GRID_COLUMNS + column;
                         if let Some(tool) = tools.get(index).copied() {
-                            if general_design_tool_button(ui, tool, button_size).clicked() {
+                            let response = ui
+                                .add_enabled_ui(enabled, |ui| {
+                                    general_design_tool_button(ui, tool, button_size)
+                                })
+                                .inner;
+                            if response.clicked() {
                                 selected_tool = Some(tool);
                             }
                         } else {
@@ -4368,26 +4488,34 @@ fn general_design_tool_grid(
 
 fn show_general_circle_settings(
     ui: &mut egui::Ui,
-    draft: &mut CircleDraft,
+    session: &mut CircleToolSession,
     units: GeneralUnits,
 ) -> Option<TemporaryToolAction> {
-    show_general_temporary_settings(ui, "Create Circle", |ui| {
+    let (title, confirm_label) = match session.mode {
+        CircleToolMode::Create => ("Create Circle", "Create"),
+        CircleToolMode::Edit(_) => ("Edit Circle", "Update"),
+    };
+    show_general_temporary_settings(ui, title, confirm_label, |ui| {
         general_setup_group(ui, "Center Point", |ui, _| {
-            general_signed_dimension_row(ui, "X", &mut draft.center_mm.x, units);
-            general_signed_dimension_row(ui, "Y", &mut draft.center_mm.y, units);
+            general_signed_dimension_row(ui, "X", &mut session.draft.center_mm.x, units);
+            general_signed_dimension_row(ui, "Y", &mut session.draft.center_mm.y, units);
         });
         general_setup_group(ui, "Size", |ui, _| {
             general_justified_row(ui, |ui| {
-                ui.radio_value(&mut draft.measurement, CircleMeasurement::Radius, "Radius");
+                ui.radio_value(
+                    &mut session.draft.measurement,
+                    CircleMeasurement::Radius,
+                    "Radius",
+                );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.radio_value(
-                        &mut draft.measurement,
+                        &mut session.draft.measurement,
                         CircleMeasurement::Diameter,
                         "Diameter",
                     );
                 });
             });
-            general_circle_size_row(ui, draft, units);
+            general_circle_size_row(ui, &mut session.draft, units);
         });
     })
 }
@@ -4395,6 +4523,7 @@ fn show_general_circle_settings(
 fn show_general_temporary_settings(
     ui: &mut egui::Ui,
     title: &str,
+    confirm_label: &str,
     add_contents: impl FnOnce(&mut egui::Ui),
 ) -> Option<TemporaryToolAction> {
     let mut action = ui
@@ -4407,12 +4536,15 @@ fn show_general_temporary_settings(
             ui.add_space(4.0);
             add_contents(ui);
             ui.add_space(2.0);
-            action = general_temporary_action_row(ui).or(action);
+            action = general_temporary_action_row(ui, confirm_label).or(action);
         });
     action
 }
 
-fn general_temporary_action_row(ui: &mut egui::Ui) -> Option<TemporaryToolAction> {
+fn general_temporary_action_row(
+    ui: &mut egui::Ui,
+    confirm_label: &str,
+) -> Option<TemporaryToolAction> {
     let width = GENERAL_SETUP_MAX_WIDTH.min(ui.available_width());
     let spacing = ui.spacing().item_spacing.x;
     let button_width = ((width - spacing) * 0.5).max(0.0);
@@ -4422,10 +4554,13 @@ fn general_temporary_action_row(ui: &mut egui::Ui) -> Option<TemporaryToolAction
         egui::Layout::left_to_right(egui::Align::Center),
         |ui| {
             if ui
-                .add_sized(egui::vec2(button_width, 26.0), egui::Button::new("Create"))
+                .add_sized(
+                    egui::vec2(button_width, 26.0),
+                    egui::Button::new(confirm_label),
+                )
                 .clicked()
             {
-                action = Some(TemporaryToolAction::Create);
+                action = Some(TemporaryToolAction::Confirm);
             }
             if ui
                 .add_sized(egui::vec2(button_width, 26.0), egui::Button::new("Cancel"))
@@ -7509,10 +7644,13 @@ mod tests {
         }
         assert!(matches!(
             harness.state().general_temporary_tool,
-            Some(GeneralTemporaryTool::Circle(CircleDraft {
-                center_mm: Point { x: 0.0, y: 0.0 },
-                radius_mm: 10.0,
-                measurement: CircleMeasurement::Diameter,
+            Some(GeneralTemporaryTool::Circle(CircleToolSession {
+                draft: CircleDraft {
+                    center_mm: Point { x: 0.0, y: 0.0 },
+                    radius_mm: 10.0,
+                    measurement: CircleMeasurement::Diameter,
+                },
+                mode: CircleToolMode::Create,
             }))
         ));
         assert!(matches!(
@@ -7542,16 +7680,19 @@ mod tests {
         harness.run();
         assert!(matches!(
             harness.state().general_temporary_tool,
-            Some(GeneralTemporaryTool::Circle(CircleDraft {
-                measurement: CircleMeasurement::Radius,
-                ..
+            Some(GeneralTemporaryTool::Circle(CircleToolSession {
+                draft: CircleDraft {
+                    measurement: CircleMeasurement::Radius,
+                    ..
+                },
+                mode: CircleToolMode::Create,
             }))
         ));
-        if let Some(GeneralTemporaryTool::Circle(draft)) =
+        if let Some(GeneralTemporaryTool::Circle(session)) =
             &mut harness.state_mut().general_temporary_tool
         {
-            draft.center_mm = Point::new(12.0, -8.0);
-            draft.radius_mm = 6.0;
+            session.draft.center_mm = Point::new(12.0, -8.0);
+            session.draft.radius_mm = 6.0;
         }
         harness.get_by_label("Create").click();
         harness.run();
@@ -7594,6 +7735,148 @@ mod tests {
         assert!(harness.state().general_temporary_tool.is_none());
         assert_eq!(harness.state().general_design_document.objects().len(), 1);
         assert!(harness.query_by_label("Create Vectors").is_some());
+    }
+
+    #[test]
+    fn kittest_edit_parameters_requires_selection_and_updates_without_saving() {
+        let mut app = test_app();
+        app.tool_view = ToolView::GeneralPurpose;
+        app.general_tool_tab = GeneralToolTab::Design;
+        let project_path = std::env::temp_dir().join(format!(
+            "rengrave-edit-does-not-autosave-{}.rgrv",
+            std::process::id()
+        ));
+        app.project_path = project_path.display().to_string();
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(1000.0, 700.0))
+            .build_eframe(|_| app);
+        harness.run();
+
+        harness.get_by_label("Edit Vector Parameters").click();
+        harness.run();
+        assert!(harness.state().general_temporary_tool.is_none());
+
+        let id = harness
+            .state_mut()
+            .general_design_document
+            .add_circle(Point::new(4.0, -2.0), 5.0)
+            .expect("valid editable circle");
+        harness.state_mut().general_selected_object = Some(id);
+        harness.run();
+        harness.get_by_label("Edit Vector Parameters").click();
+        harness.run();
+
+        assert!(harness.query_by_label("Edit Circle").is_some());
+        assert!(harness.query_by_label("Update").is_some());
+        assert!(harness.query_by_label("Create").is_none());
+        assert!(matches!(
+            harness.state().general_temporary_tool,
+            Some(GeneralTemporaryTool::Circle(CircleToolSession {
+                draft: CircleDraft {
+                    center_mm: Point { x: 4.0, y: -2.0 },
+                    radius_mm: 5.0,
+                    measurement: CircleMeasurement::Diameter,
+                },
+                mode: CircleToolMode::Edit(target),
+            })) if target == id
+        ));
+        assert!(matches!(
+            harness.state().general_scene().objects.as_slice(),
+            [
+                GeneralSceneObject::JobStock { .. },
+                GeneralSceneObject::DesignCircle { preview: true, .. }
+            ]
+        ));
+        if let Some(GeneralTemporaryTool::Circle(session)) =
+            &mut harness.state_mut().general_temporary_tool
+        {
+            session.draft.center_mm = Point::new(20.0, 10.0);
+            session.draft.radius_mm = 9.0;
+        }
+        harness.get_by_label("Cancel").click();
+        harness.run();
+        assert_eq!(
+            harness
+                .state()
+                .general_design_document
+                .object(id)
+                .expect("unchanged circle")
+                .geometry,
+            DesignGeometry::Circle(DesignCircle {
+                center_mm: Point::new(4.0, -2.0),
+                radius_mm: 5.0,
+            })
+        );
+
+        harness.get_by_label("Edit Vector Parameters").click();
+        harness.run();
+        if let Some(GeneralTemporaryTool::Circle(session)) =
+            &mut harness.state_mut().general_temporary_tool
+        {
+            session.draft.center_mm = Point::new(20.0, 10.0);
+            session.draft.radius_mm = 9.0;
+        }
+        harness.get_by_label("Update").click();
+        harness.run();
+
+        let updated = harness
+            .state()
+            .general_design_document
+            .object(id)
+            .expect("updated circle");
+        assert_eq!(updated.id, id);
+        assert_eq!(
+            updated.geometry,
+            DesignGeometry::Circle(DesignCircle {
+                center_mm: Point::new(20.0, 10.0),
+                radius_mm: 9.0,
+            })
+        );
+        assert!(
+            !project_path.exists(),
+            "editing must not save automatically"
+        );
+        let (project, _) = harness
+            .state()
+            .current_project_file()
+            .expect("saveable project snapshot");
+        assert_eq!(
+            project
+                .design_document
+                .object(id)
+                .expect("persisted updated circle")
+                .geometry,
+            updated.geometry
+        );
+    }
+
+    #[test]
+    fn kittest_vector_edit_session_opens_with_selected_object_parameters() {
+        let mut app = test_app();
+        app.tool_view = ToolView::GeneralPurpose;
+        app.general_tool_tab = GeneralToolTab::Design;
+        let id = app
+            .general_design_document
+            .add_circle(Point::new(0.0, 0.0), 8.0)
+            .expect("valid editable circle");
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(1000.0, 700.0))
+            .build_eframe(|_| app);
+        harness.run();
+
+        harness.state_mut().begin_general_object_edit(id);
+        harness.run();
+
+        assert_eq!(harness.state().general_selected_object, Some(id));
+        assert!(matches!(
+            harness.state().general_temporary_tool,
+            Some(GeneralTemporaryTool::Circle(CircleToolSession {
+                mode: CircleToolMode::Edit(target),
+                ..
+            })) if target == id
+        ));
+        assert!(harness.query_by_label("Edit Circle").is_some());
+        assert!(harness.query_by_label("Update").is_some());
     }
 
     #[test]
@@ -7707,6 +7990,9 @@ mod tests {
         assert!(svg.contains("viewBox=\"0 0 24 24\""));
         assert!(svg.contains("<circle"));
         assert_eq!(general_circle_icon_strokes().len(), 72);
+        let edit_svg = include_str!("../assets/tool-icons/edit-parameters.svg");
+        assert!(edit_svg.contains("viewBox=\"0 0 24 24\""));
+        assert!(!general_edit_parameters_icon_strokes().is_empty());
     }
 
     #[test]

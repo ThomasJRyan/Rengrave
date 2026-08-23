@@ -288,17 +288,23 @@ derived inner width rather than imposing a competing fixed width, so every
 Job Setup and Design category resolves to the same outer width.
 
 Design tool artwork is stored as SVG under
-``crates/rengrave-ui/assets/tool-icons``. The circle asset is parsed by the
-portable core SVG parser, cached in a ``OnceLock``, and projected into the
-egui button painter as line segments. This keeps SVG as the source of truth
-without parsing on each frame or adding a separate rasterization pipeline.
-Each icon-only button supplies an accessible label and matching hover text.
-The circle tool flow replaces the category list with a reusable temporary
-settings shell. The shell owns the common title, contained content column,
-equal-width **Create** and **Cancel** actions, and ``Escape`` cancellation.
-``CircleDraft`` supplies the tool-specific center, physical radius, and
-Radius/Diameter presentation mode. Draft changes feed the same scene path as
-committed objects, so both viewports update in the same frame.
+``crates/rengrave-ui/assets/tool-icons``. The circle and edit-parameters assets
+are parsed by the portable core SVG parser, cached in ``OnceLock`` values, and
+projected into the egui button painter as line segments. This keeps SVG as the
+source of truth without parsing on each frame or adding a separate
+rasterization pipeline. Each icon-only button supplies an accessible label and
+matching hover text. Edit-category buttons are rendered through a disabled UI
+scope whenever no stable object ID is selected.
+
+The circle create and edit flows replace the category list with the same
+reusable temporary settings shell. The shell owns the common title, contained
+content column, equal-width confirmation and **Cancel** actions, and ``Escape``
+cancellation. ``CircleToolSession`` combines a ``CircleDraft`` with either
+``Create`` or ``Edit(DesignObjectId)`` mode. Mode selects the title and the
+**Create** or **Update** confirmation label. Draft changes feed the same scene
+path as committed objects, so both viewports update in the same frame. During
+editing, the committed target is suppressed from rendering and replaced by the
+draft preview; cancellation reveals the unchanged committed object again.
 
 Authored General-workbench geometry begins in
 ``rengrave-core::design::VectorDocument`` rather than ``PreviewSegment`` or
@@ -309,8 +315,10 @@ radii. Core hit testing measures the shortest distance from the pointer to each
 vector path and selects the nearest path within the supplied tolerance. For a
 circle this is ``abs(distance(pointer, center) - radius)``. Newest-first visual
 stacking breaks exact distance ties. ``remove_object`` deletes by stable
-identity without reusing IDs. This remains a focused first model slice and is
-not yet attached to CAM operations.
+identity without reusing IDs. ``update_circle`` validates replacement
+parameters and updates geometry in place, preserving object identity and
+ordering. This remains a focused first model slice and is not yet attached to
+CAM operations.
 
 The 2D renderer converts authored millimetres at the UI unit boundary, projects
 circle centers through the existing ``ViewTransform``, and derives screen
@@ -321,7 +329,8 @@ six-pixel screen-space buffer divided by the current zoom, so selection remains
 usable without becoming less precise when zoomed in. Selection has no click
 history or cycling state. Blank primary clicks clear selection and ``Delete``
 removes the selected object only while the 2D editor is active and no temporary
-settings tool is open. The General 3D scene receives matching
+settings tool is open. A double-click resolves the same path hit and starts an
+edit session for that stable ID. The General 3D scene receives matching
 ``DesignCircle`` objects and draws CPU-side 72-segment outlines on the stock
 surface after opaque stock faces. Draft objects use a preview color. The 3D
 path remains display-only and has no selection handlers.
@@ -330,7 +339,9 @@ The UI copies ``VectorDocument`` into ``RengraveProjectFile`` during save and
 restores it before rendering a loaded General Purpose project. Selection and
 temporary tool state are deliberately cleared on load and new-project reset.
 The project field is additive and defaults empty, so the existing format
-version remains compatible with older ``.rgrv`` files.
+version remains compatible with older ``.rgrv`` files. An **Update** action
+only mutates the in-memory document and does not call the project writer;
+manual **Save** or **Save As** serializes the updated parameters later.
 
 .. code-block:: text
 

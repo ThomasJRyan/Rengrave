@@ -63,11 +63,17 @@ pub enum DesignError {
     NonFiniteCenter,
     #[error("circle radius must be finite and greater than zero")]
     InvalidRadius,
+    #[error("design object {0} does not exist")]
+    ObjectNotFound(u64),
 }
 
 impl VectorDocument {
     pub fn objects(&self) -> &[DesignObject] {
         &self.objects
+    }
+
+    pub fn object(&self, id: DesignObjectId) -> Option<&DesignObject> {
+        self.objects.iter().find(|object| object.id == id)
     }
 
     pub fn is_empty(&self) -> bool {
@@ -79,12 +85,7 @@ impl VectorDocument {
         center_mm: Point,
         radius_mm: f64,
     ) -> Result<DesignObjectId, DesignError> {
-        if !center_mm.x.is_finite() || !center_mm.y.is_finite() {
-            return Err(DesignError::NonFiniteCenter);
-        }
-        if !radius_mm.is_finite() || radius_mm <= 0.0 {
-            return Err(DesignError::InvalidRadius);
-        }
+        validate_circle(center_mm, radius_mm)?;
 
         let id = DesignObjectId(self.next_id);
         self.next_id = self.next_id.saturating_add(1);
@@ -104,6 +105,25 @@ impl VectorDocument {
         self.objects.len() != original_len
     }
 
+    pub fn update_circle(
+        &mut self,
+        id: DesignObjectId,
+        center_mm: Point,
+        radius_mm: f64,
+    ) -> Result<(), DesignError> {
+        validate_circle(center_mm, radius_mm)?;
+        let object = self
+            .objects
+            .iter_mut()
+            .find(|object| object.id == id)
+            .ok_or(DesignError::ObjectNotFound(id.get()))?;
+        object.geometry = DesignGeometry::Circle(DesignCircle {
+            center_mm,
+            radius_mm,
+        });
+        Ok(())
+    }
+
     pub fn hit_test(&self, point_mm: Point, tolerance_mm: f64) -> Option<DesignObjectId> {
         let tolerance_mm = tolerance_mm.max(0.0);
         let mut nearest = None;
@@ -119,6 +139,16 @@ impl VectorDocument {
         }
         nearest.map(|(id, _)| id)
     }
+}
+
+fn validate_circle(center_mm: Point, radius_mm: f64) -> Result<(), DesignError> {
+    if !center_mm.x.is_finite() || !center_mm.y.is_finite() {
+        return Err(DesignError::NonFiniteCenter);
+    }
+    if !radius_mm.is_finite() || radius_mm <= 0.0 {
+        return Err(DesignError::InvalidRadius);
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -202,6 +232,42 @@ mod tests {
                 .expect("valid third circle")
                 .get(),
             3
+        );
+    }
+
+    #[test]
+    fn updating_a_circle_preserves_identity_and_rejects_invalid_changes() {
+        let mut document = VectorDocument::default();
+        let id = document
+            .add_circle(Point::new(0.0, 0.0), 5.0)
+            .expect("valid circle");
+
+        document
+            .update_circle(id, Point::new(12.0, -3.0), 8.0)
+            .expect("valid update");
+        assert_eq!(document.object(id).expect("updated object").id, id);
+        assert_eq!(
+            document.object(id).expect("updated object").geometry,
+            DesignGeometry::Circle(DesignCircle {
+                center_mm: Point::new(12.0, -3.0),
+                radius_mm: 8.0,
+            })
+        );
+
+        assert_eq!(
+            document.update_circle(id, Point::new(99.0, 99.0), 0.0),
+            Err(DesignError::InvalidRadius)
+        );
+        assert_eq!(
+            document.object(id).expect("unchanged object").geometry,
+            DesignGeometry::Circle(DesignCircle {
+                center_mm: Point::new(12.0, -3.0),
+                radius_mm: 8.0,
+            })
+        );
+        assert_eq!(
+            document.update_circle(DesignObjectId(999), Point::default(), 1.0),
+            Err(DesignError::ObjectNotFound(999))
         );
     }
 }
