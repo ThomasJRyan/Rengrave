@@ -37,6 +37,11 @@ pub(crate) enum GeneralSceneObject {
         height_mm: f64,
         thickness_mm: f64,
     },
+    DesignCircle {
+        center_mm: Point,
+        radius_mm: f64,
+        preview: bool,
+    },
 }
 
 impl GeneralScene {
@@ -78,6 +83,22 @@ impl GeneralScene {
                     PreviewPoint3d {
                         x: width_mm / 2.0,
                         y: height_mm / 2.0,
+                        z: 0.0,
+                    },
+                ],
+                GeneralSceneObject::DesignCircle {
+                    center_mm,
+                    radius_mm,
+                    ..
+                } => [
+                    PreviewPoint3d {
+                        x: center_mm.x - radius_mm,
+                        y: center_mm.y - radius_mm,
+                        z: 0.0,
+                    },
+                    PreviewPoint3d {
+                        x: center_mm.x + radius_mm,
+                        y: center_mm.y + radius_mm,
                         z: 0.0,
                     },
                 ],
@@ -364,6 +385,19 @@ pub(crate) fn screen_point_to_model(
     Point::new(
         rotated.x * cos + rotated.y * sin,
         -rotated.x * sin + rotated.y * cos,
+    )
+}
+
+pub(crate) fn model_point_to_screen(
+    rect: egui::Rect,
+    transform: ViewTransform,
+    point: Point,
+) -> egui::Pos2 {
+    let (sin, cos) = transform.total_rotation_radians().sin_cos();
+    let rotated = Point::new(point.x * cos - point.y * sin, point.x * sin + point.y * cos);
+    egui::pos2(
+        rect.center().x + (rotated.x * transform.zoom + transform.pan.x) as f32,
+        rect.center().y - (rotated.y * transform.zoom) as f32 + transform.pan.y as f32,
     )
 }
 
@@ -1556,6 +1590,7 @@ pub(crate) fn draw_general_scene_3d(
             } => {
                 faces.extend(general_stock_faces(*width_mm, *height_mm, *thickness_mm));
             }
+            GeneralSceneObject::DesignCircle { .. } => {}
         }
     }
     faces.retain(|face| general_face_camera_alignment(face.vertices, yaw, pitch) > 0.01);
@@ -1581,6 +1616,34 @@ pub(crate) fn draw_general_scene_3d(
         {
             painter.line_segment([*current, *next], edge_stroke);
         }
+    }
+
+    const CIRCLE_SEGMENTS: usize = 72;
+    for object in &scene.objects {
+        let GeneralSceneObject::DesignCircle {
+            center_mm,
+            radius_mm,
+            preview,
+        } = object
+        else {
+            continue;
+        };
+        let color = if *preview {
+            egui::Color32::from_rgb(77, 168, 210)
+        } else {
+            egui::Color32::from_rgb(43, 116, 166)
+        };
+        let points: Vec<egui::Pos2> = (0..=CIRCLE_SEGMENTS)
+            .map(|index| {
+                let angle = std::f64::consts::TAU * index as f64 / CIRCLE_SEGMENTS as f64;
+                project(PreviewPoint3d {
+                    x: center_mm.x + radius_mm * angle.cos(),
+                    y: center_mm.y + radius_mm * angle.sin(),
+                    z: 0.02,
+                })
+            })
+            .collect();
+        painter.add(egui::Shape::line(points, egui::Stroke::new(2.0, color)));
     }
 }
 

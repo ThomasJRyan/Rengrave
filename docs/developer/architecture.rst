@@ -290,9 +290,30 @@ portable core SVG parser, cached in a ``OnceLock``, and projected into the
 egui button painter as line segments. This keeps SVG as the source of truth
 without parsing on each frame or adding a separate rasterization pipeline.
 Each icon-only button supplies an accessible label and matching hover text.
-The current circle button has no document mutation or 2D editing behavior;
-that backend is intentionally deferred until the vector-creation workflow is
-specified.
+The circle tool flow replaces the category list with a reusable temporary
+settings shell. The shell owns the common title, contained content column,
+equal-width **Create** and **Cancel** actions, and ``Escape`` cancellation.
+``CircleDraft`` supplies the tool-specific center, physical radius, and
+Radius/Diameter presentation mode. Draft changes feed the same scene path as
+committed objects, so both viewports update in the same frame.
+
+Authored General-workbench geometry begins in
+``rengrave-core::design::VectorDocument`` rather than ``PreviewSegment`` or
+legacy ``EngraveSegment`` output. ``DesignObjectId`` provides stable identity,
+and ``DesignGeometry::Circle`` stores a center and radius in canonical
+millimetres. Core validation rejects non-finite centers and non-positive
+radii; core hit testing traverses objects from topmost to bottommost. This is a
+focused first model slice and is not yet attached to project persistence or
+CAM operations.
+
+The 2D renderer converts authored millimetres at the UI unit boundary, projects
+circle centers through the existing ``ViewTransform``, and derives screen
+radii from the same zoom. Per-object interaction regions expose accessible
+``Circle N`` labels; exact circular hit checks update a separate selected-ID
+state, while blank primary clicks clear it. The General 3D scene receives
+matching ``DesignCircle`` objects and draws CPU-side 72-segment outlines on
+the stock surface after opaque stock faces. Draft objects use a preview color.
+The 3D path remains display-only and has no selection handlers.
 
 .. code-block:: text
 

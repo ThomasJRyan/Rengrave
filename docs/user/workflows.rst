@@ -76,11 +76,27 @@ The **Design** tab organizes future editing controls into **Create Vectors**,
 **Transform Objects**, and **Edit Objects** categories. Each category uses the
 same compact five-column row of square tool buttons. **Create Vectors**
 currently contains a circle-icon button labelled **Create Circle** when
-hovered or read by assistive technology. This control is UI scaffolding only;
-it does not create canvas geometry yet. The other two categories are empty
+hovered or read by assistive technology. The other two categories are empty
 until their tools are defined. Category frames conform to the Tool Panel's
 available content width and do not extend into the Editor/Preview Panel. All
 sub-panels in both Design and Job Setup use one uniform width.
+
+Selecting **Create Circle** temporarily replaces the Design categories with a
+contained circle settings view. A live circle preview starts at the center of
+the job. **Center Point** edits its X and Y position, while **Radius** and
+**Diameter** choose how the size field is displayed; changing that choice does
+not change the physical circle. Values follow the Job Setup unit selection but
+remain stored in millimetres. **Create** commits the circle and **Cancel** or
+``Escape`` discards the preview. Either action returns to the Design
+categories.
+
+Committed circles appear automatically in both the 2D and read-only 3D views.
+Click a circle with the left mouse button in the 2D View to select it; the
+selected outline and center mark use the selection accent. Selection is
+reserved for later CAM-operation assignment and does not alter geometry. The
+3D View displays circles on the job surface but does not provide selection or
+editing. General-workbench circles currently live for the application session
+and are not yet serialized into ``.rgrv`` project files.
 
 Layout and coordinate choices
 -----------------------------
