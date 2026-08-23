@@ -71,6 +71,10 @@ impl VectorDocument {
         &self.objects
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.objects.is_empty()
+    }
+
     pub fn add_circle(
         &mut self,
         center_mm: Point,
@@ -95,13 +99,37 @@ impl VectorDocument {
         Ok(id)
     }
 
+    pub fn remove_object(&mut self, id: DesignObjectId) -> bool {
+        let original_len = self.objects.len();
+        self.objects.retain(|object| object.id != id);
+        self.objects.len() != original_len
+    }
+
+    /// Returns every object containing the point, ordered from the smallest
+    /// enclosing geometry to the largest. Equal-sized objects retain visual
+    /// stacking order with the newest object first.
+    pub fn hit_candidates(&self, point_mm: Point, tolerance_mm: f64) -> Vec<DesignObjectId> {
+        let mut candidates = self
+            .objects
+            .iter()
+            .rev()
+            .filter_map(|object| {
+                let (hit, selection_size) = match object.geometry {
+                    DesignGeometry::Circle(circle) => {
+                        (circle.contains(point_mm, tolerance_mm), circle.radius_mm)
+                    }
+                };
+                hit.then_some((object.id, selection_size))
+            })
+            .collect::<Vec<_>>();
+        candidates.sort_by(|left, right| left.1.total_cmp(&right.1));
+        candidates.into_iter().map(|(id, _)| id).collect()
+    }
+
     pub fn hit_test(&self, point_mm: Point, tolerance_mm: f64) -> Option<DesignObjectId> {
-        self.objects.iter().rev().find_map(|object| {
-            let hit = match object.geometry {
-                DesignGeometry::Circle(circle) => circle.contains(point_mm, tolerance_mm),
-            };
-            hit.then_some(object.id)
-        })
+        self.hit_candidates(point_mm, tolerance_mm)
+            .into_iter()
+            .next()
     }
 }
 
@@ -143,6 +171,47 @@ mod tests {
                 .expect("valid circle")
                 .get(),
             1
+        );
+    }
+
+    #[test]
+    fn nested_circle_hits_prefer_the_smallest_and_expose_all_candidates() {
+        let mut document = VectorDocument::default();
+        let small = document
+            .add_circle(Point::new(0.0, 0.0), 5.0)
+            .expect("valid small circle");
+        let large = document
+            .add_circle(Point::new(0.0, 0.0), 10.0)
+            .expect("valid large circle");
+
+        assert_eq!(
+            document.hit_candidates(Point::new(0.0, 0.0), 0.0),
+            vec![small, large]
+        );
+        assert_eq!(document.hit_test(Point::new(0.0, 0.0), 0.0), Some(small));
+        assert_eq!(document.hit_test(Point::new(8.0, 0.0), 0.0), Some(large));
+    }
+
+    #[test]
+    fn removing_an_object_preserves_other_ids_and_future_id_allocation() {
+        let mut document = VectorDocument::default();
+        let first = document
+            .add_circle(Point::new(0.0, 0.0), 5.0)
+            .expect("valid first circle");
+        let second = document
+            .add_circle(Point::new(10.0, 0.0), 5.0)
+            .expect("valid second circle");
+
+        assert!(document.remove_object(first));
+        assert!(!document.remove_object(first));
+        assert_eq!(document.objects().len(), 1);
+        assert_eq!(document.objects()[0].id, second);
+        assert_eq!(
+            document
+                .add_circle(Point::new(20.0, 0.0), 5.0)
+                .expect("valid third circle")
+                .get(),
+            3
         );
     }
 }

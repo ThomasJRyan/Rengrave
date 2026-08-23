@@ -625,6 +625,7 @@ impl RengraveApp {
                     },
                 },
                 toolbit_assignments: self.toolbit_assignments.clone(),
+                design_document: self.general_design_document.clone(),
             },
             warnings,
         ))
@@ -690,6 +691,9 @@ impl RengraveApp {
         self.dxf_path = path_to_text(&project.outputs.dxf_path);
         self.text = project.text;
         self.toolbit_assignments = project.toolbit_assignments.clone();
+        self.general_design_document = project.design_document;
+        self.general_selected_object = None;
+        self.general_temporary_tool = None;
         self.controls = UiControls::from_settings(&project.settings);
         let inferred = ToolView::from_settings_and_path(
             &project.settings,
@@ -785,6 +789,9 @@ impl RengraveApp {
         self.cancel_calculation("New project");
         self.project_path.clear();
         self.toolbit_assignments.clear();
+        self.general_design_document = VectorDocument::default();
+        self.general_selected_object = None;
+        self.general_temporary_tool = None;
         self.settings_path.clear();
         self.input_path.clear();
         self.text = RengraveDocument::default().text;
@@ -2596,6 +2603,15 @@ impl RengraveApp {
     }
 
     fn show_general_2d_view(&mut self, ui: &mut egui::Ui, rect: egui::Rect) {
+        let delete_selected = self.general_temporary_tool.is_none()
+            && ui.input(|input| input.key_pressed(egui::Key::Delete));
+        if delete_selected
+            && let Some(id) = self.general_selected_object.take()
+            && self.general_design_document.remove_object(id)
+        {
+            self.status = "Selected vector deleted".to_owned();
+        }
+
         let canvas_rect = egui::Rect::from_min_max(
             rect.min + egui::vec2(GENERAL_RULER_LEFT_WIDTH, GENERAL_RULER_TOP_HEIGHT),
             rect.max,
@@ -2684,7 +2700,7 @@ impl RengraveApp {
         canvas_rect: egui::Rect,
         canvas_response: &egui::Response,
     ) {
-        let mut clicked_object = None;
+        let mut selection_pointer = None;
         for object in self.general_design_document.objects() {
             let DesignGeometry::Circle(circle) = object.geometry;
             let center = preview::model_point_to_screen(
@@ -2714,7 +2730,7 @@ impl RengraveApp {
                     .interact_pointer_pos()
                     .is_some_and(|pointer| pointer.distance(center) <= interaction_radius)
             {
-                clicked_object = Some(object.id);
+                selection_pointer = response.interact_pointer_pos();
             }
 
             let selected = self.general_selected_object == Some(object.id);
@@ -2735,8 +2751,22 @@ impl RengraveApp {
             draw_general_circle_2d(painter, center, radius, false, true);
         }
 
-        if let Some(id) = clicked_object {
-            self.general_selected_object = Some(id);
+        if let Some(pointer) = selection_pointer {
+            let point =
+                preview::screen_point_to_model(canvas_rect, self.general_2d_transform, pointer);
+            let point_mm = Point::new(
+                general_storage_value(point.x, self.general_job_setup.units),
+                general_storage_value(point.y, self.general_job_setup.units),
+            );
+            let tolerance_mm = general_storage_value(
+                6.0 / self.general_2d_transform.zoom,
+                self.general_job_setup.units,
+            );
+            let candidates = self
+                .general_design_document
+                .hit_candidates(point_mm, tolerance_mm);
+            self.general_selected_object =
+                next_overlap_selection(&candidates, self.general_selected_object);
         } else if canvas_response.clicked_by(egui::PointerButton::Primary) {
             self.general_selected_object = None;
         }
@@ -4553,6 +4583,18 @@ fn general_storage_value(display_value: f64, units: GeneralUnits) -> f64 {
         GeneralUnits::Inches => display_value * MM_PER_INCH,
         GeneralUnits::Millimetres => display_value,
     }
+}
+
+fn next_overlap_selection(
+    candidates: &[DesignObjectId],
+    current: Option<DesignObjectId>,
+) -> Option<DesignObjectId> {
+    let first = candidates.first().copied()?;
+    let Some(current_index) = current.and_then(|id| candidates.iter().position(|item| *item == id))
+    else {
+        return Some(first);
+    };
+    Some(candidates[(current_index + 1) % candidates.len()])
 }
 
 fn general_dimension_row(ui: &mut egui::Ui, label: &str, value_mm: &mut f64, units: GeneralUnits) {
@@ -7558,6 +7600,75 @@ mod tests {
         assert!(harness.state().general_temporary_tool.is_none());
         assert_eq!(harness.state().general_design_document.objects().len(), 1);
         assert!(harness.query_by_label("Create Vectors").is_some());
+    }
+
+    #[test]
+    fn kittest_nested_circles_select_smallest_then_delete_the_selection() {
+        let mut app = test_app();
+        app.tool_view = ToolView::GeneralPurpose;
+        app.general_tool_tab = GeneralToolTab::Design;
+        let small = app
+            .general_design_document
+            .add_circle(Point::new(0.0, 0.0), 5.0)
+            .expect("valid small circle");
+        let large = app
+            .general_design_document
+            .add_circle(Point::new(0.0, 0.0), 10.0)
+            .expect("valid large circle");
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(1000.0, 700.0))
+            .build_eframe(|_| app);
+        harness.run();
+
+        // The large circle is visually on top, but a click through the shared
+        // center must make the smaller enclosed object reachable first.
+        harness.get_by_label("Circle 2").click();
+        harness.run();
+        assert_eq!(harness.state().general_selected_object, Some(small));
+
+        // Repeating the click cycles through the candidates at that position.
+        harness.get_by_label("Circle 2").click();
+        harness.run();
+        assert_eq!(harness.state().general_selected_object, Some(large));
+
+        harness.key_press(egui::Key::Delete);
+        harness.run();
+        assert_eq!(harness.state().general_selected_object, None);
+        assert_eq!(harness.state().general_design_document.objects().len(), 1);
+        assert_eq!(
+            harness.state().general_design_document.objects()[0].id,
+            small
+        );
+        assert_eq!(harness.state().status, "Selected vector deleted");
+    }
+
+    #[test]
+    fn general_project_snapshot_restores_authored_vectors() {
+        let mut app = test_app();
+        app.tool_view = ToolView::GeneralPurpose;
+        let circle = app
+            .general_design_document
+            .add_circle(Point::new(14.0, -9.0), 6.5)
+            .expect("valid saved circle");
+        app.general_selected_object = Some(circle);
+
+        let (project, warnings) = app.current_project_file().expect("project snapshot");
+        assert!(warnings.is_empty());
+        assert_eq!(project.design_document, app.general_design_document);
+
+        let mut restored = test_app();
+        restored.apply_project_file(
+            project,
+            PathBuf::from("/tmp/restored-vectors.rgrv"),
+            egui::Context::default(),
+        );
+        assert_eq!(restored.tool_view, ToolView::GeneralPurpose);
+        assert_eq!(
+            restored.general_design_document,
+            app.general_design_document
+        );
+        assert_eq!(restored.general_selected_object, None);
+        assert!(restored.general_temporary_tool.is_none());
     }
 
     #[test]

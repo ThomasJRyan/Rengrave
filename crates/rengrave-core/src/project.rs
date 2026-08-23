@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 use crate::RENGRAVE_VERSION;
 use crate::bitmap::BitmapBackend;
+use crate::design::VectorDocument;
 use crate::settings::{LegacySetting, LegacySettings, default_legacy_settings, tcode_settings};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -49,6 +50,8 @@ pub struct RengraveProjectFile {
     pub outputs: RengraveProjectOutputs,
     #[serde(default)]
     pub toolbit_assignments: Vec<ToolbitAssignment>,
+    #[serde(default, skip_serializing_if = "VectorDocument::is_empty")]
+    pub design_document: VectorDocument,
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -95,6 +98,7 @@ impl Default for RengraveProjectFile {
             workbench: String::new(),
             outputs: RengraveProjectOutputs::default(),
             toolbit_assignments: Vec::new(),
+            design_document: VectorDocument::default(),
         }
     }
 }
@@ -664,6 +668,13 @@ mod tests {
                 }],
             },
             toolbit_assignments: Vec::new(),
+            design_document: {
+                let mut document = VectorDocument::default();
+                document
+                    .add_circle(crate::geometry::Point::new(12.5, -4.0), 7.5)
+                    .expect("valid persisted circle");
+                document
+            },
         };
 
         write_rengrave_project(&path, &project).unwrap();
@@ -689,6 +700,7 @@ mod tests {
         assert_eq!(loaded.text, "Old project");
         assert_eq!(loaded.application_version, RENGRAVE_VERSION);
         assert_eq!(loaded.outputs, RengraveProjectOutputs::default());
+        assert!(loaded.design_document.is_empty());
     }
 
     #[test]

@@ -148,7 +148,8 @@ The public modules in ``crates/rengrave-core/src/lib.rs`` form a layered
 pipeline rather than separate application modes.
 
 * ``project.rs`` loads legacy settings and versioned ``.rgrv`` JSON project
-  files, resolves input paths, and carries cached output/tool assignments.
+  files, resolves input paths, and carries authored design geometry, cached
+  output, and tool assignments.
 * ``settings.rs`` owns the ordered legacy key/value representation, defaults,
   booleans, TCODE text settings, and compatibility serialization.
 * ``font.rs``, ``dxf.rs``, and ``svg.rs`` normalize CXF, TTF, DXF, and SVG
@@ -183,8 +184,10 @@ exported coordinates.
 The project boundary is separate from the calculation boundary:
 
 * ``RengraveProjectFile`` persists versioned settings, text, input paths,
-  workbench information, toolbit snapshots, output paths, and matching output
-  caches.
+  workbench information, authored ``VectorDocument`` geometry, toolbit
+  snapshots, output paths, and matching output caches. The additive
+  ``design_document`` field uses a default so older version-1 files load with
+  an empty design document.
 * ``BatchRequest`` describes one calculation. It is assembled from a project,
   legacy settings file, CLI arguments, or UI controls.
 * ``BatchOutput`` is transient generated output. The UI may cache it in a
@@ -302,18 +305,29 @@ Authored General-workbench geometry begins in
 legacy ``EngraveSegment`` output. ``DesignObjectId`` provides stable identity,
 and ``DesignGeometry::Circle`` stores a center and radius in canonical
 millimetres. Core validation rejects non-finite centers and non-positive
-radii; core hit testing traverses objects from topmost to bottommost. This is a
-focused first model slice and is not yet attached to project persistence or
-CAM operations.
+radii. Core hit testing returns all enclosing candidates from the smallest
+geometry to the largest, preserving newest-first stacking for equal sizes.
+This makes nested geometry reachable while supporting repeated-click cycling.
+``remove_object`` deletes by stable identity without reusing IDs. This remains
+a focused first model slice and is not yet attached to CAM operations.
 
 The 2D renderer converts authored millimetres at the UI unit boundary, projects
 circle centers through the existing ``ViewTransform``, and derives screen
 radii from the same zoom. Per-object interaction regions expose accessible
-``Circle N`` labels; exact circular hit checks update a separate selected-ID
-state, while blank primary clicks clear it. The General 3D scene receives
-matching ``DesignCircle`` objects and draws CPU-side 72-segment outlines on
-the stock surface after opaque stock faces. Draft objects use a preview color.
-The 3D path remains display-only and has no selection handlers.
+``Circle N`` labels. A primary click resolves the complete core candidate list;
+the existing selected ID advances to the next candidate, while a new location
+starts with the smallest candidate. Blank primary clicks clear selection and
+``Delete`` removes the selected object only while the 2D editor is active and
+no temporary settings tool is open. The General 3D scene receives matching
+``DesignCircle`` objects and draws CPU-side 72-segment outlines on the stock
+surface after opaque stock faces. Draft objects use a preview color. The 3D
+path remains display-only and has no selection handlers.
+
+The UI copies ``VectorDocument`` into ``RengraveProjectFile`` during save and
+restores it before rendering a loaded General Purpose project. Selection and
+temporary tool state are deliberately cleared on load and new-project reset.
+The project field is additive and defaults empty, so the existing format
+version remains compatible with older ``.rgrv`` files.
 
 .. code-block:: text
 
