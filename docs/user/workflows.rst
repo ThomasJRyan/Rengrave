@@ -64,7 +64,9 @@ zero position, and XY datum offset. Job Type and Modeling Resolution are
 temporarily hidden. Job dimensions and datum offsets are stored internally in
 millimetres. The visible controls display those values in the selected
 **inches** or **mm** unit, and changing units preserves the physical job
-dimensions while updating the canvas and ruler labels. These controls are UI
+dimensions while updating the canvas and ruler labels. Dragging a numeric field
+uses 0.01-inch increments in inches mode and 0.1-millimetre increments in mm
+mode. These controls are UI
 scaffolding only and do not yet change machining geometry, calculations, or
 machine output. The setup form stays within the Tool Panel: fields use a
 compact aligned column, groups fill the panel width, and horizontal rows

@@ -65,7 +65,9 @@ in millimetres in ``GeneralJobSetup``. ``general_display_value`` and
 ``general_storage_value`` form the UI boundary: controls convert to the
 selected inches or millimetres display unit for editing, then immediately
 convert edits back to millimetres. This prevents unit changes from mutating
-the physical project dimensions.
+the physical project dimensions. ``general_drag_speed`` keeps numeric drag
+sensitivity in display units: 0.01 per step for inches and 0.1 per step for
+millimetres. Job Setup and vector parameter controls share this boundary.
 
 The 2D canvas and rulers use the selected display unit for screen coordinates
 and labels. When the unit selection changes, the workbench inversely rescales

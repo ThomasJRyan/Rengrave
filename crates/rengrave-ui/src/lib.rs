@@ -4588,7 +4588,7 @@ fn general_signed_dimension_row(
                 .add_sized(
                     egui::vec2(72.0, 22.0),
                     egui::DragValue::new(&mut display_value)
-                        .speed(0.1)
+                        .speed(general_drag_speed(units))
                         .suffix(suffix),
                 )
                 .changed()
@@ -4617,7 +4617,7 @@ fn general_circle_size_row(ui: &mut egui::Ui, draft: &mut CircleDraft, units: Ge
                 .add_sized(
                     egui::vec2(72.0, 22.0),
                     egui::DragValue::new(&mut display_value)
-                        .speed(0.1)
+                        .speed(general_drag_speed(units))
                         .suffix(suffix)
                         .range(0.001..=f64::MAX),
                 )
@@ -4720,6 +4720,13 @@ fn general_storage_value(display_value: f64, units: GeneralUnits) -> f64 {
     }
 }
 
+fn general_drag_speed(units: GeneralUnits) -> f64 {
+    match units {
+        GeneralUnits::Inches => 0.01,
+        GeneralUnits::Millimetres => 0.1,
+    }
+}
+
 fn general_dimension_row(ui: &mut egui::Ui, label: &str, value_mm: &mut f64, units: GeneralUnits) {
     general_justified_row(ui, |ui| {
         ui.label(label);
@@ -4729,7 +4736,7 @@ fn general_dimension_row(ui: &mut egui::Ui, label: &str, value_mm: &mut f64, uni
                 .add_sized(
                     egui::vec2(48.0, 22.0),
                     egui::DragValue::new(&mut display_value)
-                        .speed(0.1)
+                        .speed(general_drag_speed(units))
                         .range(0.0..=f64::MAX),
                 )
                 .changed()
@@ -4754,7 +4761,7 @@ fn general_offset_row(
             ui.add_enabled_ui(enabled, |ui| {
                 ui.add_sized(
                     egui::vec2(48.0, 22.0),
-                    egui::DragValue::new(&mut display_value).speed(0.1),
+                    egui::DragValue::new(&mut display_value).speed(general_drag_speed(units)),
                 )
                 .changed();
             });
@@ -5116,6 +5123,12 @@ mod tests {
             general_display_value(635.0, GeneralUnits::Millimetres),
             635.0,
         );
+    }
+
+    #[test]
+    fn general_drag_speed_tracks_display_units() {
+        assert_close(general_drag_speed(GeneralUnits::Millimetres), 0.1);
+        assert_close(general_drag_speed(GeneralUnits::Inches), 0.01);
     }
 
     #[test]
