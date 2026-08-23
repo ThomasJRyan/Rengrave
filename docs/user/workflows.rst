@@ -66,7 +66,10 @@ millimetres. The visible controls display those values in the selected
 **inches** or **mm** unit, and changing units preserves the physical job
 dimensions while updating the canvas and ruler labels. Dragging a numeric field
 uses 0.01-inch increments in inches mode and 0.1-millimetre increments in mm
-mode. These controls are UI
+mode. When a numeric value differs from its default, a square reset button
+appears immediately to the left of the field. Select it to restore that field;
+the button hides again and both General Purpose views reflect the restored
+geometry immediately. These controls are UI
 scaffolding only and do not yet change machining geometry, calculations, or
 machine output. The setup form stays within the Tool Panel: fields use a
 compact aligned column, groups fill the panel width, and horizontal rows
@@ -92,7 +95,9 @@ the job. **Center Point** edits its X and Y position, while **Radius** and
 not change the physical circle. Values follow the Job Setup unit selection but
 remain stored in millimetres. **Create** commits the circle and **Cancel** or
 ``Escape`` discards the preview. Either action returns to the Design
-categories.
+categories. Circle position and size fields use the same reset control. During
+creation they return to the centered 20 mm diameter default; during editing
+they return to the values present when the edit view was opened.
 
 Committed circles appear automatically in both the 2D and read-only 3D views.
 Click a circle with the left mouse button in the 2D View to select it; the

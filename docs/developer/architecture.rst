@@ -68,6 +68,13 @@ convert edits back to millimetres. This prevents unit changes from mutating
 the physical project dimensions. ``general_drag_speed`` keeps numeric drag
 sensitivity in display units: 0.01 per step for inches and 0.1 per step for
 millimetres. Job Setup and vector parameter controls share this boundary.
+The reusable ``resettable_value_input`` widget wraps an arbitrary EGUI editor
+closure, so it preserves the normal ``DragValue`` or ``TextEdit`` builder
+configuration. It conditionally allocates a 22-pixel square SVG reset button
+with a 3-pixel gap, marks the wrapped response changed after a reset, and lets
+the existing immediate-mode scene path refresh both viewports. Comparisons and
+defaults are supplied by the caller so canonical millimetre values and text
+values can use appropriate equality rules.
 
 The 2D canvas and rulers use the selected display unit for screen coordinates
 and labels. When the unit selection changes, the workbench inversely rescales
@@ -290,10 +297,10 @@ derived inner width rather than imposing a competing fixed width, so every
 Job Setup and Design category resolves to the same outer width.
 
 Design tool artwork is stored as SVG under
-``crates/rengrave-ui/assets/tool-icons``. The circle and edit-parameters assets
-are parsed by the portable core SVG parser, cached in ``OnceLock`` values, and
-projected into the egui button painter as line segments. This keeps SVG as the
-source of truth without parsing on each frame or adding a separate
+``crates/rengrave-ui/assets/tool-icons``. The circle, edit-parameters, and reset
+assets are parsed by the portable core SVG parser, cached in ``OnceLock``
+values, and projected into the egui button painter as line segments. This keeps
+SVG as the source of truth without parsing on each frame or adding a separate
 rasterization pipeline. Each icon-only button supplies an accessible label and
 matching hover text. Edit-category buttons are rendered through a disabled UI
 scope whenever no stable object ID is selected.

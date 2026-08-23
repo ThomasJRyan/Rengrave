@@ -4,6 +4,88 @@
 
 use super::*;
 
+const RESETTABLE_INPUT_GAP: f32 = 3.0;
+
+/// Adds any single-line value editor with an optional, input-height reset button.
+///
+/// The caller supplies the editor so number and text inputs retain their normal
+/// builder options. The reset button is only allocated while `value` differs
+/// from `default`, keeping the unchanged input aligned with ordinary fields.
+pub(crate) fn resettable_value_input<T: Clone>(
+    ui: &mut egui::Ui,
+    value: &mut T,
+    default: &T,
+    input_size: egui::Vec2,
+    reset_label: &str,
+    is_default: impl Fn(&T, &T) -> bool,
+    add_input: impl FnOnce(&mut egui::Ui, &mut T) -> egui::Response,
+) -> egui::Response {
+    let show_reset = !is_default(value, default);
+    let reset_width = if show_reset {
+        input_size.y + RESETTABLE_INPUT_GAP
+    } else {
+        0.0
+    };
+    let mut reset_clicked = false;
+    let mut input_response = ui
+        .allocate_ui_with_layout(
+            egui::vec2(input_size.x + reset_width, input_size.y),
+            egui::Layout::left_to_right(egui::Align::Center),
+            |ui| {
+                ui.spacing_mut().item_spacing.x = RESETTABLE_INPUT_GAP;
+                if show_reset
+                    && resettable_input_reset_button(ui, input_size.y, reset_label).clicked()
+                {
+                    *value = default.clone();
+                    reset_clicked = true;
+                }
+                add_input(ui, value)
+            },
+        )
+        .inner;
+    if reset_clicked {
+        input_response.mark_changed();
+    }
+    input_response
+}
+
+fn resettable_input_reset_button(ui: &mut egui::Ui, size: f32, label: &str) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::click());
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label)
+    });
+
+    if ui.is_rect_visible(rect) {
+        let visuals = ui.style().interact(&response);
+        ui.painter()
+            .rect_filled(rect, visuals.corner_radius, visuals.bg_fill);
+        ui.painter().rect_stroke(
+            rect,
+            visuals.corner_radius,
+            visuals.bg_stroke,
+            egui::StrokeKind::Inside,
+        );
+        draw_general_svg_icon(
+            ui.painter(),
+            rect.shrink(4.0),
+            general_reset_icon_strokes(),
+            visuals.fg_stroke.color,
+        );
+    }
+
+    response.on_hover_text("Reset to default")
+}
+
+pub(crate) fn general_reset_icon_strokes() -> &'static [Stroke] {
+    static STROKES: OnceLock<Vec<Stroke>> = OnceLock::new();
+    STROKES
+        .get_or_init(|| {
+            parse_svg_segments(include_str!("../assets/tool-icons/reset.svg"))
+                .expect("the bundled reset icon must be valid SVG")
+        })
+        .as_slice()
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct PathRowAction {
     pub(crate) browse_clicked: bool,

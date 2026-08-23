@@ -82,6 +82,10 @@ const GENERAL_RULER_TOP_HEIGHT: f32 = 24.0;
 const GENERAL_RULER_LEFT_WIDTH: f32 = GENERAL_RULER_TOP_HEIGHT;
 const GENERAL_FIT_MARGIN: f32 = 0.12;
 const GENERAL_SELECTION_BUFFER_PX: f32 = 6.0;
+const GENERAL_DEFAULT_JOB_WIDTH_MM: f64 = 100.0;
+const GENERAL_DEFAULT_JOB_HEIGHT_MM: f64 = 100.0;
+const GENERAL_DEFAULT_JOB_THICKNESS_MM: f64 = 10.0;
+const GENERAL_DEFAULT_CIRCLE_RADIUS_MM: f64 = 10.0;
 const MAX_RECENT_PROJECTS: usize = 10;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -137,7 +141,7 @@ impl Default for CircleDraft {
     fn default() -> Self {
         Self {
             center_mm: Point::default(),
-            radius_mm: 10.0,
+            radius_mm: GENERAL_DEFAULT_CIRCLE_RADIUS_MM,
             measurement: CircleMeasurement::Diameter,
         }
     }
@@ -162,6 +166,7 @@ enum CircleToolMode {
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct CircleToolSession {
     draft: CircleDraft,
+    defaults: CircleDraft,
     mode: CircleToolMode,
 }
 
@@ -228,9 +233,9 @@ impl Default for GeneralJobSetup {
     fn default() -> Self {
         Self {
             job_type: GeneralJobType::SingleSided,
-            width: 100.0,
-            height: 100.0,
-            thickness: 10.0,
+            width: GENERAL_DEFAULT_JOB_WIDTH_MM,
+            height: GENERAL_DEFAULT_JOB_HEIGHT_MM,
+            thickness: GENERAL_DEFAULT_JOB_THICKNESS_MM,
             units: GeneralUnits::Millimetres,
             z_zero: GeneralZZero::MaterialSurface,
             xy_use_offset: false,
@@ -2541,6 +2546,7 @@ impl RengraveApp {
         self.general_tool_tab = GeneralToolTab::Design;
         self.general_temporary_tool = Some(GeneralTemporaryTool::Circle(CircleToolSession {
             draft: CircleDraft::from_circle(circle),
+            defaults: CircleDraft::from_circle(circle),
             mode: CircleToolMode::Edit(id),
         }));
     }
@@ -2965,18 +2971,21 @@ impl RengraveApp {
                         ui,
                         "Width (X)",
                         &mut self.general_job_setup.width,
+                        GENERAL_DEFAULT_JOB_WIDTH_MM,
                         units,
                     );
                     general_dimension_row(
                         ui,
                         "Height (Y)",
                         &mut self.general_job_setup.height,
+                        GENERAL_DEFAULT_JOB_HEIGHT_MM,
                         units,
                     );
                     general_dimension_row(
                         ui,
                         "Thickness (Z)",
                         &mut self.general_job_setup.thickness,
+                        GENERAL_DEFAULT_JOB_THICKNESS_MM,
                         units,
                     );
                     general_justified_row(ui, |ui| {
@@ -3038,6 +3047,7 @@ impl RengraveApp {
                         ui,
                         "X",
                         &mut self.general_job_setup.xy_offset_x,
+                        0.0,
                         units,
                         self.general_job_setup.xy_use_offset,
                     );
@@ -3045,6 +3055,7 @@ impl RengraveApp {
                         ui,
                         "Y",
                         &mut self.general_job_setup.xy_offset_y,
+                        0.0,
                         units,
                         self.general_job_setup.xy_use_offset,
                     );
@@ -3148,6 +3159,7 @@ impl RengraveApp {
                 self.general_temporary_tool =
                     Some(GeneralTemporaryTool::Circle(CircleToolSession {
                         draft: CircleDraft::default(),
+                        defaults: CircleDraft::default(),
                         mode: CircleToolMode::Create,
                     }));
             }
@@ -4497,8 +4509,20 @@ fn show_general_circle_settings(
     };
     show_general_temporary_settings(ui, title, confirm_label, |ui| {
         general_setup_group(ui, "Center Point", |ui, _| {
-            general_signed_dimension_row(ui, "X", &mut session.draft.center_mm.x, units);
-            general_signed_dimension_row(ui, "Y", &mut session.draft.center_mm.y, units);
+            general_signed_dimension_row(
+                ui,
+                "X",
+                &mut session.draft.center_mm.x,
+                session.defaults.center_mm.x,
+                units,
+            );
+            general_signed_dimension_row(
+                ui,
+                "Y",
+                &mut session.draft.center_mm.y,
+                session.defaults.center_mm.y,
+                units,
+            );
         });
         general_setup_group(ui, "Size", |ui, _| {
             general_justified_row(ui, |ui| {
@@ -4515,7 +4539,7 @@ fn show_general_circle_settings(
                     );
                 });
             });
-            general_circle_size_row(ui, &mut session.draft, units);
+            general_circle_size_row(ui, &mut session.draft, session.defaults.radius_mm, units);
         });
     })
 }
@@ -4577,6 +4601,7 @@ fn general_signed_dimension_row(
     ui: &mut egui::Ui,
     label: &str,
     value_mm: &mut f64,
+    default_mm: f64,
     units: GeneralUnits,
 ) {
     let suffix = general_units_suffix(units);
@@ -4584,14 +4609,24 @@ fn general_signed_dimension_row(
         ui.label(label);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let mut display_value = general_display_value(*value_mm, units);
-            if ui
-                .add_sized(
-                    egui::vec2(72.0, 22.0),
-                    egui::DragValue::new(&mut display_value)
-                        .speed(general_drag_speed(units))
-                        .suffix(suffix),
-                )
-                .changed()
+            let default_value = general_display_value(default_mm, units);
+            if resettable_value_input(
+                ui,
+                &mut display_value,
+                &default_value,
+                egui::vec2(72.0, 22.0),
+                &format!("Reset {label} to default"),
+                general_input_values_match,
+                |ui, value| {
+                    ui.add_sized(
+                        egui::vec2(72.0, 22.0),
+                        egui::DragValue::new(value)
+                            .speed(general_drag_speed(units))
+                            .suffix(suffix),
+                    )
+                },
+            )
+            .changed()
             {
                 *value_mm = general_storage_value(display_value, units);
             }
@@ -4599,7 +4634,12 @@ fn general_signed_dimension_row(
     });
 }
 
-fn general_circle_size_row(ui: &mut egui::Ui, draft: &mut CircleDraft, units: GeneralUnits) {
+fn general_circle_size_row(
+    ui: &mut egui::Ui,
+    draft: &mut CircleDraft,
+    default_radius_mm: f64,
+    units: GeneralUnits,
+) {
     let label = match draft.measurement {
         CircleMeasurement::Radius => "Radius",
         CircleMeasurement::Diameter => "Diameter",
@@ -4613,15 +4653,25 @@ fn general_circle_size_row(ui: &mut egui::Ui, draft: &mut CircleDraft, units: Ge
                 CircleMeasurement::Diameter => 2.0,
             };
             let mut display_value = general_display_value(draft.radius_mm * multiplier, units);
-            if ui
-                .add_sized(
-                    egui::vec2(72.0, 22.0),
-                    egui::DragValue::new(&mut display_value)
-                        .speed(general_drag_speed(units))
-                        .suffix(suffix)
-                        .range(0.001..=f64::MAX),
-                )
-                .changed()
+            let default_value = general_display_value(default_radius_mm * multiplier, units);
+            if resettable_value_input(
+                ui,
+                &mut display_value,
+                &default_value,
+                egui::vec2(72.0, 22.0),
+                &format!("Reset {label} to default"),
+                general_input_values_match,
+                |ui, value| {
+                    ui.add_sized(
+                        egui::vec2(72.0, 22.0),
+                        egui::DragValue::new(value)
+                            .speed(general_drag_speed(units))
+                            .suffix(suffix)
+                            .range(0.001..=f64::MAX),
+                    )
+                },
+            )
+            .changed()
             {
                 draft.radius_mm = general_storage_value(display_value, units) / multiplier;
             }
@@ -4727,19 +4777,39 @@ fn general_drag_speed(units: GeneralUnits) -> f64 {
     }
 }
 
-fn general_dimension_row(ui: &mut egui::Ui, label: &str, value_mm: &mut f64, units: GeneralUnits) {
+fn general_input_values_match(value: &f64, default: &f64) -> bool {
+    (value - default).abs() < 1e-9
+}
+
+fn general_dimension_row(
+    ui: &mut egui::Ui,
+    label: &str,
+    value_mm: &mut f64,
+    default_mm: f64,
+    units: GeneralUnits,
+) {
     general_justified_row(ui, |ui| {
         ui.label(label);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let mut display_value = general_display_value(*value_mm, units);
-            if ui
-                .add_sized(
-                    egui::vec2(48.0, 22.0),
-                    egui::DragValue::new(&mut display_value)
-                        .speed(general_drag_speed(units))
-                        .range(0.0..=f64::MAX),
-                )
-                .changed()
+            let default_value = general_display_value(default_mm, units);
+            if resettable_value_input(
+                ui,
+                &mut display_value,
+                &default_value,
+                egui::vec2(48.0, 22.0),
+                &format!("Reset {label} to default"),
+                general_input_values_match,
+                |ui, value| {
+                    ui.add_sized(
+                        egui::vec2(48.0, 22.0),
+                        egui::DragValue::new(value)
+                            .speed(general_drag_speed(units))
+                            .range(0.0..=f64::MAX),
+                    )
+                },
+            )
+            .changed()
             {
                 *value_mm = general_storage_value(display_value, units);
             }
@@ -4751,6 +4821,7 @@ fn general_offset_row(
     ui: &mut egui::Ui,
     label: &str,
     value_mm: &mut f64,
+    default_mm: f64,
     units: GeneralUnits,
     enabled: bool,
 ) {
@@ -4758,10 +4829,21 @@ fn general_offset_row(
         ui.label(label);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let mut display_value = general_display_value(*value_mm, units);
+            let default_value = general_display_value(default_mm, units);
             ui.add_enabled_ui(enabled, |ui| {
-                ui.add_sized(
+                resettable_value_input(
+                    ui,
+                    &mut display_value,
+                    &default_value,
                     egui::vec2(48.0, 22.0),
-                    egui::DragValue::new(&mut display_value).speed(general_drag_speed(units)),
+                    &format!("Reset {label} to default"),
+                    general_input_values_match,
+                    |ui, value| {
+                        ui.add_sized(
+                            egui::vec2(48.0, 22.0),
+                            egui::DragValue::new(value).speed(general_drag_speed(units)),
+                        )
+                    },
                 )
                 .changed();
             });
@@ -5129,6 +5211,11 @@ mod tests {
     fn general_drag_speed_tracks_display_units() {
         assert_close(general_drag_speed(GeneralUnits::Millimetres), 0.1);
         assert_close(general_drag_speed(GeneralUnits::Inches), 0.01);
+    }
+
+    #[test]
+    fn general_reset_icon_is_valid_svg() {
+        assert!(!general_reset_icon_strokes().is_empty());
     }
 
     #[test]
@@ -7663,6 +7750,11 @@ mod tests {
                     radius_mm: 10.0,
                     measurement: CircleMeasurement::Diameter,
                 },
+                defaults: CircleDraft {
+                    center_mm: Point { x: 0.0, y: 0.0 },
+                    radius_mm: 10.0,
+                    measurement: CircleMeasurement::Diameter,
+                },
                 mode: CircleToolMode::Create,
             }))
         ));
@@ -7698,6 +7790,7 @@ mod tests {
                     measurement: CircleMeasurement::Radius,
                     ..
                 },
+                defaults: CircleDraft { .. },
                 mode: CircleToolMode::Create,
             }))
         ));
@@ -7751,6 +7844,123 @@ mod tests {
     }
 
     #[test]
+    fn kittest_resettable_input_supports_text_values() {
+        #[derive(Debug)]
+        struct ResettableTextState {
+            value: String,
+        }
+
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(220.0, 60.0))
+            .build_ui_state(
+                |ui, state: &mut ResettableTextState| {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        resettable_value_input(
+                            ui,
+                            &mut state.value,
+                            &"Default".to_owned(),
+                            egui::vec2(120.0, 22.0),
+                            "Reset text to default",
+                            |value, default| value == default,
+                            |ui, value| {
+                                ui.add_sized(
+                                    egui::vec2(120.0, 22.0),
+                                    egui::TextEdit::singleline(value),
+                                )
+                            },
+                        );
+                    });
+                },
+                ResettableTextState {
+                    value: "Default".to_owned(),
+                },
+            );
+        harness.run();
+
+        assert!(harness.query_by_label("Reset text to default").is_none());
+        harness.state_mut().value = "Changed".to_owned();
+        harness.run();
+
+        let reset = harness.get_by_label("Reset text to default");
+        assert!((reset.rect().width() - reset.rect().height()).abs() < 0.5);
+        assert!(reset.rect().height() <= 22.0);
+        reset.click();
+        harness.run();
+
+        assert_eq!(harness.state().value, "Default");
+        assert!(harness.query_by_label("Reset text to default").is_none());
+    }
+
+    #[test]
+    fn kittest_general_numeric_resets_update_the_shared_scene() {
+        let mut app = test_app();
+        app.tool_view = ToolView::GeneralPurpose;
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(1000.0, 700.0))
+            .build_eframe(|_| app);
+        harness.run();
+
+        assert!(
+            harness
+                .query_by_label("Reset Width (X) to default")
+                .is_none()
+        );
+        harness.state_mut().general_job_setup.width = 150.0;
+        harness.state_mut().general_view = GeneralView::ThreeD;
+        harness.run();
+
+        let reset_width = harness.get_by_label("Reset Width (X) to default");
+        assert!((reset_width.rect().width() - reset_width.rect().height()).abs() < 0.5);
+        assert!(reset_width.rect().height() <= 22.0);
+        reset_width.click();
+        harness.run();
+
+        assert_close(
+            harness.state().general_job_setup.width,
+            GENERAL_DEFAULT_JOB_WIDTH_MM,
+        );
+        assert!(
+            harness
+                .query_by_label("Reset Width (X) to default")
+                .is_none()
+        );
+        assert!(matches!(
+            harness.state().general_scene().objects.first(),
+            Some(GeneralSceneObject::JobStock { width_mm, .. })
+                if (*width_mm - GENERAL_DEFAULT_JOB_WIDTH_MM).abs() < 1e-9
+        ));
+
+        let defaults = CircleDraft::default();
+        harness.state_mut().general_tool_tab = GeneralToolTab::Design;
+        harness.state_mut().general_temporary_tool =
+            Some(GeneralTemporaryTool::Circle(CircleToolSession {
+                draft: CircleDraft {
+                    radius_mm: 20.0,
+                    ..defaults
+                },
+                defaults,
+                mode: CircleToolMode::Create,
+            }));
+        harness.run();
+
+        harness.get_by_label("Reset Diameter to default").click();
+        harness.run();
+        assert!(matches!(
+            harness.state().general_scene().objects.last(),
+            Some(GeneralSceneObject::DesignCircle {
+                radius_mm,
+                preview: true,
+                ..
+            }) if (*radius_mm - GENERAL_DEFAULT_CIRCLE_RADIUS_MM).abs() < 1e-9
+        ));
+        assert!(
+            harness
+                .query_by_label("Reset Diameter to default")
+                .is_none()
+        );
+    }
+
+    #[test]
     fn kittest_edit_parameters_requires_selection_and_updates_without_saving() {
         let mut app = test_app();
         app.tool_view = ToolView::GeneralPurpose;
@@ -7786,6 +7996,11 @@ mod tests {
             harness.state().general_temporary_tool,
             Some(GeneralTemporaryTool::Circle(CircleToolSession {
                 draft: CircleDraft {
+                    center_mm: Point { x: 4.0, y: -2.0 },
+                    radius_mm: 5.0,
+                    measurement: CircleMeasurement::Diameter,
+                },
+                defaults: CircleDraft {
                     center_mm: Point { x: 4.0, y: -2.0 },
                     radius_mm: 5.0,
                     measurement: CircleMeasurement::Diameter,
