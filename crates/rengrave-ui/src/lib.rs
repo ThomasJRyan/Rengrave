@@ -81,6 +81,7 @@ const GENERAL_MODELING_RESOLUTION_VISIBLE: bool = false;
 const GENERAL_RULER_TOP_HEIGHT: f32 = 24.0;
 const GENERAL_RULER_LEFT_WIDTH: f32 = GENERAL_RULER_TOP_HEIGHT;
 const GENERAL_FIT_MARGIN: f32 = 0.12;
+const GENERAL_SELECTION_BUFFER_PX: f32 = 6.0;
 const MAX_RECENT_PROJECTS: usize = 10;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2713,7 +2714,8 @@ impl RengraveApp {
             );
             let radius = (general_display_value(circle.radius_mm, self.general_job_setup.units)
                 * self.general_2d_transform.zoom) as f32;
-            let interaction_radius = radius.max(6.0);
+            let interaction_radius =
+                (radius + GENERAL_SELECTION_BUFFER_PX).max(GENERAL_SELECTION_BUFFER_PX);
             let interaction_rect =
                 egui::Rect::from_center_size(center, egui::Vec2::splat(interaction_radius * 2.0));
             let response = ui.interact(
@@ -2759,14 +2761,12 @@ impl RengraveApp {
                 general_storage_value(point.y, self.general_job_setup.units),
             );
             let tolerance_mm = general_storage_value(
-                6.0 / self.general_2d_transform.zoom,
+                f64::from(GENERAL_SELECTION_BUFFER_PX) / self.general_2d_transform.zoom,
                 self.general_job_setup.units,
             );
-            let candidates = self
+            self.general_selected_object = self
                 .general_design_document
-                .hit_candidates(point_mm, tolerance_mm);
-            self.general_selected_object =
-                next_overlap_selection(&candidates, self.general_selected_object);
+                .hit_test(point_mm, tolerance_mm);
         } else if canvas_response.clicked_by(egui::PointerButton::Primary) {
             self.general_selected_object = None;
         }
@@ -4583,18 +4583,6 @@ fn general_storage_value(display_value: f64, units: GeneralUnits) -> f64 {
         GeneralUnits::Inches => display_value * MM_PER_INCH,
         GeneralUnits::Millimetres => display_value,
     }
-}
-
-fn next_overlap_selection(
-    candidates: &[DesignObjectId],
-    current: Option<DesignObjectId>,
-) -> Option<DesignObjectId> {
-    let first = candidates.first().copied()?;
-    let Some(current_index) = current.and_then(|id| candidates.iter().position(|item| *item == id))
-    else {
-        return Some(first);
-    };
-    Some(candidates[(current_index + 1) % candidates.len()])
 }
 
 fn general_dimension_row(ui: &mut egui::Ui, label: &str, value_mm: &mut f64, units: GeneralUnits) {
@@ -7589,7 +7577,13 @@ mod tests {
         ));
 
         harness.state_mut().general_selected_object = None;
-        harness.get_by_label("Circle 1").click();
+        let circle_rect = harness.get_by_label("Circle 1").rect();
+        let circle_path = egui::pos2(
+            circle_rect.right() - GENERAL_SELECTION_BUFFER_PX,
+            circle_rect.center().y,
+        );
+        harness.drag_at(circle_path);
+        harness.drop_at(circle_path);
         harness.run();
         assert_eq!(harness.state().general_selected_object, Some(object.id));
 
@@ -7603,7 +7597,7 @@ mod tests {
     }
 
     #[test]
-    fn kittest_nested_circles_select_smallest_then_delete_the_selection() {
+    fn kittest_concentric_circles_select_the_clicked_path_without_cycling() {
         let mut app = test_app();
         app.tool_view = ToolView::GeneralPurpose;
         app.general_tool_tab = GeneralToolTab::Design;
@@ -7611,33 +7605,69 @@ mod tests {
             .general_design_document
             .add_circle(Point::new(0.0, 0.0), 5.0)
             .expect("valid small circle");
-        let large = app
+        let medium = app
             .general_design_document
             .add_circle(Point::new(0.0, 0.0), 10.0)
+            .expect("valid medium circle");
+        let large = app
+            .general_design_document
+            .add_circle(Point::new(0.0, 0.0), 15.0)
             .expect("valid large circle");
         let mut harness = Harness::builder()
             .with_size(egui::vec2(1000.0, 700.0))
             .build_eframe(|_| app);
         harness.run();
 
-        // The large circle is visually on top, but a click through the shared
-        // center must make the smaller enclosed object reachable first.
-        harness.get_by_label("Circle 2").click();
+        let small_rect = harness.get_by_label("Circle 1").rect();
+        let small_path = egui::pos2(
+            small_rect.right() - GENERAL_SELECTION_BUFFER_PX,
+            small_rect.center().y,
+        );
+        harness.drag_at(small_path);
+        harness.drop_at(small_path);
         harness.run();
         assert_eq!(harness.state().general_selected_object, Some(small));
 
-        // Repeating the click cycles through the candidates at that position.
-        harness.get_by_label("Circle 2").click();
+        let medium_rect = harness.get_by_label("Circle 2").rect();
+        let medium_path = egui::pos2(
+            medium_rect.right() - GENERAL_SELECTION_BUFFER_PX,
+            medium_rect.center().y,
+        );
+        harness.drag_at(medium_path);
+        harness.drop_at(medium_path);
+        harness.run();
+        assert_eq!(harness.state().general_selected_object, Some(medium));
+
+        // Clicking the small path again selects it directly; selection does
+        // not advance to the large circle based on click history.
+        harness.drag_at(small_path);
+        harness.drop_at(small_path);
+        harness.run();
+        assert_eq!(harness.state().general_selected_object, Some(small));
+
+        let large_rect = harness.get_by_label("Circle 3").rect();
+        let large_path = egui::pos2(
+            large_rect.right() - GENERAL_SELECTION_BUFFER_PX,
+            large_rect.center().y,
+        );
+        harness.drag_at(large_path);
+        harness.drop_at(large_path);
         harness.run();
         assert_eq!(harness.state().general_selected_object, Some(large));
 
         harness.key_press(egui::Key::Delete);
         harness.run();
         assert_eq!(harness.state().general_selected_object, None);
-        assert_eq!(harness.state().general_design_document.objects().len(), 1);
+        assert_eq!(harness.state().general_design_document.objects().len(), 2);
         assert_eq!(
-            harness.state().general_design_document.objects()[0].id,
-            small
+            harness
+                .state()
+                .general_design_document
+                .objects()
+                .iter()
+                .map(|object| object.id)
+                .collect::<Vec<_>>(),
+            vec![small, medium]
         );
         assert_eq!(harness.state().status, "Selected vector deleted");
     }

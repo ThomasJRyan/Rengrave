@@ -94,9 +94,12 @@ Committed circles appear automatically in both the 2D and read-only 3D views.
 Click a circle with the left mouse button in the 2D View to select it; the
 selected outline and center mark use the selection accent. Selection is
 reserved for later CAM-operation assignment and does not alter geometry. When
-circles overlap, the smallest circle under the pointer is selected first;
-click the same position again to cycle through the other overlapping circles.
-Press ``Delete`` to remove the selected circle. Blank clicks clear selection.
+circles overlap, selection uses the distance from the pointer to each vector
+outline. Click near the path you want; a small screen-space buffer makes the
+outline easier to target without requiring pixel-perfect input. Repeated clicks
+on the same path keep selecting that path and do not cycle through enclosing
+objects. Press ``Delete`` to remove the selected circle. Blank clicks clear
+selection.
 
 The 3D View displays circles on the job surface but does not provide selection
 or editing. Saving a General Purpose project to an ``.rgrv`` file stores its

@@ -24,11 +24,10 @@ pub struct DesignCircle {
 }
 
 impl DesignCircle {
-    pub fn contains(self, point_mm: Point, tolerance_mm: f64) -> bool {
+    pub fn distance_to_path(self, point_mm: Point) -> f64 {
         let dx = point_mm.x - self.center_mm.x;
         let dy = point_mm.y - self.center_mm.y;
-        let selection_radius = self.radius_mm + tolerance_mm.max(0.0);
-        dx * dx + dy * dy <= selection_radius * selection_radius
+        (dx.hypot(dy) - self.radius_mm).abs()
     }
 }
 
@@ -105,31 +104,20 @@ impl VectorDocument {
         self.objects.len() != original_len
     }
 
-    /// Returns every object containing the point, ordered from the smallest
-    /// enclosing geometry to the largest. Equal-sized objects retain visual
-    /// stacking order with the newest object first.
-    pub fn hit_candidates(&self, point_mm: Point, tolerance_mm: f64) -> Vec<DesignObjectId> {
-        let mut candidates = self
-            .objects
-            .iter()
-            .rev()
-            .filter_map(|object| {
-                let (hit, selection_size) = match object.geometry {
-                    DesignGeometry::Circle(circle) => {
-                        (circle.contains(point_mm, tolerance_mm), circle.radius_mm)
-                    }
-                };
-                hit.then_some((object.id, selection_size))
-            })
-            .collect::<Vec<_>>();
-        candidates.sort_by(|left, right| left.1.total_cmp(&right.1));
-        candidates.into_iter().map(|(id, _)| id).collect()
-    }
-
     pub fn hit_test(&self, point_mm: Point, tolerance_mm: f64) -> Option<DesignObjectId> {
-        self.hit_candidates(point_mm, tolerance_mm)
-            .into_iter()
-            .next()
+        let tolerance_mm = tolerance_mm.max(0.0);
+        let mut nearest = None;
+        for object in self.objects.iter().rev() {
+            let distance = match object.geometry {
+                DesignGeometry::Circle(circle) => circle.distance_to_path(point_mm),
+            };
+            if distance <= tolerance_mm
+                && nearest.is_none_or(|(_, nearest_distance)| distance < nearest_distance)
+            {
+                nearest = Some((object.id, distance));
+            }
+        }
+        nearest.map(|(id, _)| id)
     }
 }
 
@@ -138,7 +126,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn circles_receive_stable_ids_and_hit_test_topmost_first() {
+    fn circles_receive_stable_ids_and_hit_test_the_nearest_path() {
         let mut document = VectorDocument::default();
         let first = document
             .add_circle(Point::new(0.0, 0.0), 10.0)
@@ -149,8 +137,8 @@ mod tests {
 
         assert_eq!(first.get(), 1);
         assert_eq!(second.get(), 2);
-        assert_eq!(document.hit_test(Point::new(5.0, 0.0), 0.0), Some(second));
-        assert_eq!(document.hit_test(Point::new(-9.0, 0.0), 0.0), Some(first));
+        assert_eq!(document.hit_test(Point::new(9.0, 0.0), 0.0), Some(second));
+        assert_eq!(document.hit_test(Point::new(-10.0, 0.0), 0.0), Some(first));
         assert_eq!(document.hit_test(Point::new(20.0, 0.0), 0.0), None);
     }
 
@@ -175,21 +163,23 @@ mod tests {
     }
 
     #[test]
-    fn nested_circle_hits_prefer_the_smallest_and_expose_all_candidates() {
+    fn concentric_circles_are_selected_by_the_path_nearest_the_pointer() {
         let mut document = VectorDocument::default();
         let small = document
             .add_circle(Point::new(0.0, 0.0), 5.0)
             .expect("valid small circle");
-        let large = document
+        let medium = document
             .add_circle(Point::new(0.0, 0.0), 10.0)
+            .expect("valid medium circle");
+        let large = document
+            .add_circle(Point::new(0.0, 0.0), 15.0)
             .expect("valid large circle");
 
-        assert_eq!(
-            document.hit_candidates(Point::new(0.0, 0.0), 0.0),
-            vec![small, large]
-        );
-        assert_eq!(document.hit_test(Point::new(0.0, 0.0), 0.0), Some(small));
-        assert_eq!(document.hit_test(Point::new(8.0, 0.0), 0.0), Some(large));
+        assert_eq!(document.hit_test(Point::new(5.0, 0.0), 0.5), Some(small));
+        assert_eq!(document.hit_test(Point::new(10.0, 0.0), 0.5), Some(medium));
+        assert_eq!(document.hit_test(Point::new(15.0, 0.0), 0.5), Some(large));
+        assert_eq!(document.hit_test(Point::new(0.0, 0.0), 0.5), None);
+        assert_eq!(document.hit_test(Point::new(5.4, 0.0), 0.5), Some(small));
     }
 
     #[test]

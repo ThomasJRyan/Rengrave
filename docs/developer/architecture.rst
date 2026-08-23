@@ -305,20 +305,23 @@ Authored General-workbench geometry begins in
 legacy ``EngraveSegment`` output. ``DesignObjectId`` provides stable identity,
 and ``DesignGeometry::Circle`` stores a center and radius in canonical
 millimetres. Core validation rejects non-finite centers and non-positive
-radii. Core hit testing returns all enclosing candidates from the smallest
-geometry to the largest, preserving newest-first stacking for equal sizes.
-This makes nested geometry reachable while supporting repeated-click cycling.
-``remove_object`` deletes by stable identity without reusing IDs. This remains
-a focused first model slice and is not yet attached to CAM operations.
+radii. Core hit testing measures the shortest distance from the pointer to each
+vector path and selects the nearest path within the supplied tolerance. For a
+circle this is ``abs(distance(pointer, center) - radius)``. Newest-first visual
+stacking breaks exact distance ties. ``remove_object`` deletes by stable
+identity without reusing IDs. This remains a focused first model slice and is
+not yet attached to CAM operations.
 
 The 2D renderer converts authored millimetres at the UI unit boundary, projects
 circle centers through the existing ``ViewTransform``, and derives screen
 radii from the same zoom. Per-object interaction regions expose accessible
-``Circle N`` labels. A primary click resolves the complete core candidate list;
-the existing selected ID advances to the next candidate, while a new location
-starts with the smallest candidate. Blank primary clicks clear selection and
-``Delete`` removes the selected object only while the 2D editor is active and
-no temporary settings tool is open. The General 3D scene receives matching
+``Circle N`` labels. A primary click converts the pointer into canonical model
+units and asks the core for the nearest path. The tolerance is derived from a
+six-pixel screen-space buffer divided by the current zoom, so selection remains
+usable without becoming less precise when zoomed in. Selection has no click
+history or cycling state. Blank primary clicks clear selection and ``Delete``
+removes the selected object only while the 2D editor is active and no temporary
+settings tool is open. The General 3D scene receives matching
 ``DesignCircle`` objects and draws CPU-side 72-segment outlines on the stock
 surface after opaque stock faces. Draft objects use a preview color. The 3D
 path remains display-only and has no selection handlers.
