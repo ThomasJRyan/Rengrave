@@ -69,7 +69,9 @@ uses 0.01-inch increments in inches mode and 0.1-millimetre increments in mm
 mode. When a numeric value differs from its default, a square reset button
 appears immediately to the left of the field. Select it to restore that field;
 the button hides again and both General Purpose views reflect the restored
-geometry immediately. These controls are UI
+geometry immediately. Its reserved slot keeps the input fixed in place, so
+the button can appear or disappear during a numeric drag without interrupting
+the gesture. These controls are UI
 scaffolding only and do not yet change machining geometry, calculations, or
 machine output. The setup form stays within the Tool Panel: fields use a
 compact aligned column, groups fill the panel width, and horizontal rows

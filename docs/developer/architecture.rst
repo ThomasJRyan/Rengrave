@@ -70,11 +70,14 @@ sensitivity in display units: 0.01 per step for inches and 0.1 per step for
 millimetres. Job Setup and vector parameter controls share this boundary.
 The reusable ``resettable_value_input`` widget wraps an arbitrary EGUI editor
 closure, so it preserves the normal ``DragValue`` or ``TextEdit`` builder
-configuration. It conditionally allocates a 22-pixel square SVG reset button
-with a 3-pixel gap, marks the wrapped response changed after a reset, and lets
-the existing immediate-mode scene path refresh both viewports. Comparisons and
-defaults are supplied by the caller so canonical millimetre values and text
-values can use appropriate equality rules.
+configuration. It always reserves a 22-pixel square reset slot with a 3-pixel
+gap, while only painting and exposing the SVG button when the value differs
+from its default. Keeping the allocation count, input bounds, and generated
+EGUI identity stable prevents a visibility transition from interrupting an
+active numeric drag. The widget marks the wrapped response changed after a
+reset and lets the existing immediate-mode scene path refresh both viewports.
+Comparisons and defaults are supplied by the caller so canonical millimetre
+values and text values can use appropriate equality rules.
 
 The 2D canvas and rulers use the selected display unit for screen coordinates
 and labels. When the unit selection changes, the workbench inversely rescales

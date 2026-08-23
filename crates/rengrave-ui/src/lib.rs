@@ -7892,6 +7892,107 @@ mod tests {
     }
 
     #[test]
+    fn kittest_reset_visibility_does_not_interrupt_numeric_dragging() {
+        #[derive(Debug)]
+        struct ResettableNumberState {
+            value: f64,
+            input_id: Option<egui::Id>,
+            input_rect: egui::Rect,
+        }
+
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(220.0, 60.0))
+            .build_ui_state(
+                |ui, state: &mut ResettableNumberState| {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let response = resettable_value_input(
+                            ui,
+                            &mut state.value,
+                            &0.0,
+                            egui::vec2(80.0, 22.0),
+                            "Reset number to default",
+                            general_input_values_match,
+                            |ui, value| {
+                                ui.add_sized(
+                                    egui::vec2(80.0, 22.0),
+                                    egui::DragValue::new(value).speed(0.1),
+                                )
+                            },
+                        );
+                        state.input_id = Some(response.id);
+                        state.input_rect = response.rect;
+                    });
+                },
+                ResettableNumberState {
+                    value: 0.0,
+                    input_id: None,
+                    input_rect: egui::Rect::NOTHING,
+                },
+            );
+        harness.run();
+
+        let default_id = harness.state().input_id.expect("numeric input ID");
+        let default_rect = harness.state().input_rect;
+        assert!(harness.query_by_label("Reset number to default").is_none());
+
+        harness.state_mut().value = 1.0;
+        harness.run();
+        assert_eq!(harness.state().input_id, Some(default_id));
+        assert_eq!(harness.state().input_rect, default_rect);
+        assert!(harness.query_by_label("Reset number to default").is_some());
+
+        harness.state_mut().value = 0.0;
+        harness.run();
+        let drag_start = harness.state().input_rect.center();
+        harness.hover_at(drag_start);
+        harness.run();
+        harness.drag_at(drag_start);
+        harness.run();
+        harness.hover_at(drag_start + egui::vec2(8.0, 0.0));
+        harness.run();
+
+        let first_drag_value = harness.state().value;
+        assert!(first_drag_value > 0.0);
+        assert_eq!(harness.state().input_id, Some(default_id));
+        assert!(harness.ctx.is_being_dragged(default_id));
+        assert!(harness.query_by_label("Reset number to default").is_some());
+
+        harness.hover_at(drag_start + egui::vec2(16.0, 0.0));
+        harness.run();
+        assert!(harness.state().value > first_drag_value);
+        assert_eq!(harness.state().input_id, Some(default_id));
+        assert!(harness.ctx.is_being_dragged(default_id));
+
+        harness.drop_at(drag_start + egui::vec2(16.0, 0.0));
+        harness.run();
+        assert!(!harness.ctx.is_being_dragged(default_id));
+
+        harness.state_mut().value = 1.0;
+        harness.run();
+        let reverse_drag_start = harness.state().input_rect.center();
+        harness.hover_at(reverse_drag_start);
+        harness.run();
+        harness.drag_at(reverse_drag_start);
+        harness.run();
+        harness.hover_at(reverse_drag_start - egui::vec2(10.0, 0.0));
+        harness.run();
+        assert_close(harness.state().value, 0.0);
+        assert!(harness.query_by_label("Reset number to default").is_none());
+        assert_eq!(harness.state().input_id, Some(default_id));
+        assert!(harness.ctx.is_being_dragged(default_id));
+
+        harness.hover_at(reverse_drag_start - egui::vec2(16.0, 0.0));
+        harness.run();
+        assert!(harness.state().value < 0.0);
+        assert!(harness.query_by_label("Reset number to default").is_some());
+        assert_eq!(harness.state().input_id, Some(default_id));
+        assert!(harness.ctx.is_being_dragged(default_id));
+
+        harness.drop_at(reverse_drag_start - egui::vec2(16.0, 0.0));
+        harness.run();
+    }
+
+    #[test]
     fn kittest_general_numeric_resets_update_the_shared_scene() {
         let mut app = test_app();
         app.tool_view = ToolView::GeneralPurpose;
