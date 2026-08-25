@@ -4935,7 +4935,7 @@ fn draw_general_rulers(
         painter.text(
             egui::pos2(left_ruler.left() + 3.0, screen_y - 2.0),
             egui::Align2::LEFT_BOTTOM,
-            general_ruler_label(y, step),
+            general_y_ruler_label(y, step),
             egui::FontId::monospace(10.0),
             label_color,
         );
@@ -4973,6 +4973,10 @@ fn general_ruler_label(value: f64, step: f64) -> String {
     } else {
         format!("{value:.2}")
     }
+}
+
+fn general_y_ruler_label(screen_axis_value: f64, step: f64) -> String {
+    general_ruler_label(-screen_axis_value, step)
 }
 
 fn draw_general_xy_datum(ui: &mut egui::Ui) {
@@ -7712,6 +7716,13 @@ mod tests {
                 .query_by_label("3D orientation gizmo: X, Y, Z")
                 .is_some()
         );
+    }
+
+    #[test]
+    fn general_y_ruler_labels_invert_vertical_coordinates() {
+        assert_eq!(general_y_ruler_label(10.0, 1.0), "-10");
+        assert_eq!(general_y_ruler_label(-10.0, 1.0), "10");
+        assert_eq!(general_y_ruler_label(0.25, 0.1), "-0.25");
     }
 
     #[test]

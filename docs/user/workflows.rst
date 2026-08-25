@@ -45,6 +45,8 @@ The 2D View also includes top and left rulers. Their zero point is the center
 of the canvas, and pointer crosshair lines track the cursor through the ruler
 and canvas area. Rulers show integer coordinates at normal zoom levels and
 use up to two decimal places when zoomed in closely.
+The vertical ruler uses the workbench's screen-oriented convention: values
+above the centered zero are negative, while values below zero are positive.
 The **Centre Job (F7)** button, or the ``F7`` hotkey, restores a centered view
 of the current job with a comfortable responsive margin; the same fitting is
 applied automatically the first time the 2D View opens.

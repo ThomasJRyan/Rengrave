@@ -86,6 +86,13 @@ screen while ruler values change to the new unit. The conversion is currently
 local to the layout-only General workbench; it should become part of the
 shared project model when that workbench gains a functional backend.
 
+The left ruler intentionally inverts its displayed value relative to the
+screen-space Y value: ``general_y_ruler_label(y, step)`` delegates to the
+common formatter with ``-y``. Tick positions, canvas geometry, and crosshair
+placement remain unchanged, so only the vertical ruler's sign convention
+changes: screen-above-zero is labelled negative and screen-below-zero is
+labelled positive.
+
 The initial 2D frame and the **Centre Job (F7)** action calculate a fit zoom from
 the displayed job width and height, the viewport size, and the fixed ruler
 padding. They leave a 12 percent margin based on the smaller viewport
