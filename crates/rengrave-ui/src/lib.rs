@@ -442,7 +442,7 @@ impl RengraveApp {
             },
             general_2d_view_initialized: false,
             general_3d_transform: ViewTransform {
-                viewport_rotation_degrees: 35.0,
+                viewport_rotation_degrees: 0.0,
                 zoom: DEFAULT_PREVIEW_ZOOM,
                 ..ViewTransform::default()
             },
@@ -2512,14 +2512,14 @@ impl RengraveApp {
             }
             let DesignGeometry::Circle(circle) = object.geometry;
             scene.objects.push(GeneralSceneObject::DesignCircle {
-                center_mm: circle.center_mm,
+                center_mm: general_design_point_to_scene_point(circle.center_mm),
                 radius_mm: circle.radius_mm,
                 preview: false,
             });
         }
         if let Some(GeneralTemporaryTool::Circle(session)) = self.general_temporary_tool {
             scene.objects.push(GeneralSceneObject::DesignCircle {
-                center_mm: session.draft.center_mm,
+                center_mm: general_design_point_to_scene_point(session.draft.center_mm),
                 radius_mm: session.draft.radius_mm,
                 preview: true,
             });
@@ -4778,6 +4778,10 @@ fn general_view_point_to_storage_point(point: Point, units: GeneralUnits) -> Poi
     )
 }
 
+fn general_design_point_to_scene_point(point: Point) -> Point {
+    Point::new(point.x, -point.y)
+}
+
 fn general_drag_speed(units: GeneralUnits) -> f64 {
     match units {
         GeneralUnits::Inches => 0.01,
@@ -5442,7 +5446,7 @@ mod tests {
             },
             general_2d_view_initialized: false,
             general_3d_transform: ViewTransform {
-                viewport_rotation_degrees: 35.0,
+                viewport_rotation_degrees: 0.0,
                 zoom: DEFAULT_PREVIEW_ZOOM,
                 ..ViewTransform::default()
             },
@@ -7741,6 +7745,14 @@ mod tests {
         assert_eq!(
             general_view_point_to_storage_point(display_point, GeneralUnits::Millimetres),
             Point::new(12.0, -37.5)
+        );
+    }
+
+    #[test]
+    fn general_design_points_keep_x_and_invert_y_for_3d_scene() {
+        assert_eq!(
+            general_design_point_to_scene_point(Point::new(-25.6, -12.0)),
+            Point::new(-25.6, 12.0)
         );
     }
 

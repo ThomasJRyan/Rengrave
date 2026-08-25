@@ -110,6 +110,9 @@ legacy G-code preview layers: the first object is a shaded ``JobStock`` solid,
 and future design geometry, toolpaths, finished-stock views, or animation
 layers can be added without changing navigation. The renderer uses a small
 CPU-side face list and egui painter polygons; it has no grid or ruler pass.
+The General 3D camera starts at zero yaw so its screen directions agree with
+the 2D workbench: negative X projects left and negative display Y is converted
+to positive scene Y before projection, which places it above the origin.
 The upper-right orientation gizmo projects the three world-axis unit vectors
 through the same yaw and pitch transform as the scene. Lettered endpoints
 keep the axes distinguishable without relying on color alone.
