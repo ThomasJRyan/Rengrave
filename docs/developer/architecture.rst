@@ -92,6 +92,11 @@ common formatter with ``-y``. Tick positions, canvas geometry, and crosshair
 placement remain unchanged, so only the vertical ruler's sign convention
 changes: screen-above-zero is labelled negative and screen-below-zero is
 labelled positive.
+Authored General design points use the same convention at the view boundary:
+``general_display_point_to_view_point`` negates display Y before calling the
+shared preview transform, and ``general_view_point_to_storage_point`` negates
+it again when converting pointer selection back to stored millimetres. This
+keeps editing and hit testing aligned with the displayed position fields.
 
 The initial 2D frame and the **Centre Job (F7)** action calculate a fit zoom from
 the displayed job width and height, the viewport size, and the fixed ruler

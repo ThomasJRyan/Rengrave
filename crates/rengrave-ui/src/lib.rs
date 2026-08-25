@@ -2770,10 +2770,7 @@ impl RengraveApp {
             let center = preview::model_point_to_screen(
                 canvas_rect,
                 self.general_2d_transform,
-                Point::new(
-                    general_display_value(circle.center_mm.x, self.general_job_setup.units),
-                    general_display_value(circle.center_mm.y, self.general_job_setup.units),
-                ),
+                general_display_point_to_view_point(circle.center_mm, self.general_job_setup.units),
             );
             let radius = (general_display_value(circle.radius_mm, self.general_job_setup.units)
                 * self.general_2d_transform.zoom) as f32;
@@ -2807,9 +2804,9 @@ impl RengraveApp {
             let center = preview::model_point_to_screen(
                 canvas_rect,
                 self.general_2d_transform,
-                Point::new(
-                    general_display_value(session.draft.center_mm.x, self.general_job_setup.units),
-                    general_display_value(session.draft.center_mm.y, self.general_job_setup.units),
+                general_display_point_to_view_point(
+                    session.draft.center_mm,
+                    self.general_job_setup.units,
                 ),
             );
             let radius =
@@ -2821,10 +2818,7 @@ impl RengraveApp {
         if let Some(pointer) = selection_pointer {
             let point =
                 preview::screen_point_to_model(canvas_rect, self.general_2d_transform, pointer);
-            let point_mm = Point::new(
-                general_storage_value(point.x, self.general_job_setup.units),
-                general_storage_value(point.y, self.general_job_setup.units),
-            );
+            let point_mm = general_view_point_to_storage_point(point, self.general_job_setup.units);
             let tolerance_mm = general_storage_value(
                 f64::from(GENERAL_SELECTION_BUFFER_PX) / self.general_2d_transform.zoom,
                 self.general_job_setup.units,
@@ -4768,6 +4762,20 @@ fn general_storage_value(display_value: f64, units: GeneralUnits) -> f64 {
         GeneralUnits::Inches => display_value * MM_PER_INCH,
         GeneralUnits::Millimetres => display_value,
     }
+}
+
+fn general_display_point_to_view_point(point_mm: Point, units: GeneralUnits) -> Point {
+    Point::new(
+        general_display_value(point_mm.x, units),
+        -general_display_value(point_mm.y, units),
+    )
+}
+
+fn general_view_point_to_storage_point(point: Point, units: GeneralUnits) -> Point {
+    Point::new(
+        general_storage_value(point.x, units),
+        general_storage_value(-point.y, units),
+    )
 }
 
 fn general_drag_speed(units: GeneralUnits) -> f64 {
@@ -7723,6 +7731,17 @@ mod tests {
         assert_eq!(general_y_ruler_label(10.0, 1.0), "-10");
         assert_eq!(general_y_ruler_label(-10.0, 1.0), "10");
         assert_eq!(general_y_ruler_label(0.25, 0.1), "-0.25");
+    }
+
+    #[test]
+    fn general_design_y_coordinates_invert_at_view_boundary() {
+        let display_point =
+            general_display_point_to_view_point(Point::new(12.0, -37.5), GeneralUnits::Millimetres);
+        assert_eq!(display_point, Point::new(12.0, 37.5));
+        assert_eq!(
+            general_view_point_to_storage_point(display_point, GeneralUnits::Millimetres),
+            Point::new(12.0, -37.5)
+        );
     }
 
     #[test]
