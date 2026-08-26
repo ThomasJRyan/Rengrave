@@ -26,6 +26,9 @@ The UI bundles eight attributed SVG diagrams from FreeCAD's CAM tool-shape
 directory under ``crates/rengrave-ui/assets/toolbits/freecad``. They are parsed
 through the existing SVG stroke parser and scaled into the reference pane;
 the diagrams are explanatory only and are not used as machining geometry.
+The floating manager must be rendered from the General-workbench branch before
+that branch returns from ``eframe::App::ui``; its harness regression selects
+``ToolView::GeneralPurpose`` so this branch boundary remains covered.
 
 The model is operation-ready but deliberately not wired into current G-code
 generation in this change. Future General CAM operations should consume a

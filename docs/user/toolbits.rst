@@ -6,6 +6,8 @@ available to the General workbench. It is separate from the legacy machining
 workbench's operation selectors. The library is intended to supply tool
 definitions to General-workbench CAM operations as those operations are added;
 opening the manager does not change the current G-code operation settings.
+The manager opens as a resizable window above the General workbench and can be
+closed without leaving the current project.
 
 The manager uses a two-pane layout:
 

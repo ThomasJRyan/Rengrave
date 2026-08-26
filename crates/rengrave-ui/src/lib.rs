@@ -2340,6 +2340,7 @@ impl eframe::App for RengraveApp {
             self.show_general_workbench(ui);
             self.show_browser(ui.ctx());
             self.show_new_project_modal(ui.ctx());
+            self.show_general_toolbit_library_window(ui.ctx());
             return;
         }
 
@@ -8241,7 +8242,7 @@ mod tests {
     #[test]
     fn kittest_general_toolbit_library_exposes_manager_controls() {
         let mut app = test_app();
-        app.show_general_toolbit_library = true;
+        app.tool_view = ToolView::GeneralPurpose;
         app.general_toolbit_library.toolbits = general_toolbit_presets();
         app.general_toolbit_selected_id = app
             .general_toolbit_library
@@ -8251,6 +8252,10 @@ mod tests {
         let mut harness = Harness::builder()
             .with_size(egui::vec2(1200.0, 800.0))
             .build_eframe(|_| app);
+        harness.run();
+        harness.get_by_label("Settings").click();
+        harness.run();
+        harness.get_by_label("Toolbit Library…").click();
         harness.run();
 
         for label in [
