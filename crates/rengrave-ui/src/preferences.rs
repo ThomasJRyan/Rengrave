@@ -208,6 +208,7 @@ pub(crate) fn apply_theme(ctx: &egui::Context) {
     visuals.panel_fill = egui::Color32::from_rgb(36, 39, 42);
     visuals.window_fill = egui::Color32::from_rgb(42, 45, 48);
     visuals.selection.bg_fill = egui::Color32::from_rgb(54, 115, 141);
+    visuals.selection.stroke.color = egui::Color32::from_rgb(242, 246, 248);
     visuals.widgets.active.bg_fill = egui::Color32::from_rgb(93, 127, 143);
     visuals.widgets.hovered.bg_fill = egui::Color32::from_rgb(62, 72, 78);
     ctx.set_visuals(visuals);

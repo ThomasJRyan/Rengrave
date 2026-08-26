@@ -206,6 +206,13 @@ enum GeneralUnits {
     Millimetres,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+enum GeneralToolbitSaveStatus {
+    #[default]
+    Saved,
+    Error(String),
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum GeneralZZero {
     #[default]
@@ -344,6 +351,7 @@ struct RengraveApp {
     general_toolbit_filter: String,
     general_toolbit_units: GeneralUnits,
     general_toolbit_delete_id: Option<String>,
+    general_toolbit_save_status: GeneralToolbitSaveStatus,
     toolbit_library: ToolbitLibrary,
     toolbit_assignments: Vec<ToolbitAssignment>,
     preferences_path: Option<PathBuf>,
@@ -369,6 +377,7 @@ enum CatalogPanelMode {
 impl RengraveApp {
     fn new(cc: &eframe::CreationContext<'_>, options: UiLaunchOptions) -> Self {
         apply_theme(&cc.egui_ctx);
+        egui_extras::install_image_loaders(&cc.egui_ctx);
         let direct_launch = options.gcode_file.is_some()
             || options.font_or_image.is_some()
             || options.text.is_some()
@@ -537,6 +546,7 @@ impl RengraveApp {
             general_toolbit_filter: String::new(),
             general_toolbit_units: GeneralUnits::Millimetres,
             general_toolbit_delete_id: None,
+            general_toolbit_save_status: GeneralToolbitSaveStatus::Saved,
             toolbit_library: default_library_path()
                 .as_deref()
                 .and_then(|path| ToolbitLibrary::load(path).ok())
@@ -3249,155 +3259,207 @@ impl RengraveApp {
                 .map(|tool| tool.id.clone());
         }
 
+        let constrain_rect = ctx.content_rect().shrink(12.0);
+        let default_size = egui::vec2(
+            1040.0_f32.min(constrain_rect.width()),
+            700.0_f32.min(constrain_rect.height()),
+        );
+        let min_size = egui::vec2(
+            560.0_f32.min(constrain_rect.width()),
+            400.0_f32.min(constrain_rect.height()),
+        );
         let mut open = true;
         let mut changed = false;
         egui::Window::new("Toolbit Library")
             .open(&mut open)
-            .default_size([1020.0, 680.0])
-            .min_width(820.0)
-            .min_height(520.0)
+            .default_size(default_size)
+            .min_size(min_size)
+            .max_size(constrain_rect.size())
+            .constrain_to(constrain_rect)
             .resizable(true)
             .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    let left_width = (ui.available_width() * 0.30).clamp(250.0, 330.0);
-                    ui.allocate_ui_with_layout(
-                        egui::vec2(left_width, ui.available_height()),
-                        egui::Layout::top_down(egui::Align::Min),
-                        |ui| {
-                            ui.strong("Toolbits");
-                            ui.add_space(4.0);
-                            ui.horizontal(|ui| {
-                                ui.label("Find");
-                                ui.text_edit_singleline(&mut self.general_toolbit_filter);
-                            });
-                            ui.separator();
-                            let filter = self.general_toolbit_filter.to_ascii_lowercase();
-                            egui::ScrollArea::vertical()
-                                .auto_shrink([false, false])
-                                .show(ui, |ui| {
-                                    let rows: Vec<(usize, String, String)> = self
-                                        .general_toolbit_library
-                                        .toolbits
-                                        .iter()
-                                        .enumerate()
-                                        .filter(|(_, tool)| {
-                                            filter.is_empty()
-                                                || tool.label.to_ascii_lowercase().contains(&filter)
-                                                || tool
-                                                    .kind
-                                                    .label()
-                                                    .to_ascii_lowercase()
-                                                    .contains(&filter)
-                                        })
-                                        .map(|(index, tool)| {
-                                            (
-                                                index,
-                                                tool.label.clone(),
-                                                format!(
-                                                    "{} · {:.3} mm",
-                                                    tool.kind.label(),
-                                                    tool.diameter_mm
-                                                ),
-                                            )
-                                        })
-                                        .collect();
-                                    if rows.is_empty() {
-                                        ui.label("No matching toolbits");
-                                    }
-                                    for (index, label, summary) in rows {
-                                        let id =
-                                            self.general_toolbit_library.toolbits[index].id.clone();
-                                        let response = ui.selectable_label(
-                                            self.general_toolbit_selected_id.as_deref()
-                                                == Some(id.as_str()),
-                                            format!("{label}\n{summary}"),
-                                        );
-                                        response.widget_info(|| {
-                                            egui::WidgetInfo::labeled(
-                                                egui::WidgetType::SelectableLabel,
-                                                ui.is_enabled(),
-                                                label.clone(),
-                                            )
-                                        });
-                                        if response.clicked() {
-                                            self.general_toolbit_selected_id = Some(id);
-                                        }
-                                    }
-                                });
-                            ui.separator();
-                            ui.horizontal_wrapped(|ui| {
-                                if ui.button("New").clicked() {
-                                    let tool = GeneralToolbit {
-                                        id: self.next_general_toolbit_id(),
-                                        ..GeneralToolbit::default()
-                                    };
-                                    self.general_toolbit_selected_id = Some(tool.id.clone());
-                                    self.general_toolbit_library.toolbits.push(tool);
-                                    changed = true;
-                                }
-                                ui.menu_button("New from preset", |ui| {
-                                    for preset in general_toolbit_presets() {
-                                        if ui.button(&preset.label).clicked() {
-                                            let mut tool = preset;
-                                            tool.id = self.next_general_toolbit_id();
-                                            self.general_toolbit_selected_id =
-                                                Some(tool.id.clone());
-                                            self.general_toolbit_library.toolbits.push(tool);
-                                            changed = true;
-                                            ui.close();
-                                        }
-                                    }
-                                });
-                            });
-                            ui.horizontal_wrapped(|ui| {
-                                let has_selection = self.general_toolbit_selected_id.is_some();
-                                if ui
-                                    .add_enabled(has_selection, egui::Button::new("Duplicate"))
-                                    .clicked()
-                                    && let Some(index) = self.selected_general_toolbit_index()
-                                {
-                                    let mut copy =
-                                        self.general_toolbit_library.toolbits[index].clone();
-                                    copy.id = self.next_general_toolbit_id();
-                                    copy.label.push_str(" copy");
-                                    self.general_toolbit_selected_id = Some(copy.id.clone());
-                                    self.general_toolbit_library.toolbits.push(copy);
-                                    changed = true;
-                                }
-                                if ui
-                                    .add_enabled(has_selection, egui::Button::new("Delete"))
-                                    .clicked()
-                                {
-                                    self.general_toolbit_delete_id =
-                                        self.general_toolbit_selected_id.clone();
-                                }
-                            });
-                            ui.separator();
-                            ui.horizontal_wrapped(|ui| {
-                                if ui.button("Import JSON").clicked() {
-                                    changed |= self.import_general_toolbit_library();
-                                }
-                                if ui.button("Export JSON").clicked() {
-                                    self.export_general_toolbit_library();
-                                }
-                            });
-                        },
-                    );
-                    ui.separator();
-                    ui.allocate_ui_with_layout(
-                        egui::vec2(ui.available_width(), ui.available_height()),
-                        egui::Layout::top_down(egui::Align::Min),
-                        |ui| {
-                            changed |= self.show_general_toolbit_detail(ui);
-                        },
-                    );
-                });
+                self.show_general_toolbit_toolbar(ui, &mut changed);
+                ui.separator();
+                if ui.available_width() < 760.0 {
+                    if self.selected_general_toolbit_index().is_some() {
+                        changed |= self.show_general_toolbit_detail(ui, true);
+                    } else {
+                        self.show_general_toolbit_list(ui);
+                    }
+                } else {
+                    ui.horizontal_top(|ui| {
+                        let left_width = if ui.available_width() >= 980.0 {
+                            264.0
+                        } else {
+                            240.0
+                        };
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(left_width, ui.available_height()),
+                            egui::Layout::top_down(egui::Align::Min),
+                            |ui| {
+                                self.show_general_toolbit_list(ui);
+                            },
+                        );
+                        ui.separator();
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(ui.available_width(), ui.available_height()),
+                            egui::Layout::top_down(egui::Align::Min),
+                            |ui| {
+                                changed |= self.show_general_toolbit_detail(ui, false);
+                            },
+                        );
+                    });
+                }
             });
         self.show_general_toolbit_library = open;
         if changed {
             self.save_general_toolbit_library();
         }
         self.show_general_toolbit_delete_confirmation(ctx);
+    }
+
+    fn show_general_toolbit_toolbar(&mut self, ui: &mut egui::Ui, changed: &mut bool) {
+        ui.scope(|ui| {
+            ui.spacing_mut().interact_size.y = 26.0;
+            ui.horizontal_wrapped(|ui| {
+                egui::containers::menu::MenuButton::from_button(
+                    egui::Button::new("New from preset…").fill(ui.visuals().selection.bg_fill),
+                )
+                .ui(ui, |ui| {
+                    for preset in general_toolbit_presets() {
+                        if ui.button(&preset.label).clicked() {
+                            let mut tool = preset;
+                            tool.id = self.next_general_toolbit_id();
+                            self.general_toolbit_selected_id = Some(tool.id.clone());
+                            self.general_toolbit_library.toolbits.push(tool);
+                            *changed = true;
+                            ui.close();
+                        }
+                    }
+                });
+                if ui.button("New blank").clicked() {
+                    let tool = GeneralToolbit {
+                        id: self.next_general_toolbit_id(),
+                        ..GeneralToolbit::default()
+                    };
+                    self.general_toolbit_selected_id = Some(tool.id.clone());
+                    self.general_toolbit_library.toolbits.push(tool);
+                    *changed = true;
+                }
+                ui.separator();
+                let has_selection = self.selected_general_toolbit_index().is_some();
+                if ui
+                    .add_enabled(has_selection, egui::Button::new("Duplicate"))
+                    .clicked()
+                    && let Some(index) = self.selected_general_toolbit_index()
+                {
+                    let mut copy = self.general_toolbit_library.toolbits[index].clone();
+                    copy.id = self.next_general_toolbit_id();
+                    copy.label.push_str(" copy");
+                    self.general_toolbit_selected_id = Some(copy.id.clone());
+                    self.general_toolbit_library.toolbits.push(copy);
+                    *changed = true;
+                }
+                if ui
+                    .add_enabled(has_selection, egui::Button::new("Delete…"))
+                    .clicked()
+                {
+                    self.general_toolbit_delete_id = self.general_toolbit_selected_id.clone();
+                }
+                ui.separator();
+                if ui.button("Import library…").clicked() {
+                    *changed |= self.import_general_toolbit_library();
+                }
+                if ui.button("Export library…").clicked() {
+                    self.export_general_toolbit_library();
+                }
+            });
+        });
+    }
+
+    fn show_general_toolbit_list(&mut self, ui: &mut egui::Ui) {
+        ui.strong("Toolbits");
+        ui.add_space(4.0);
+        let search_label = ui.label("Search toolbits");
+        ui.add_sized(
+            [ui.available_width(), 24.0],
+            egui::TextEdit::singleline(&mut self.general_toolbit_filter)
+                .hint_text("Label, type, or tool number…"),
+        )
+        .labelled_by(search_label.id);
+        ui.add_space(6.0);
+
+        let filter = self.general_toolbit_filter.trim().to_ascii_lowercase();
+        let rows: Vec<(usize, String, String)> = self
+            .general_toolbit_library
+            .toolbits
+            .iter()
+            .enumerate()
+            .filter(|(_, tool)| {
+                filter.is_empty()
+                    || tool.label.to_ascii_lowercase().contains(&filter)
+                    || tool.kind.label().to_ascii_lowercase().contains(&filter)
+                    || tool.tool_number.to_string().contains(&filter)
+            })
+            .map(|(index, tool)| {
+                let diameter = general_display_value(tool.diameter_mm, self.general_toolbit_units);
+                let edge =
+                    general_display_value(tool.cutting_edge_height_mm, self.general_toolbit_units);
+                let suffix = general_units_suffix(self.general_toolbit_units).trim();
+                (
+                    index,
+                    format!("T{}  {}", tool.tool_number, tool.label),
+                    format!(
+                        "{} · Ø{diameter:.3} {suffix} · {} flutes · H{edge:.2} {suffix}",
+                        tool.kind.label(),
+                        tool.flutes
+                    ),
+                )
+            })
+            .collect();
+
+        egui::ScrollArea::vertical()
+            .id_salt("general-toolbit-list")
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                if rows.is_empty() {
+                    ui.add_space(8.0);
+                    if self.general_toolbit_library.toolbits.is_empty() {
+                        ui.strong("No toolbits yet");
+                        ui.label("Start from a common preset or create a blank definition.");
+                    } else {
+                        ui.strong(format!(
+                            "No toolbits match ‘{}’",
+                            self.general_toolbit_filter.trim()
+                        ));
+                        if ui.button("Clear search").clicked() {
+                            self.general_toolbit_filter.clear();
+                        }
+                    }
+                }
+                for (index, title, summary) in rows {
+                    let id = self.general_toolbit_library.toolbits[index].id.clone();
+                    let selected = self.general_toolbit_selected_id.as_deref() == Some(id.as_str());
+                    let accessible_label = format!("{title}, {summary}");
+                    let response = ui.add_sized(
+                        [ui.available_width(), 48.0],
+                        egui::Button::new(format!("{title}\n{summary}"))
+                            .selected(selected)
+                            .wrap(),
+                    );
+                    response.widget_info(|| {
+                        egui::WidgetInfo::selected(
+                            egui::WidgetType::SelectableLabel,
+                            ui.is_enabled(),
+                            selected,
+                            accessible_label.clone(),
+                        )
+                    });
+                    if response.clicked() {
+                        self.general_toolbit_selected_id = Some(id);
+                    }
+                }
+            });
     }
 
     fn selected_general_toolbit_index(&self) -> Option<usize> {
@@ -3424,143 +3486,95 @@ impl RengraveApp {
         }
     }
 
-    fn show_general_toolbit_detail(&mut self, ui: &mut egui::Ui) -> bool {
+    fn show_general_toolbit_detail(&mut self, ui: &mut egui::Ui, show_back: bool) -> bool {
         let Some(index) = self.selected_general_toolbit_index() else {
-            ui.heading("Toolbit Library");
-            ui.add_space(8.0);
-            ui.label("Select a toolbit or create one from the preset catalog.");
+            ui.vertical_centered(|ui| {
+                ui.add_space(28.0);
+                ui.heading("No toolbit selected");
+                ui.label("Choose a toolbit from the library or create one from a preset.");
+            });
             return false;
         };
-        let tool = &mut self.general_toolbit_library.toolbits[index];
+        let heading = self.general_toolbit_library.toolbits[index].label.clone();
+        let kind_label = self.general_toolbit_library.toolbits[index].kind.label();
         let mut changed = false;
         ui.horizontal(|ui| {
-            ui.heading(&tool.label);
+            if show_back && ui.button("← Toolbits").clicked() {
+                self.general_toolbit_selected_id = None;
+            }
+            ui.heading(heading);
             ui.separator();
-            ui.label(tool.kind.label());
+            ui.label(kind_label);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                egui::ComboBox::from_label("Units")
-                    .selected_text(general_units_suffix(self.general_toolbit_units).trim())
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(
-                            &mut self.general_toolbit_units,
-                            GeneralUnits::Millimetres,
-                            "Metric",
-                        );
-                        ui.selectable_value(
-                            &mut self.general_toolbit_units,
-                            GeneralUnits::Inches,
-                            "Imperial",
-                        );
-                    });
+                ui.horizontal(|ui| {
+                    let units_label = ui.label("Units");
+                    egui::ComboBox::from_id_salt("general-toolbit-units")
+                        .selected_text(match self.general_toolbit_units {
+                            GeneralUnits::Millimetres => "Metric (mm)",
+                            GeneralUnits::Inches => "Imperial (in)",
+                        })
+                        .width(128.0)
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut self.general_toolbit_units,
+                                GeneralUnits::Millimetres,
+                                "Metric (mm)",
+                            );
+                            ui.selectable_value(
+                                &mut self.general_toolbit_units,
+                                GeneralUnits::Inches,
+                                "Imperial (in)",
+                            );
+                        })
+                        .response
+                        .labelled_by(units_label.id);
+                });
+                match &self.general_toolbit_save_status {
+                    GeneralToolbitSaveStatus::Saved => {
+                        ui.colored_label(egui::Color32::from_rgb(94, 176, 132), "Saved");
+                    }
+                    GeneralToolbitSaveStatus::Error(error) => {
+                        ui.colored_label(egui::Color32::from_rgb(225, 176, 84), "Save failed")
+                            .on_hover_text(error);
+                    }
+                }
             });
         });
         ui.separator();
-        ui.horizontal(|ui| {
-            egui::ScrollArea::vertical()
-                .auto_shrink([false, false])
-                .show(ui, |ui| {
-                    ui.set_min_width((ui.available_width() * 0.62).max(360.0));
-                    ui.strong("Toolbit");
-                    egui::Grid::new("general-toolbit-identity")
-                        .num_columns(2)
-                        .spacing([10.0, 6.0])
-                        .show(ui, |ui| {
-                            changed |= general_toolbit_text_row(ui, "Label", &mut tool.label);
-                            changed |= general_toolbit_u32_row(ui, "Tool number", &mut tool.tool_number);
-                            ui.label("Toolbit type");
-                            let old_kind = tool.kind;
-                            egui::ComboBox::from_id_salt("general-toolbit-kind")
-                                .selected_text(tool.kind.label())
-                                .show_ui(ui, |ui| {
-                                    for kind in GeneralToolbitKind::ALL {
-                                        ui.selectable_value(&mut tool.kind, kind, kind.label());
-                                    }
-                                });
-                            if old_kind != tool.kind {
-                                changed = true;
-                            }
-                            ui.end_row();
-                            ui.label("Spindle direction");
-                            egui::ComboBox::from_id_salt("general-toolbit-spindle")
-                                .selected_text(tool.spindle_direction.label())
-                                .show_ui(ui, |ui| {
-                                    for direction in GeneralSpindleDirection::ALL {
-                                        ui.selectable_value(
-                                            &mut tool.spindle_direction,
-                                            direction,
-                                            direction.label(),
-                                        );
-                                    }
-                                });
-                            ui.end_row();
-                            ui.label("Material");
-                            egui::ComboBox::from_id_salt("general-toolbit-material")
-                                .selected_text(&tool.material)
-                                .show_ui(ui, |ui| {
-                                    for material in ["Carbide", "HSS", "PCD", "Custom"] {
-                                        ui.selectable_value(
-                                            &mut tool.material,
-                                            material.to_owned(),
-                                            material,
-                                        );
-                                    }
-                                });
-                            ui.end_row();
+        let detail_width = ui.available_width();
+        let units = self.general_toolbit_units;
+        let tool = &mut self.general_toolbit_library.toolbits[index];
+        egui::ScrollArea::vertical()
+            .id_salt("general-toolbit-detail")
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.vertical(|ui| {
+                    if detail_width >= 700.0 {
+                        ui.horizontal_top(|ui| {
+                            ui.allocate_ui_with_layout(
+                                egui::vec2(
+                                    (detail_width - 270.0).max(400.0),
+                                    ui.available_height(),
+                                ),
+                                egui::Layout::top_down(egui::Align::Min),
+                                |ui| changed |= show_general_toolbit_form(ui, tool, units),
+                            );
+                            ui.separator();
+                            ui.allocate_ui_with_layout(
+                                egui::vec2(250.0, ui.available_height()),
+                                egui::Layout::top_down(egui::Align::Min),
+                                |ui| show_general_toolbit_reference(ui, tool.kind),
+                            );
                         });
-                    ui.add_space(12.0);
-                    ui.strong("Properties");
-                    egui::Grid::new("general-toolbit-properties")
-                        .num_columns(2)
-                        .spacing([10.0, 6.0])
-                        .show(ui, |ui| {
-                            changed |= general_toolbit_length_row(ui, "Cutting edge height (H)", &mut tool.cutting_edge_height_mm, self.general_toolbit_units);
-                            changed |= general_toolbit_length_row(ui, "Diameter (D)", &mut tool.diameter_mm, self.general_toolbit_units);
-                            changed |= general_toolbit_u32_row(ui, "Flutes", &mut tool.flutes);
-                            changed |= general_toolbit_length_row(ui, "Length (L)", &mut tool.length_mm, self.general_toolbit_units);
-                            changed |= general_toolbit_length_row(ui, "Shank diameter (S)", &mut tool.shank_diameter_mm, self.general_toolbit_units);
-                            changed |= general_toolbit_length_row(ui, "Chipload", &mut tool.chipload_mm, self.general_toolbit_units);
-                            changed |= general_toolbit_length_row(ui, "Feed", &mut tool.feed_mm_min, GeneralUnits::Millimetres);
-                            changed |= general_toolbit_length_row(ui, "Plunge", &mut tool.plunge_mm_min, GeneralUnits::Millimetres);
-                            match tool.kind {
-                                GeneralToolbitKind::VBit => {
-                                    changed |= general_toolbit_optional_angle_row(ui, "V-bit angle", &mut tool.v_angle_deg);
-                                    changed |= general_toolbit_optional_length_row(ui, "Tip diameter", &mut tool.tip_diameter_mm, self.general_toolbit_units);
-                                }
-                                GeneralToolbitKind::Bullnose => {
-                                    changed |= general_toolbit_optional_length_row(ui, "Corner radius", &mut tool.corner_radius_mm, self.general_toolbit_units);
-                                }
-                                GeneralToolbitKind::Drill => {
-                                    changed |= general_toolbit_optional_angle_row(ui, "Point angle", &mut tool.point_angle_deg);
-                                }
-                                GeneralToolbitKind::Chamfer => {
-                                    changed |= general_toolbit_optional_angle_row(ui, "Chamfer angle", &mut tool.chamfer_angle_deg);
-                                }
-                                GeneralToolbitKind::SlittingSaw => {
-                                    changed |= general_toolbit_optional_length_row(ui, "Saw thickness", &mut tool.saw_thickness_mm, self.general_toolbit_units);
-                                }
-                                _ => {}
-                            }
-                        });
-                    let errors = tool.validate();
-                    if errors.is_empty() {
-                        ui.colored_label(egui::Color32::from_rgb(94, 176, 132), "Valid toolbit");
                     } else {
-                        ui.colored_label(egui::Color32::from_rgb(225, 176, 84), "Needs attention");
-                        for error in errors {
-                            ui.label(error);
-                        }
+                        changed |= show_general_toolbit_form(ui, tool, units);
+                        ui.add_space(12.0);
+                        ui.separator();
+                        ui.add_space(8.0);
+                        show_general_toolbit_reference(ui, tool.kind);
                     }
                 });
-            ui.separator();
-            ui.vertical(|ui| {
-                ui.strong("Reference");
-                let (rect, _) = ui.allocate_exact_size(egui::vec2(250.0, 360.0), egui::Sense::hover());
-                ui.painter().rect_filled(rect, 2.0, egui::Color32::from_rgb(245, 245, 245));
-                draw_general_svg_icon(ui.painter(), rect.shrink(12.0), general_toolbit_reference_strokes(tool.kind), egui::Color32::from_rgb(30, 30, 30));
-                ui.label("FreeCAD reference shape");
-                ui.small("Dimensions are edited in the selected display units and stored in millimetres.");
             });
-        });
         changed
     }
 
@@ -3611,13 +3625,21 @@ impl RengraveApp {
 
     fn save_general_toolbit_library(&mut self) {
         let Some(path) = self.general_toolbit_library_path.as_deref() else {
-            self.status = "General toolbit library path is unavailable".to_owned();
+            let error = "General toolbit library path is unavailable".to_owned();
+            self.status = error.clone();
+            self.general_toolbit_save_status = GeneralToolbitSaveStatus::Error(error);
             return;
         };
-        self.status = match self.general_toolbit_library.save_atomic(path) {
-            Ok(()) => "General toolbit library saved".to_owned(),
-            Err(error) => error,
-        };
+        match self.general_toolbit_library.save_atomic(path) {
+            Ok(()) => {
+                self.status = "General toolbit library saved".to_owned();
+                self.general_toolbit_save_status = GeneralToolbitSaveStatus::Saved;
+            }
+            Err(error) => {
+                self.status = error.clone();
+                self.general_toolbit_save_status = GeneralToolbitSaveStatus::Error(error);
+            }
+        }
     }
 
     fn import_general_toolbit_library(&mut self) -> bool {
@@ -5110,7 +5132,8 @@ fn draw_general_svg_icon(
 
     let source_width = (max_x - min_x).max(f64::EPSILON);
     let source_height = (max_y - min_y).max(f64::EPSILON);
-    let scale = f64::from(rect.width()) / source_width.max(source_height);
+    let scale =
+        (f64::from(rect.width()) / source_width).min(f64::from(rect.height()) / source_height);
     let center_x = (min_x + max_x) * 0.5;
     let center_y = (min_y + max_y) * 0.5;
     let project = |point: Point| {
@@ -5140,17 +5163,208 @@ fn general_storage_value(display_value: f64, units: GeneralUnits) -> f64 {
     }
 }
 
+fn show_general_toolbit_form(
+    ui: &mut egui::Ui,
+    tool: &mut GeneralToolbit,
+    units: GeneralUnits,
+) -> bool {
+    ui.set_max_width(500.0);
+    let mut changed = false;
+
+    ui.strong("Identity");
+    ui.add_space(4.0);
+    egui::Grid::new("general-toolbit-identity")
+        .num_columns(2)
+        .spacing([10.0, 6.0])
+        .show(ui, |ui| {
+            changed |= general_toolbit_text_row(ui, "Label", &mut tool.label);
+            changed |= general_toolbit_u32_row(ui, "Tool number", &mut tool.tool_number);
+
+            let label = general_toolbit_row_label(ui, "Toolbit type");
+            let old_kind = tool.kind;
+            egui::ComboBox::from_id_salt("general-toolbit-kind")
+                .selected_text(tool.kind.label())
+                .width(180.0)
+                .show_ui(ui, |ui| {
+                    for kind in GeneralToolbitKind::ALL {
+                        ui.selectable_value(&mut tool.kind, kind, kind.label());
+                    }
+                })
+                .response
+                .labelled_by(label.id);
+            changed |= old_kind != tool.kind;
+            ui.end_row();
+        });
+
+    ui.add_space(12.0);
+    ui.strong("Geometry");
+    ui.add_space(4.0);
+    egui::Grid::new("general-toolbit-geometry")
+        .num_columns(2)
+        .spacing([10.0, 6.0])
+        .show(ui, |ui| {
+            changed |= general_toolbit_length_row(ui, "Diameter (D)", &mut tool.diameter_mm, units);
+            changed |= general_toolbit_length_row(
+                ui,
+                "Cutting edge height (H)",
+                &mut tool.cutting_edge_height_mm,
+                units,
+            );
+            changed |= general_toolbit_length_row(ui, "Length (L)", &mut tool.length_mm, units);
+            changed |= general_toolbit_length_row(
+                ui,
+                "Shank diameter (S)",
+                &mut tool.shank_diameter_mm,
+                units,
+            );
+            match tool.kind {
+                GeneralToolbitKind::VBit => {
+                    changed |= general_toolbit_optional_angle_row(
+                        ui,
+                        "V-bit angle",
+                        &mut tool.v_angle_deg,
+                    );
+                    changed |= general_toolbit_optional_length_row(
+                        ui,
+                        "Tip diameter",
+                        &mut tool.tip_diameter_mm,
+                        units,
+                    );
+                }
+                GeneralToolbitKind::Bullnose => {
+                    changed |= general_toolbit_optional_length_row(
+                        ui,
+                        "Corner radius",
+                        &mut tool.corner_radius_mm,
+                        units,
+                    );
+                }
+                GeneralToolbitKind::Drill => {
+                    changed |= general_toolbit_optional_angle_row(
+                        ui,
+                        "Point angle",
+                        &mut tool.point_angle_deg,
+                    );
+                }
+                GeneralToolbitKind::Chamfer => {
+                    changed |= general_toolbit_optional_angle_row(
+                        ui,
+                        "Chamfer angle",
+                        &mut tool.chamfer_angle_deg,
+                    );
+                }
+                GeneralToolbitKind::SlittingSaw => {
+                    changed |= general_toolbit_optional_length_row(
+                        ui,
+                        "Saw thickness",
+                        &mut tool.saw_thickness_mm,
+                        units,
+                    );
+                }
+                _ => {}
+            }
+        });
+
+    ui.add_space(12.0);
+    ui.strong("Cutting data");
+    ui.add_space(4.0);
+    egui::Grid::new("general-toolbit-cutting-data")
+        .num_columns(2)
+        .spacing([10.0, 6.0])
+        .show(ui, |ui| {
+            let label = general_toolbit_row_label(ui, "Material");
+            let old_material = tool.material.clone();
+            egui::ComboBox::from_id_salt("general-toolbit-material")
+                .selected_text(&tool.material)
+                .width(180.0)
+                .show_ui(ui, |ui| {
+                    for material in ["Carbide", "HSS", "PCD", "Custom"] {
+                        ui.selectable_value(&mut tool.material, material.to_owned(), material);
+                    }
+                })
+                .response
+                .labelled_by(label.id);
+            changed |= old_material != tool.material;
+            ui.end_row();
+
+            changed |= general_toolbit_u32_row(ui, "Flutes", &mut tool.flutes);
+
+            let label = general_toolbit_row_label(ui, "Spindle direction");
+            let old_direction = tool.spindle_direction;
+            egui::ComboBox::from_id_salt("general-toolbit-spindle")
+                .selected_text(tool.spindle_direction.label())
+                .width(180.0)
+                .show_ui(ui, |ui| {
+                    for direction in GeneralSpindleDirection::ALL {
+                        ui.selectable_value(
+                            &mut tool.spindle_direction,
+                            direction,
+                            direction.label(),
+                        );
+                    }
+                })
+                .response
+                .labelled_by(label.id);
+            changed |= old_direction != tool.spindle_direction;
+            ui.end_row();
+
+            changed |= general_toolbit_length_row(ui, "Chipload", &mut tool.chipload_mm, units);
+            changed |= general_toolbit_rate_row(ui, "Feed rate", &mut tool.feed_mm_min);
+            changed |= general_toolbit_rate_row(ui, "Plunge rate", &mut tool.plunge_mm_min);
+        });
+
+    ui.add_space(12.0);
+    let errors = tool.validate();
+    if errors.is_empty() {
+        ui.colored_label(
+            egui::Color32::from_rgb(94, 176, 132),
+            "Valid toolbit · all required values are set",
+        );
+    } else {
+        egui::Frame::new()
+            .fill(egui::Color32::from_rgb(55, 47, 34))
+            .inner_margin(egui::Margin::same(8))
+            .corner_radius(4)
+            .show(ui, |ui| {
+                ui.vertical(|ui| {
+                    ui.colored_label(
+                        egui::Color32::from_rgb(225, 176, 84),
+                        format!("Needs attention · {} issue(s)", errors.len()),
+                    );
+                    for error in errors {
+                        ui.label(format!("• {error}"));
+                    }
+                });
+            });
+    }
+
+    changed
+}
+
+fn general_toolbit_row_label(ui: &mut egui::Ui, label: &str) -> egui::Response {
+    ui.allocate_ui_with_layout(
+        egui::vec2(176.0, 24.0),
+        egui::Layout::left_to_right(egui::Align::Center),
+        |ui| ui.label(label),
+    )
+    .inner
+}
+
 fn general_toolbit_text_row(ui: &mut egui::Ui, label: &str, value: &mut String) -> bool {
-    ui.label(label);
-    let changed = ui.text_edit_singleline(value).changed();
+    let label = general_toolbit_row_label(ui, label);
+    let changed = ui
+        .add_sized([220.0, 24.0], egui::TextEdit::singleline(value))
+        .labelled_by(label.id)
+        .changed();
     ui.end_row();
     changed
 }
 
 fn general_toolbit_u32_row(ui: &mut egui::Ui, label: &str, value: &mut u32) -> bool {
-    ui.label(label);
+    let label = general_toolbit_row_label(ui, label);
     let changed = ui
-        .add(egui::DragValue::new(value).range(0..=9999))
+        .add_sized([140.0, 24.0], egui::DragValue::new(value).range(0..=9999))
+        .labelled_by(label.id)
         .changed();
     ui.end_row();
     changed
@@ -5162,10 +5376,11 @@ fn general_toolbit_length_row(
     value_mm: &mut f64,
     units: GeneralUnits,
 ) -> bool {
-    ui.label(label);
+    let label = general_toolbit_row_label(ui, label);
     let mut display_value = general_display_value(*value_mm, units);
     let changed = ui
-        .add(
+        .add_sized(
+            [140.0, 24.0],
             egui::DragValue::new(&mut display_value)
                 .speed(if units == GeneralUnits::Inches {
                     0.01
@@ -5174,6 +5389,7 @@ fn general_toolbit_length_row(
                 })
                 .suffix(general_units_suffix(units)),
         )
+        .labelled_by(label.id)
         .changed();
     if changed {
         *value_mm = general_storage_value(display_value, units);
@@ -5188,12 +5404,13 @@ fn general_toolbit_optional_length_row(
     value_mm: &mut Option<f64>,
     units: GeneralUnits,
 ) -> bool {
-    ui.label(label);
+    let label = general_toolbit_row_label(ui, label);
     let mut display_value = value_mm
         .map(|value| general_display_value(value, units))
         .unwrap_or(0.0);
     let changed = ui
-        .add(
+        .add_sized(
+            [140.0, 24.0],
             egui::DragValue::new(&mut display_value)
                 .speed(if units == GeneralUnits::Inches {
                     0.01
@@ -5202,6 +5419,7 @@ fn general_toolbit_optional_length_row(
                 })
                 .suffix(general_units_suffix(units)),
         )
+        .labelled_by(label.id)
         .changed();
     if changed {
         *value_mm = Some(general_storage_value(display_value, units));
@@ -5215,10 +5433,14 @@ fn general_toolbit_optional_angle_row(
     label: &str,
     value: &mut Option<f64>,
 ) -> bool {
-    ui.label(label);
+    let label = general_toolbit_row_label(ui, label);
     let mut angle = value.unwrap_or(0.0);
     let changed = ui
-        .add(egui::DragValue::new(&mut angle).speed(1.0).suffix("°"))
+        .add_sized(
+            [140.0, 24.0],
+            egui::DragValue::new(&mut angle).speed(1.0).suffix("°"),
+        )
+        .labelled_by(label.id)
         .changed();
     if changed {
         *value = Some(angle);
@@ -5227,34 +5449,98 @@ fn general_toolbit_optional_angle_row(
     changed
 }
 
-fn general_toolbit_reference_strokes(kind: GeneralToolbitKind) -> &'static [Stroke] {
-    static STROKES: OnceLock<[Vec<Stroke>; 8]> = OnceLock::new();
-    &STROKES.get_or_init(|| {
-        [
-            include_str!("../assets/toolbits/freecad/endmill.svg"),
-            include_str!("../assets/toolbits/freecad/ballend.svg"),
-            include_str!("../assets/toolbits/freecad/bullnose.svg"),
-            include_str!("../assets/toolbits/freecad/v-bit.svg"),
-            include_str!("../assets/toolbits/freecad/chamfer.svg"),
-            include_str!("../assets/toolbits/freecad/drill.svg"),
-            include_str!("../assets/toolbits/freecad/slittingsaw.svg"),
-            include_str!("../assets/toolbits/freecad/probe.svg"),
-        ]
-        .map(|svg| parse_svg_segments(svg).unwrap_or_default())
-    })[general_toolbit_kind_index(kind)]
-    .as_slice()
+fn general_toolbit_rate_row(ui: &mut egui::Ui, label: &str, value: &mut f64) -> bool {
+    let label = general_toolbit_row_label(ui, label);
+    let changed = ui
+        .add_sized(
+            [140.0, 24.0],
+            egui::DragValue::new(value).speed(10.0).suffix(" mm/min"),
+        )
+        .labelled_by(label.id)
+        .changed();
+    ui.end_row();
+    changed
 }
 
-const fn general_toolbit_kind_index(kind: GeneralToolbitKind) -> usize {
+fn show_general_toolbit_reference(ui: &mut egui::Ui, kind: GeneralToolbitKind) {
+    ui.strong(format!("{} reference", kind.label()));
+    ui.small(format!("FreeCAD {} dimension guide", kind.label()));
+    ui.add_space(6.0);
+    let size = egui::vec2(ui.available_width().min(240.0), 320.0);
+    egui::Frame::new()
+        .fill(egui::Color32::from_rgb(232, 234, 235))
+        .stroke(egui::Stroke::new(
+            1.0,
+            egui::Color32::from_rgb(120, 130, 136),
+        ))
+        .inner_margin(egui::Margin::same(8))
+        .corner_radius(4)
+        .show(ui, |ui| {
+            let alt_text = format!(
+                "FreeCAD {} cutter dimension reference diagram",
+                kind.label()
+            );
+            let response = ui.add(
+                egui::Image::new(general_toolbit_reference_source(kind))
+                    .fit_to_exact_size(size - egui::vec2(16.0, 16.0))
+                    .alt_text(alt_text.clone()),
+            );
+            let rect = response.rect;
+            let ink = egui::Color32::from_rgb(24, 26, 28);
+            let label_font = egui::FontId::proportional(18.0);
+            for (text, position) in [
+                ("L", egui::pos2(rect.left() + 20.0, rect.center().y)),
+                ("S", egui::pos2(rect.right() - 18.0, rect.top() + 38.0)),
+                ("H", egui::pos2(rect.right() - 18.0, rect.center().y + 32.0)),
+                ("D", egui::pos2(rect.center().x, rect.bottom() - 10.0)),
+            ] {
+                ui.painter().text(
+                    position,
+                    egui::Align2::CENTER_CENTER,
+                    text,
+                    label_font.clone(),
+                    ink,
+                );
+            }
+            response.widget_info(|| {
+                egui::WidgetInfo::labeled(
+                    egui::WidgetType::Image,
+                    ui.is_enabled(),
+                    alt_text.clone(),
+                )
+            });
+        });
+    ui.add_space(6.0);
+    ui.small("D diameter · H cutting edge · L length · S shank");
+    ui.small("Display units can change; stored dimensions remain millimetres.");
+}
+
+fn general_toolbit_reference_source(kind: GeneralToolbitKind) -> egui::ImageSource<'static> {
     match kind {
-        GeneralToolbitKind::Endmill => 0,
-        GeneralToolbitKind::Ballnose => 1,
-        GeneralToolbitKind::Bullnose => 2,
-        GeneralToolbitKind::VBit => 3,
-        GeneralToolbitKind::Chamfer => 4,
-        GeneralToolbitKind::Drill => 5,
-        GeneralToolbitKind::SlittingSaw => 6,
-        GeneralToolbitKind::Probe => 7,
+        GeneralToolbitKind::Endmill => {
+            egui::include_image!("../assets/toolbits/freecad/endmill.svg")
+        }
+        GeneralToolbitKind::Ballnose => {
+            egui::include_image!("../assets/toolbits/freecad/ballend.svg")
+        }
+        GeneralToolbitKind::Bullnose => {
+            egui::include_image!("../assets/toolbits/freecad/bullnose.svg")
+        }
+        GeneralToolbitKind::VBit => {
+            egui::include_image!("../assets/toolbits/freecad/v-bit.svg")
+        }
+        GeneralToolbitKind::Chamfer => {
+            egui::include_image!("../assets/toolbits/freecad/chamfer.svg")
+        }
+        GeneralToolbitKind::Drill => {
+            egui::include_image!("../assets/toolbits/freecad/drill.svg")
+        }
+        GeneralToolbitKind::SlittingSaw => {
+            egui::include_image!("../assets/toolbits/freecad/slittingsaw.svg")
+        }
+        GeneralToolbitKind::Probe => {
+            egui::include_image!("../assets/toolbits/freecad/probe.svg")
+        }
     }
 }
 
@@ -6007,6 +6293,7 @@ mod tests {
             general_toolbit_filter: String::new(),
             general_toolbit_units: GeneralUnits::Millimetres,
             general_toolbit_delete_id: None,
+            general_toolbit_save_status: GeneralToolbitSaveStatus::Saved,
             toolbit_library: ToolbitLibrary::default(),
             toolbit_assignments: Vec::new(),
             preferences_path: None,
@@ -8229,13 +8516,14 @@ mod tests {
     }
 
     #[test]
-    fn general_toolbit_reference_assets_parse_for_every_supported_kind() {
+    fn general_toolbit_reference_assets_are_bundled_for_every_supported_kind() {
         for kind in GeneralToolbitKind::ALL {
-            assert!(
-                !general_toolbit_reference_strokes(kind).is_empty(),
-                "missing parsed reference strokes for {}",
-                kind.label()
-            );
+            let egui::ImageSource::Bytes { uri, bytes } = general_toolbit_reference_source(kind)
+            else {
+                panic!("{} reference must be bundled bytes", kind.label());
+            };
+            assert!(uri.ends_with(".svg"));
+            assert!(bytes.starts_with(b"<?xml") || bytes.starts_with(b"<svg"));
         }
     }
 
@@ -8251,7 +8539,10 @@ mod tests {
             .map(|tool| tool.id.clone());
         let mut harness = Harness::builder()
             .with_size(egui::vec2(1200.0, 800.0))
-            .build_eframe(|_| app);
+            .build_eframe(|cc| {
+                egui_extras::install_image_loaders(&cc.egui_ctx);
+                app
+            });
         harness.run();
         harness.get_by_label("Settings").click();
         harness.run();
@@ -8260,20 +8551,102 @@ mod tests {
 
         for label in [
             "Toolbit Library",
-            "Find",
-            "New",
-            "New from preset",
+            "Search toolbits",
+            "New blank",
+            "New from preset…",
             "Duplicate",
-            "Delete",
-            "Import JSON",
-            "Export JSON",
-            "FreeCAD reference shape",
+            "Delete…",
+            "Import library…",
+            "Export library…",
+            "Endmill reference",
+            "FreeCAD Endmill dimension guide",
+            "Feed rate",
+            "Plunge rate",
         ] {
             assert!(
                 harness.query_all_by_label(label).next().is_some(),
                 "missing {label}"
             );
         }
+    }
+
+    #[test]
+    fn kittest_general_toolbit_library_stays_inside_responsive_viewports() {
+        for size in [
+            egui::vec2(700.0, 270.0),
+            egui::vec2(820.0, 520.0),
+            egui::vec2(1040.0, 700.0),
+            egui::vec2(1200.0, 800.0),
+        ] {
+            let mut app = test_app();
+            app.tool_view = ToolView::GeneralPurpose;
+            app.show_general_toolbit_library = true;
+            app.general_toolbit_library.toolbits = general_toolbit_presets();
+            app.general_toolbit_selected_id = app
+                .general_toolbit_library
+                .toolbits
+                .first()
+                .map(|tool| tool.id.clone());
+            let mut harness = Harness::builder().with_size(size).build_eframe(|cc| {
+                egui_extras::install_image_loaders(&cc.egui_ctx);
+                app
+            });
+            harness.run();
+
+            for label in [
+                "New from preset…",
+                "New blank",
+                "Duplicate",
+                "Delete…",
+                "Import library…",
+                "Export library…",
+            ] {
+                let rect = harness.get_by_label(label).rect();
+                assert!(
+                    rect.min.x >= 0.0
+                        && rect.min.y >= 0.0
+                        && rect.max.x <= size.x
+                        && rect.max.y <= size.y,
+                    "{label} escaped {size:?}: {rect:?}"
+                );
+                assert!(
+                    rect.height() >= 25.0,
+                    "{label} should keep a usable toolbar height: {rect:?}"
+                );
+            }
+
+            if size.x < 760.0 {
+                assert!(harness.query_by_label("← Toolbits").is_some());
+                assert!(harness.query_by_label("Search toolbits").is_none());
+            } else {
+                assert!(harness.query_by_label("Search toolbits").is_some());
+            }
+            if size.x >= 1040.0 {
+                let reference = harness.get_by_label("Endmill reference").rect();
+                assert!(reference.width() >= 100.0);
+                assert!(reference.height() < 30.0);
+            }
+        }
+    }
+
+    #[test]
+    fn kittest_general_toolbit_library_empty_state_teaches_first_action() {
+        let mut app = test_app();
+        app.tool_view = ToolView::GeneralPurpose;
+        app.show_general_toolbit_library = true;
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(820.0, 520.0))
+            .build_eframe(|_| app);
+        harness.run();
+
+        assert!(harness.query_by_label("No toolbits yet").is_some());
+        assert!(
+            harness
+                .query_by_label("Start from a common preset or create a blank definition.")
+                .is_some()
+        );
+        assert!(harness.query_by_label("New from preset…").is_some());
+        assert!(harness.query_by_label("New blank").is_some());
     }
 
     #[test]

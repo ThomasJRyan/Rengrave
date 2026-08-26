@@ -9,18 +9,25 @@ opening the manager does not change the current G-code operation settings.
 The manager opens as a resizable window above the General workbench and can be
 closed without leaving the current project.
 
-The manager uses a two-pane layout:
+The command bar stays at the top of the window so creation, duplication,
+deletion, import, and export remain available without scrolling. The main area
+uses a two-pane layout at ordinary desktop widths:
 
-* the left pane searches and selects saved toolbits, creates tools, duplicates
-  or deletes them, and imports or exports JSON libraries;
+* the left pane searches and selects saved toolbits using summaries that show
+  tool number, type, diameter, flute count, and cutting-edge height;
 * the right pane edits identity, spindle, material, geometry, feeds, and
   shape-specific parameters, with a bundled FreeCAD reference drawing.
 
-Use **New from preset** to start from the common FreeCAD-style catalog:
+At narrower widths the editor becomes a master/detail view. Select a toolbit to
+open its parameters and use **Toolbits** to return to the list. The list and
+editor scroll independently when window height is limited.
+
+Use **New from preset...** to start from the common FreeCAD-style catalog:
 endmills, ballnose and bullnose cutters, V-bits, chamfers, drills, slitting
-saws, and probes. **New** creates a blank definition. A toolbit is marked
+saws, and probes. **New blank** creates an empty definition. A toolbit is marked
 **Needs attention** until its required dimensions and shape parameters are
-valid. Delete requires confirmation.
+valid. Issues are listed vertically below the form. Delete requires
+confirmation.
 
 Units and persistence
 ---------------------
@@ -32,8 +39,8 @@ millimetres per minute. Changes are saved automatically to
 ``$XDG_CONFIG_HOME`` or ``~/.config`` on Linux, Application Support on macOS,
 and ``%APPDATA%`` on Windows.
 
-Use **Export JSON** to create a portable copy and **Import JSON** to merge a
-copy into the current General library. Imported IDs are made unique when
-needed, so importing a library cannot silently replace an existing toolbit.
-The JSON format is R-Engrave's interchange format; FreeCAD ``.fctb`` and
-``.fctl`` files are not imported.
+Use **Export library...** to create a portable JSON copy and **Import
+library...** to merge a copy into the current General library. Imported IDs are
+made unique when needed, so importing a library cannot silently replace an
+existing toolbit. The JSON format is R-Engrave's interchange format; FreeCAD
+``.fctb`` and ``.fctl`` files are not imported.

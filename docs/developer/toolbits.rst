@@ -23,9 +23,20 @@ same versioned structure, so a library can be transferred between R-Engrave
 installations without depending on FreeCAD's native files.
 
 The UI bundles eight attributed SVG diagrams from FreeCAD's CAM tool-shape
-directory under ``crates/rengrave-ui/assets/toolbits/freecad``. They are parsed
-through the existing SVG stroke parser and scaled into the reference pane;
-the diagrams are explanatory only and are not used as machining geometry.
+directory under ``crates/rengrave-ui/assets/toolbits/freecad``. ``egui_extras``
+renders these as display SVGs so gradients, fills, and marker definitions are
+handled without feeding definition paths into the machining parser. The UI
+adds stable ``D``, ``H``, ``L``, and ``S`` labels and an accessible dimension
+legend because font availability differs across FreeCAD SVG consumers. The
+diagrams are explanatory only and are not used as machining geometry.
+
+The manager computes its default and minimum size from ``Context::content_rect``
+and constrains itself to the viewport. At 760 logical pixels it switches from
+two-pane layout to master/detail; below a 700-pixel detail width the reference
+stacks below the form. Every scroll-area body starts with an explicit vertical
+layout so it cannot inherit a surrounding horizontal row. Form controls use
+stable label and field widths and associate input responses with their labels
+for AccessKit.
 The floating manager must be rendered from the General-workbench branch before
 that branch returns from ``eframe::App::ui``; its harness regression selects
 ``ToolView::GeneralPurpose`` so this branch boundary remains covered.
