@@ -1,47 +1,37 @@
-Toolbit library
-===============
+General toolbit library
+=======================
 
-The **Settings > Toolbit library...** window stores named cutters for reuse
-between jobs. The library starts empty so R-Engrave never guesses a cutter
-dimension. Choose **New**, enter the physical geometry, and save the library
-when the tool is valid.
+The **General > Settings > Toolbit Library...** window manages the cutters
+available to the General workbench. It is separate from the legacy machining
+workbench's operation selectors. The library is intended to supply tool
+definitions to General-workbench CAM operations as those operations are added;
+opening the manager does not change the current G-code operation settings.
 
-Geometry is stored in millimetres. Numeric job controls are displayed and
-applied in the active job units. A tool may also store feed and plunge defaults;
-operation settings such as stock, tabs, cleanup step-over, and depth strategy
-remain job-specific.
+The manager uses a two-pane layout:
 
-Tool types
-----------
+* the left pane searches and selects saved toolbits, creates tools, duplicates
+  or deletes them, and imports or exports JSON libraries;
+* the right pane edits identity, spindle, material, geometry, feeds, and
+  shape-specific parameters, with a bundled FreeCAD reference drawing.
 
-Straight endmills and V-bits can be selected by supported operations. V-bits
-require an included angle. Bullnose tools may be stored and edited for future
-operations, but are not offered to operations whose core geometry does not
-support them. Unknown type names are retained in the JSON library for forward
-compatibility and are not silently used for cutting.
+Use **New from preset** to start from the common FreeCAD-style catalog:
+endmills, ballnose and bullnose cutters, V-bits, chamfers, drills, slitting
+saws, and probes. **New** creates a blank definition. A toolbit is marked
+**Needs attention** until its required dimensions and shape parameters are
+valid. Delete requires confirmation.
 
-Assigning a tool
-----------------
+Units and persistence
+---------------------
 
-The Tool / Cut, Cleanup, and Profile panels expose selectors for eligible
-library tools. Selecting one copies its snapshot into the current job and marks
-the generated output stale. **Use custom values for this job** remains the
-legacy fallback: edit the numeric fields directly when a job is unusual or a
-tool is not in the library. Editing a library entry later does not change a
-saved job.
+Dimensions are stored canonically in millimetres. The editor can display
+dimensions in metric or imperial units; feed and plunge remain expressed as
+millimetres per minute. Changes are saved automatically to
+``general_toolbits.json`` in R-Engrave's platform configuration directory:
+``$XDG_CONFIG_HOME`` or ``~/.config`` on Linux, Application Support on macOS,
+and ``%APPDATA%`` on Windows.
 
-Cleanup tools are an ordered list. Add the largest cutter first and continue
-from largest to smallest; the residual-only cleanup pipeline then avoids
-retracing material already removed by a larger cutter. The existing ``+`` and
-``-`` controls change the list without changing operation-specific cleanup
-settings.
-
-Persistence and projects
-------------------------
-
-The library is saved as ``toolbits.json`` in R-Engrave's platform configuration
-directory: ``$XDG_CONFIG_HOME`` or ``~/.config`` on Linux, Application Support
-on macOS, and ``%APPDATA%`` on Windows. Projects store a named tool assignment
-and a frozen snapshot in ``toolbit_assignments``. Older ``.rgrv`` files omit
-that field and continue to load using their existing legacy numeric settings.
-
+Use **Export JSON** to create a portable copy and **Import JSON** to merge a
+copy into the current General library. Imported IDs are made unique when
+needed, so importing a library cannot silently replace an existing toolbit.
+The JSON format is R-Engrave's interchange format; FreeCAD ``.fctb`` and
+``.fctl`` files are not imported.

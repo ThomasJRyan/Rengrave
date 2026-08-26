@@ -1,0 +1,11 @@
+FreeCAD CAM tool-shape reference artwork
+
+The SVG files in this directory are copied from the FreeCAD repository:
+https://github.com/FreeCAD/FreeCAD/tree/main/src/Mod/CAM/Tools/Shape
+
+Files included: endmill.svg, ballend.svg, bullnose.svg, v-bit.svg,
+chamfer.svg, drill.svg, slittingsaw.svg, and probe.svg.
+
+FreeCAD is distributed under the GNU Lesser General Public License,
+version 2.1 or later. Retain this notice when redistributing these assets.
+The upstream repository and its complete license text are authoritative.

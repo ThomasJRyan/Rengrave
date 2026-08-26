@@ -1,29 +1,43 @@
-Toolbit schema and compatibility
-================================
+General toolbit schema
+======================
 
-``rengrave_core::toolbit`` owns the persistent model. ``Toolbit`` stores a
-stable string ID, display name, string type, canonical ``diameter_mm``,
-optional V-bit angle or bullnose corner radius, and optional feed/plunge values
-in millimetres per minute. The type is deliberately a string rather than a
-closed enum: a future reader can preserve an unknown type without rejecting
-the whole JSON library.
+``rengrave_core::general_toolbit`` owns the General-workbench toolbit model.
+It is intentionally additive and does not replace ``rengrave_core::toolbit``
+or the legacy machining-workbench project assignment bridge. The General
+model uses a closed ``GeneralToolbitKind`` enum for the supported FreeCAD
+reference catalog and stores dimensions in millimetres.
 
-``ToolbitLibrary`` serializes to JSON and resolves the platform path through
-``default_library_path``. Missing files are treated by the UI as an empty
-library; malformed files produce a visible load error when explicitly loaded.
-The core model validates known geometry and provides ``eligible`` filtering by
-``ToolRole``. Bullnose is intentionally excluded from current core operations.
+Each ``GeneralToolbit`` contains a stable ID, label, tool number, spindle
+direction, material, common cutter geometry, feeds, and optional parameters
+for V-bit angle/tip diameter, bullnose corner radius, drill point angle,
+chamfer angle, and slitting-saw thickness. ``validate`` reports missing or
+out-of-range values without preventing an in-progress editor from being
+saved. Probe definitions may have zero flutes; other cutter kinds require at
+least one flute.
 
-The compatibility seam is ``Toolbit::apply_to_settings``. It converts
-millimetres to the active legacy units, writes the existing keys such as
-``v_bit_dia``, ``v_bit_angle``, ``profile_endmill_dia``, ``FEED``, and
-``PLUNGE``, and leaves operation-specific keys untouched. This keeps CLI and
-legacy generation unchanged. The UI applies a project assignment's frozen
-snapshot before calculating; saving the same project preserves the snapshot
-even if the library entry is later edited.
+``GeneralToolbitLibrary`` serializes as versioned JSON. The UI loads the
+platform-local ``general_toolbits.json`` at startup, treats a missing file as
+an empty library, and saves edits through a sibling temporary file followed by
+a rename. Import merges entries and changes colliding IDs. Export writes the
+same versioned structure, so a library can be transferred between R-Engrave
+installations without depending on FreeCAD's native files.
 
-``RengraveProjectFile::toolbit_assignments`` is ``serde(default)``. Therefore
-minimal and older version-1 projects deserialize with no assignments and use
-their existing ``LegacySettings`` values. Unsupported imported assignments
-produce a warning and do not invent a replacement cutter.
+The UI bundles eight attributed SVG diagrams from FreeCAD's CAM tool-shape
+directory under ``crates/rengrave-ui/assets/toolbits/freecad``. They are parsed
+through the existing SVG stroke parser and scaled into the reference pane;
+the diagrams are explanatory only and are not used as machining geometry.
 
+The model is operation-ready but deliberately not wired into current G-code
+generation in this change. Future General CAM operations should consume a
+selected toolbit snapshot at operation creation time, preserving the same
+snapshot-vs-library-edit boundary used by the legacy compatibility path.
+
+Legacy machining compatibility
+------------------------------
+
+The existing ``rengrave_core::toolbit`` model remains responsible for legacy
+machining selectors and project assignments. Its ``Toolbit::apply_to_settings``
+conversion and ``RengraveProjectFile::toolbit_assignments`` snapshot behavior
+are unchanged by the General manager. Keeping these models separate prevents
+a General library edit from changing an existing machining project or its
+generated G-code.
