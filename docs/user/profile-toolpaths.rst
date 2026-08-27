@@ -60,9 +60,14 @@ Profile controls
 
 **Feed rate** and **Plunge rate**
    Per-operation cutting and plunging speeds. They start with the selected
-   toolbit's general defaults, but edits here apply only to this profile
-   operation and do not change the library definition. Switching cutters
-   refreshes these two fields from the newly selected toolbit defaults.
+   toolbit's general defaults. Edits here are remembered for that toolbit and
+   become its new default for later profile operations; they do not change
+   other toolbits. Switching cutters refreshes these two fields from the newly
+   selected toolbit's remembered defaults.
+
+The **Safe height** default is configured in the Job Setup tab. A profile
+operation copies that value when it is opened, and the operation can still
+override it independently.
 
 The generated buffer is deterministic metric G-code. It contains absolute
 positioning, tool selection, spindle direction, safe moves, the configured
@@ -73,7 +78,8 @@ Toolpath list
 -------------
 
 Every generated profile cut is retained in the lower half of the Toolpath
-Panel. The list identifies the source vector, cut side, and tool number.
+Panel. The compact list identifies the source vector; double-clicking opens the
+full profile settings, including cut side and tool selection.
 
 Click a row to select its source vector in the 2D view. Use **Show** to enable
 or disable that toolpath in the 2D and 3D previews. Double-click a row to reopen

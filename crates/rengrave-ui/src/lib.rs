@@ -95,6 +95,7 @@ const GENERAL_SELECTION_BUFFER_PX: f32 = 6.0;
 const GENERAL_DEFAULT_JOB_WIDTH_MM: f64 = 100.0;
 const GENERAL_DEFAULT_JOB_HEIGHT_MM: f64 = 100.0;
 const GENERAL_DEFAULT_JOB_THICKNESS_MM: f64 = 10.0;
+const GENERAL_DEFAULT_SAFE_HEIGHT_MM: f64 = 3.0;
 const GENERAL_DEFAULT_CIRCLE_RADIUS_MM: f64 = 10.0;
 const MAX_RECENT_PROJECTS: usize = 10;
 
@@ -256,6 +257,7 @@ struct GeneralJobSetup {
     width: f64,
     height: f64,
     thickness: f64,
+    safe_height_mm: f64,
     units: GeneralUnits,
     z_zero: GeneralZZero,
     xy_use_offset: bool,
@@ -271,6 +273,7 @@ impl Default for GeneralJobSetup {
             width: GENERAL_DEFAULT_JOB_WIDTH_MM,
             height: GENERAL_DEFAULT_JOB_HEIGHT_MM,
             thickness: GENERAL_DEFAULT_JOB_THICKNESS_MM,
+            safe_height_mm: GENERAL_DEFAULT_SAFE_HEIGHT_MM,
             units: GeneralUnits::Millimetres,
             z_zero: GeneralZZero::MaterialSurface,
             xy_use_offset: false,
@@ -2666,6 +2669,7 @@ impl RengraveApp {
             defaults.feed_mm_min = tool.feed_mm_min;
             defaults.plunge_mm_min = tool.plunge_mm_min;
         }
+        defaults.safe_height_mm = self.general_job_setup.safe_height_mm;
         self.general_profile_session = Some(ProfileToolSession {
             source_object_id,
             editing_toolpath_id: None,
@@ -2680,6 +2684,7 @@ impl RengraveApp {
         let mut defaults = ProfileParameters::default();
         defaults.feed_mm_min = record.operation.tool.feed_mm_min;
         defaults.plunge_mm_min = record.operation.tool.plunge_mm_min;
+        defaults.safe_height_mm = self.general_job_setup.safe_height_mm;
         self.general_profile_session = Some(ProfileToolSession {
             source_object_id: record.operation.source_object_id,
             editing_toolpath_id: Some(record.id),
@@ -2742,7 +2747,7 @@ impl RengraveApp {
                     ui.weak(format!("Vector {}", session.source_object_id.get()));
                     ui.add_space(6.0);
 
-                    general_setup_group(ui, "Cutter", |ui, content_width| {
+                    general_toolpath_setup_group(ui, "Cutter", |ui, content_width| {
                         let previous_tool_id = session.selected_tool_id.clone();
                         let selected_label = session
                             .selected_tool_id
@@ -2795,7 +2800,7 @@ impl RengraveApp {
                         }
                     });
 
-                    general_setup_group(ui, "Profile", |ui, content_width| {
+                    general_toolpath_setup_group(ui, "Profile", |ui, content_width| {
                         ui.label("Cut side");
                         egui::ComboBox::from_id_salt("general-profile-side")
                             .selected_text(session.parameters.cut_side.label())
@@ -2819,8 +2824,8 @@ impl RengraveApp {
                         );
                     });
 
-                    general_setup_group(ui, "Depths", |ui, _| {
-                        ui.spacing_mut().item_spacing.y = 0.0;
+                    general_toolpath_setup_group(ui, "Depths", |ui, _| {
+                        ui.spacing_mut().item_spacing.y = 6.0;
                         general_profile_dimension_field(
                             ui,
                             "Cut depth",
@@ -2829,10 +2834,16 @@ impl RengraveApp {
                             self.general_job_setup.units,
                             false,
                         );
-                        general_profile_rate_pair(
+                        general_profile_rate_field(
                             ui,
+                            "Feed rate",
                             &mut session.parameters.feed_mm_min,
                             session.defaults.feed_mm_min,
+                        );
+                        ui.add_space(4.0);
+                        general_profile_rate_field(
+                            ui,
+                            "Plunge rate",
                             &mut session.parameters.plunge_mm_min,
                             session.defaults.plunge_mm_min,
                         );
@@ -2891,7 +2902,7 @@ impl RengraveApp {
                         && session.parameters.safe_height_mm > 0.0
                         && depth_fits_tool
                         && rates_are_valid;
-                    let width = GENERAL_SETUP_MAX_WIDTH.min(ui.available_width());
+                    let width = ui.available_width();
                     let spacing = ui.spacing().item_spacing.x;
                     let button_width = ((width - spacing) * 0.5).max(0.0);
                     ui.horizontal(|ui| {
@@ -2923,7 +2934,19 @@ impl RengraveApp {
                             .find(|tool| tool.id == id)
                             .cloned()
                     });
-                    if let Some(tool) = tool {
+                    if let Some(mut tool) = tool {
+                        tool.feed_mm_min = session.parameters.feed_mm_min;
+                        tool.plunge_mm_min = session.parameters.plunge_mm_min;
+                        if let Some(library_tool) = self
+                            .general_toolbit_library
+                            .toolbits
+                            .iter_mut()
+                            .find(|library_tool| library_tool.id == tool.id)
+                        {
+                            library_tool.feed_mm_min = tool.feed_mm_min;
+                            library_tool.plunge_mm_min = tool.plunge_mm_min;
+                        }
+                        self.save_general_toolbit_library();
                         let operation = GeneralProfileOperation {
                             source_object_id: session.source_object_id,
                             tool,
@@ -3024,10 +3047,9 @@ impl RengraveApp {
     }
 
     fn show_general_toolpath_list(&mut self, ui: &mut egui::Ui) {
-        ui.strong(format!(
-            "Generated toolpaths ({})",
-            self.general_toolpaths.len()
-        ));
+        ui.vertical_centered(|ui| {
+            ui.strong(format!("Toolpaths ({})", self.general_toolpaths.len()));
+        });
         ui.add_space(4.0);
         if self.general_toolpaths.is_empty() {
             ui.weak("Generated toolpaths will appear here.");
@@ -3041,17 +3063,27 @@ impl RengraveApp {
                 for record in &mut self.general_toolpaths {
                     let selected = self.general_selected_toolpath == Some(record.id);
                     let label = format!(
-                        "Profile · Vector {} · {} · T{}",
-                        record.operation.source_object_id.get(),
-                        record.operation.parameters.cut_side.label(),
-                        record.operation.tool.tool_number
+                        "Profile · Vector {}",
+                        record.operation.source_object_id.get()
                     );
                     ui.horizontal(|ui| {
-                        let row_width = (ui.available_width() - 50.0).max(0.0);
-                        let response = ui.add_sized(
-                            egui::vec2(row_width, 22.0),
-                            egui::Button::new(label).selected(selected).truncate(),
-                        );
+                        let row_width = (ui.available_width() - 50.0).clamp(0.0, 320.0);
+                        let response = egui::Frame::new()
+                            .fill(if selected {
+                                ui.visuals().selection.bg_fill
+                            } else {
+                                ui.visuals().widgets.inactive.bg_fill
+                            })
+                            .inner_margin(egui::Margin::symmetric(6, 2))
+                            .show(ui, |ui| {
+                                ui.add_sized(
+                                    egui::vec2((row_width - 12.0).max(0.0), 22.0),
+                                    egui::Label::new(label)
+                                        .truncate()
+                                        .sense(egui::Sense::click()),
+                                )
+                            })
+                            .inner;
                         if response.clicked() {
                             self.general_selected_toolpath = Some(record.id);
                             self.general_selected_object = Some(record.operation.source_object_id);
@@ -3576,6 +3608,13 @@ impl RengraveApp {
                         "Thickness (Z)",
                         &mut self.general_job_setup.thickness,
                         GENERAL_DEFAULT_JOB_THICKNESS_MM,
+                        units,
+                    );
+                    general_dimension_row(
+                        ui,
+                        "Safe height",
+                        &mut self.general_job_setup.safe_height_mm,
+                        GENERAL_DEFAULT_SAFE_HEIGHT_MM,
                         units,
                     );
                     general_justified_row(ui, |ui| {
@@ -5360,11 +5399,29 @@ fn general_setup_group(
     title: &str,
     add_contents: impl FnOnce(&mut egui::Ui, f32),
 ) {
+    general_setup_group_with_max_width(ui, title, GENERAL_SETUP_MAX_WIDTH, add_contents);
+}
+
+fn general_toolpath_setup_group(
+    ui: &mut egui::Ui,
+    title: &str,
+    add_contents: impl FnOnce(&mut egui::Ui, f32),
+) {
+    let max_width = ui.available_width();
+    general_setup_group_with_max_width(ui, title, max_width, add_contents);
+}
+
+fn general_setup_group_with_max_width(
+    ui: &mut egui::Ui,
+    title: &str,
+    max_width: f32,
+    add_contents: impl FnOnce(&mut egui::Ui, f32),
+) {
     let frame = egui::Frame::group(ui.style()).inner_margin(egui::Margin::same(6));
     let frame_margin = frame.total_margin();
     let horizontal_frame_margin = frame_margin.left + frame_margin.right;
     let (outer_width, content_width) =
-        general_setup_group_widths(ui.available_width(), horizontal_frame_margin);
+        general_setup_group_widths(max_width.min(ui.available_width()), horizontal_frame_margin);
     let frame_response = ui
         .allocate_ui_with_layout(
             egui::vec2(outer_width, 0.0),
@@ -5625,7 +5682,7 @@ fn general_profile_dimension_field(
         ui.add_sized(egui::vec2(48.0, 22.0), egui::Label::new(label).truncate());
         let mut display_value = general_display_value(*value_mm, units);
         let default_value = general_display_value(default_mm, units);
-        let input_width = (ui.available_width() - 25.0).max(48.0);
+        let input_width = ((ui.available_width() - 25.0) * 0.6).max(48.0);
         if resettable_value_input(
             ui,
             &mut display_value,
@@ -5652,28 +5709,15 @@ fn general_profile_dimension_field(
     });
 }
 
-fn general_profile_rate_pair(
-    ui: &mut egui::Ui,
-    feed: &mut f64,
-    default_feed: f64,
-    plunge: &mut f64,
-    default_plunge: f64,
-) {
-    ui.label("Feed / plunge (mm/min)");
+fn general_profile_rate_field(ui: &mut egui::Ui, label: &str, value: &mut f64, default: f64) {
     ui.horizontal(|ui| {
-        let input_width = ((ui.available_width() - ui.spacing().item_spacing.x) * 0.5).max(48.0);
-        let feed_response = ui.add_sized(
+        ui.label(label);
+        let input_width = ((ui.available_width() - 25.0) * 0.6).max(48.0);
+        let response = ui.add_sized(
             egui::vec2(input_width, 22.0),
-            egui::DragValue::new(feed).speed(1.0).range(0.0..=f64::MAX),
+            egui::DragValue::new(value).speed(1.0).range(0.0..=f64::MAX),
         );
-        feed_response.on_hover_text(format!("Feed rate; default {default_feed:.1} mm/min"));
-        let plunge_response = ui.add_sized(
-            egui::vec2(input_width, 22.0),
-            egui::DragValue::new(plunge)
-                .speed(1.0)
-                .range(0.0..=f64::MAX),
-        );
-        plunge_response.on_hover_text(format!("Plunge rate; default {default_plunge:.1} mm/min"));
+        response.on_hover_text(format!("{label}; toolbit default {default:.1} mm/min"));
     });
 }
 
@@ -6698,6 +6742,10 @@ mod tests {
         assert_close(general_display_value(setup.width, setup.units), 100.0);
         assert_close(general_display_value(setup.height, setup.units), 100.0);
         assert_close(general_display_value(setup.thickness, setup.units), 10.0);
+        assert_close(
+            general_display_value(setup.safe_height_mm, setup.units),
+            3.0,
+        );
     }
 
     #[test]
@@ -9112,6 +9160,7 @@ mod tests {
             "Centre Job (F7)",
             "Toolpath Panel",
             "Job Size",
+            "Safe height",
             "Z Zero Position",
             "XY Datum Position",
         ] {
@@ -9428,27 +9477,24 @@ mod tests {
             assert!(state.general_gcode.contains("G2 "));
             assert!(state.general_gcode.ends_with("M5\nM2\n"));
         }
-        let toolpath_label = format!(
-            "Profile · Vector {} · Inside · T{}",
-            id.get(),
-            harness
-                .state()
-                .general_profile_operation
-                .as_ref()
-                .expect("generated operation")
-                .tool
-                .tool_number
-        );
-        assert!(harness.query_by_label("Generated toolpaths (1)").is_some());
+        let toolpath_label = format!("Profile · Vector {}", id.get(),);
+        assert!(harness.query_by_label("Toolpaths (1)").is_some());
         harness.get_by_label(&toolpath_label).click();
         harness.run();
         assert_eq!(harness.state().general_selected_object, Some(id));
         harness.get_by_label("Create Profile Toolpath").click();
         harness.run();
+        let session = harness
+            .state()
+            .general_profile_session
+            .as_ref()
+            .expect("second profile session");
+        assert_eq!(session.parameters.feed_mm_min, 321.0);
+        assert_eq!(session.parameters.plunge_mm_min, 123.0);
         harness.get_by_label("Generate").click();
         harness.run();
         assert_eq!(harness.state().general_toolpaths.len(), 2);
-        assert!(harness.query_by_label("Generated toolpaths (2)").is_some());
+        assert!(harness.query_by_label("Toolpaths (2)").is_some());
         harness
             .query_all_by_label("Show")
             .next()

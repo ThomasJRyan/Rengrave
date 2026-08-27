@@ -36,6 +36,10 @@ values. The UI initializes them from the selected snapshot's library defaults,
 then passes edited values to the writer. The tool snapshot remains useful for
 identity, cutter geometry, and spindle direction without making library rate
 edits retroactively alter an existing operation.
+When a profile is generated, the selected toolbit's feed and plunge defaults
+are updated from the operation values and saved through the toolbit library's
+atomic JSON persistence. This makes a deliberate per-toolpath override the
+remembered default for subsequent operations using that toolbit.
 
 Toolpath records and visibility
 --------------------------------
