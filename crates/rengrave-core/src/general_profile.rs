@@ -72,6 +72,12 @@ pub struct ProfileParameters {
     pub cut_depth_mm: f64,
     pub pass_depth_mm: f64,
     pub safe_height_mm: f64,
+    /// Per-operation feed override, initialized from the selected toolbit.
+    #[serde(default)]
+    pub feed_mm_min: f64,
+    /// Per-operation plunge override, initialized from the selected toolbit.
+    #[serde(default)]
+    pub plunge_mm_min: f64,
 }
 
 impl Default for ProfileParameters {
@@ -82,6 +88,8 @@ impl Default for ProfileParameters {
             cut_depth_mm: 3.0,
             pass_depth_mm: 1.0,
             safe_height_mm: 3.0,
+            feed_mm_min: 0.0,
+            plunge_mm_min: 0.0,
         }
     }
 }
@@ -187,6 +195,8 @@ fn validate_operation(
         || !parameters.cut_depth_mm.is_finite()
         || !parameters.pass_depth_mm.is_finite()
         || !parameters.safe_height_mm.is_finite()
+        || !parameters.feed_mm_min.is_finite()
+        || !parameters.plunge_mm_min.is_finite()
     {
         return Err(ProfileGenerationError::NonFiniteParameter);
     }
@@ -196,7 +206,7 @@ fn validate_operation(
     {
         return Err(ProfileGenerationError::InvalidDepth);
     }
-    if operation.tool.feed_mm_min <= 0.0 || operation.tool.plunge_mm_min <= 0.0 {
+    if parameters.feed_mm_min <= 0.0 || parameters.plunge_mm_min <= 0.0 {
         return Err(ProfileGenerationError::InvalidFeed);
     }
     if parameters.cut_depth_mm > operation.tool.cutting_edge_height_mm {
@@ -368,7 +378,7 @@ fn write_profile_gcode(
             lines.push(format!(
                 "G1 Z{} F{}",
                 format_mm(z),
-                format_feed(operation.tool.plunge_mm_min)
+                format_feed(parameters.plunge_mm_min)
             ));
             match boundary {
                 ProfileBoundary::Circle { radius_mm, .. } => lines.push(format!(
@@ -376,7 +386,7 @@ fn write_profile_gcode(
                     format_mm(start.x),
                     format_mm(start.y),
                     format_mm(-radius_mm),
-                    format_feed(operation.tool.feed_mm_min)
+                    format_feed(parameters.feed_mm_min)
                 )),
                 ProfileBoundary::ClosedContour { points_mm } => {
                     for point in points_mm.iter().skip(1).chain(points_mm.first()) {
@@ -384,7 +394,7 @@ fn write_profile_gcode(
                             "G1 X{} Y{} F{}",
                             format_mm(point.x),
                             format_mm(point.y),
-                            format_feed(operation.tool.feed_mm_min)
+                            format_feed(parameters.feed_mm_min)
                         ));
                     }
                 }
@@ -450,6 +460,8 @@ mod tests {
                 cut_depth_mm: 2.5,
                 pass_depth_mm: 1.0,
                 safe_height_mm: 3.0,
+                feed_mm_min: 600.0,
+                plunge_mm_min: 200.0,
                 additional_offset_mm: 0.5,
             },
         }
@@ -510,10 +522,29 @@ mod tests {
             vec![-1.0, -2.0, -2.5]
         );
         assert!(generated.gcode.starts_with("(R-Engrave General Profile)\n"));
+        assert!(generated.gcode.contains("F600.0"));
         assert!(generated.gcode.contains("G0 Z13.000"));
         assert!(generated.gcode.contains("G1 Z7.500"));
         assert_eq!(generated.gcode.matches("\nG2 ").count(), 3);
         assert!(generated.gcode.ends_with("M5\nM2\n"));
+    }
+
+    #[test]
+    fn operation_feed_and_plunge_override_toolbit_defaults_in_gcode() {
+        let (document, id) = circle();
+        let mut operation = operation(id, ProfileCutSide::Outside);
+        operation.tool.feed_mm_min = 50.0;
+        operation.tool.plunge_mm_min = 25.0;
+        operation.parameters.feed_mm_min = 321.0;
+        operation.parameters.plunge_mm_min = 123.0;
+        let generated =
+            generate_profile(&operation, document.object(id).expect("circle object"), 0.0)
+                .expect("profile");
+
+        assert!(generated.gcode.contains("G1 Z-1.000 F123.0"));
+        assert!(generated.gcode.contains("G2 ") && generated.gcode.contains("F321.0"));
+        assert!(!generated.gcode.contains("F50.0"));
+        assert!(!generated.gcode.contains("F25.0"));
     }
 
     #[test]
@@ -535,7 +566,7 @@ mod tests {
         );
 
         let mut no_feed = operation(id, ProfileCutSide::Outside);
-        no_feed.tool.feed_mm_min = 0.0;
+        no_feed.parameters.feed_mm_min = 0.0;
         assert_eq!(
             generate_profile(&no_feed, source, 0.0),
             Err(ProfileGenerationError::InvalidFeed)

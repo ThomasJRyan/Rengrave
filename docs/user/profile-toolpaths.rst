@@ -58,7 +58,13 @@ Profile controls
 **Safe height**
    Clearance above the current Z-zero surface used for rapid positioning.
 
+**Feed rate** and **Plunge rate**
+   Per-operation cutting and plunging speeds. They start with the selected
+   toolbit's general defaults, but edits here apply only to this profile
+   operation and do not change the library definition. Switching cutters
+   refreshes these two fields from the newly selected toolbit defaults.
+
 The generated buffer is deterministic metric G-code. It contains absolute
-positioning, tool selection, spindle direction, safe moves, plunge/feed rates
-from the toolbit, one closed profile move per depth pass, and a normal spindle
-stop/program end.
+positioning, tool selection, spindle direction, safe moves, the configured
+per-operation plunge/feed rates, one closed profile move per depth pass, and a
+normal spindle stop/program end.

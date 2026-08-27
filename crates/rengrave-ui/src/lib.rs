@@ -2622,13 +2622,22 @@ impl RengraveApp {
     }
 
     fn begin_general_profile(&mut self, source_object_id: DesignObjectId) {
-        let defaults = ProfileParameters::default();
         let selected_tool_id = self
             .general_toolbit_library
             .toolbits
             .iter()
             .find(|tool| general_profile_tool_is_selectable(tool))
             .map(|tool| tool.id.clone());
+        let mut defaults = ProfileParameters::default();
+        if let Some(tool) = selected_tool_id.as_deref().and_then(|id| {
+            self.general_toolbit_library
+                .toolbits
+                .iter()
+                .find(|tool| tool.id == id)
+        }) {
+            defaults.feed_mm_min = tool.feed_mm_min;
+            defaults.plunge_mm_min = tool.plunge_mm_min;
+        }
         self.general_profile_session = Some(ProfileToolSession {
             source_object_id,
             selected_tool_id,
@@ -2680,6 +2689,7 @@ impl RengraveApp {
                     ui.add_space(6.0);
 
                     general_setup_group(ui, "Cutter", |ui, content_width| {
+                        let previous_tool_id = session.selected_tool_id.clone();
                         let selected_label = session
                             .selected_tool_id
                             .as_deref()
@@ -2708,6 +2718,19 @@ impl RengraveApp {
                                     );
                                 }
                             });
+                        if session.selected_tool_id != previous_tool_id {
+                            if let Some(tool) = session.selected_tool_id.as_deref().and_then(|id| {
+                                self.general_toolbit_library
+                                    .toolbits
+                                    .iter()
+                                    .find(|tool| tool.id == id)
+                            }) {
+                                session.parameters.feed_mm_min = tool.feed_mm_min;
+                                session.parameters.plunge_mm_min = tool.plunge_mm_min;
+                                session.defaults.feed_mm_min = tool.feed_mm_min;
+                                session.defaults.plunge_mm_min = tool.plunge_mm_min;
+                            }
+                        }
                         if session.selected_tool_id.is_none() {
                             let message = if self.general_toolbit_library.toolbits.is_empty() {
                                 "No toolbits are defined. Open Settings > Toolbit Library."
@@ -2743,6 +2766,7 @@ impl RengraveApp {
                     });
 
                     general_setup_group(ui, "Depths", |ui, _| {
+                        ui.spacing_mut().item_spacing.y = 0.0;
                         general_profile_dimension_field(
                             ui,
                             "Cut depth",
@@ -2750,6 +2774,13 @@ impl RengraveApp {
                             session.defaults.cut_depth_mm,
                             self.general_job_setup.units,
                             false,
+                        );
+                        general_profile_rate_pair(
+                            ui,
+                            &mut session.parameters.feed_mm_min,
+                            session.defaults.feed_mm_min,
+                            &mut session.parameters.plunge_mm_min,
+                            session.defaults.plunge_mm_min,
                         );
                         general_profile_dimension_field(
                             ui,
@@ -2781,8 +2812,8 @@ impl RengraveApp {
                     let depth_fits_tool = selected_tool.is_some_and(|tool| {
                         session.parameters.cut_depth_mm <= tool.cutting_edge_height_mm
                     });
-                    let rates_are_valid = selected_tool
-                        .is_some_and(|tool| tool.feed_mm_min > 0.0 && tool.plunge_mm_min > 0.0);
+                    let rates_are_valid = session.parameters.feed_mm_min > 0.0
+                        && session.parameters.plunge_mm_min > 0.0;
                     if let Some(error) = definition_error {
                         ui.colored_label(
                             egui::Color32::from_rgb(218, 164, 58),
@@ -2791,7 +2822,7 @@ impl RengraveApp {
                     } else if selected_tool.is_some() && !rates_are_valid {
                         ui.colored_label(
                             egui::Color32::from_rgb(218, 164, 58),
-                            "Set positive feed and plunge rates in the Toolbit Library.",
+                            "Set positive feed and plunge rates for this operation.",
                         );
                     } else if selected_tool.is_some() && !depth_fits_tool {
                         ui.colored_label(
@@ -5208,7 +5239,7 @@ fn general_setup_group(
             panel_label.clone(),
         )
     });
-    ui.add_space(4.0);
+    ui.add_space(2.0);
 }
 
 fn general_setup_group_widths(available_width: f32, horizontal_frame_margin: f32) -> (f32, f32) {
@@ -5440,36 +5471,60 @@ fn general_profile_dimension_field(
     units: GeneralUnits,
     signed: bool,
 ) {
-    ui.label(label);
-    let suffix = general_units_suffix(units);
-    let mut display_value = general_display_value(*value_mm, units);
-    let default_value = general_display_value(default_mm, units);
-    let input_width = (ui.available_width() - 25.0).max(48.0);
-    if resettable_value_input(
-        ui,
-        &mut display_value,
-        &default_value,
-        egui::vec2(input_width, 22.0),
-        &format!("Reset {label} to default"),
-        general_input_values_match,
-        |ui, value| {
-            let editor = egui::DragValue::new(value)
-                .speed(general_drag_speed(units))
-                .suffix(suffix);
-            if signed {
-                ui.add_sized(egui::vec2(input_width, 22.0), editor)
-            } else {
-                ui.add_sized(
-                    egui::vec2(input_width, 22.0),
-                    editor.range(0.001..=f64::MAX),
-                )
-            }
-        },
-    )
-    .changed()
-    {
-        *value_mm = general_storage_value(display_value, units);
-    }
+    ui.horizontal(|ui| {
+        ui.add_sized(egui::vec2(48.0, 22.0), egui::Label::new(label).truncate());
+        let mut display_value = general_display_value(*value_mm, units);
+        let default_value = general_display_value(default_mm, units);
+        let input_width = (ui.available_width() - 25.0).max(48.0);
+        if resettable_value_input(
+            ui,
+            &mut display_value,
+            &default_value,
+            egui::vec2(input_width, 22.0),
+            &format!("Reset {label} to default"),
+            general_input_values_match,
+            |ui, value| {
+                let editor = egui::DragValue::new(value).speed(general_drag_speed(units));
+                if signed {
+                    ui.add_sized(egui::vec2(input_width, 22.0), editor)
+                } else {
+                    ui.add_sized(
+                        egui::vec2(input_width, 22.0),
+                        editor.range(0.001..=f64::MAX),
+                    )
+                }
+            },
+        )
+        .changed()
+        {
+            *value_mm = general_storage_value(display_value, units);
+        }
+    });
+}
+
+fn general_profile_rate_pair(
+    ui: &mut egui::Ui,
+    feed: &mut f64,
+    default_feed: f64,
+    plunge: &mut f64,
+    default_plunge: f64,
+) {
+    ui.label("Feed / plunge (mm/min)");
+    ui.horizontal(|ui| {
+        let input_width = ((ui.available_width() - ui.spacing().item_spacing.x) * 0.5).max(48.0);
+        let feed_response = ui.add_sized(
+            egui::vec2(input_width, 22.0),
+            egui::DragValue::new(feed).speed(1.0).range(0.0..=f64::MAX),
+        );
+        feed_response.on_hover_text(format!("Feed rate; default {default_feed:.1} mm/min"));
+        let plunge_response = ui.add_sized(
+            egui::vec2(input_width, 22.0),
+            egui::DragValue::new(plunge)
+                .speed(1.0)
+                .range(0.0..=f64::MAX),
+        );
+        plunge_response.on_hover_text(format!("Plunge rate; default {default_plunge:.1} mm/min"));
+    });
 }
 
 fn general_circle_size_row(
@@ -9086,7 +9141,7 @@ mod tests {
         );
         assert!(
             harness
-                .query_by_label("Set positive feed and plunge rates in the Toolbit Library.")
+                .query_by_label("Set positive feed and plunge rates for this operation.")
                 .is_some()
         );
         harness.get_by_label("Generate").click();
@@ -9195,6 +9250,10 @@ mod tests {
         session.parameters.additional_offset_mm = 0.25;
         session.parameters.cut_depth_mm = 2.5;
         session.parameters.pass_depth_mm = 1.0;
+        assert_eq!(session.parameters.feed_mm_min, 600.0);
+        assert_eq!(session.parameters.plunge_mm_min, 200.0);
+        session.parameters.feed_mm_min = 321.0;
+        session.parameters.plunge_mm_min = 123.0;
         harness.run();
         harness.get_by_label("Generate").click();
         harness.run();
@@ -9210,6 +9269,8 @@ mod tests {
         );
         assert_eq!(state.general_profile_toolpaths.len(), 3);
         assert!(state.general_gcode.contains("(Cut side: Inside)"));
+        assert!(state.general_gcode.contains("F321.0"));
+        assert!(state.general_gcode.contains("F123.0"));
         assert!(state.general_gcode.contains("G2 "));
         assert!(state.general_gcode.ends_with("M5\nM2\n"));
         assert!(

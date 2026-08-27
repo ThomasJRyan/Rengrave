@@ -31,6 +31,11 @@ Core model and compensation
 ``ProfileParameters``, exact ``ProfileBoundary`` variants, derived XYZ
 contours, validation, and G-code generation. The operation references a stable
 ``DesignObjectId`` and contains a frozen ``GeneralToolbit`` snapshot.
+``ProfileParameters::feed_mm_min`` and ``plunge_mm_min`` are operation-local
+values. The UI initializes them from the selected snapshot's library defaults,
+then passes edited values to the writer. The tool snapshot remains useful for
+identity, cutter geometry, and spindle direction without making library rate
+edits retroactively alter an existing operation.
 
 For tool radius :math:`r` and additional offset :math:`a`, the signed exterior
 offset is:
