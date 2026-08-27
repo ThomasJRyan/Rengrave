@@ -30,8 +30,11 @@ Profile controls
 **Cutter**
    Selects a valid Endmill, Ballnose, or Bullnose definition from
    **Settings > Toolbit Library**. The operation freezes the selected toolbit
-   values when it is generated. Invalid definitions and non-profile cutters
-   are not offered.
+   values when it is generated. Profile-capable definitions remain visible
+   when dimensions, feed, or plunge still need attention; **Generate** stays
+   disabled and identifies the first field to correct. Drill, V-bit, chamfer,
+   slitting-saw, and probe definitions are not offered because their effective
+   profile diameter requires operation-specific handling.
 
 **Cut side**
    **On the line** follows the selected vector without cutter-radius

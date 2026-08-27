@@ -77,6 +77,13 @@ Toolpath Panel replaces its tool list with a contained editor until Generate,
 Cancel, or Escape. The square SVG button and every parameter control expose
 semantic labels for EGUI harness inspection.
 
+Tool selection and generation readiness are separate checks. The picker lists
+every Endmill, Ballnose, or Bullnose definition so a saved library entry is
+never misreported as absent. The editor then validates required dimensions,
+positive feed and plunge rates, and cutting-edge depth. It keeps **Generate**
+disabled and exposes the first actionable correction while the definition is
+incomplete.
+
 Editing the source vector regenerates its active profile. Deleting that source
 clears the operation, derived contours, and G-code buffer. Starting or opening
 a project also clears temporary/generated profile state; project persistence

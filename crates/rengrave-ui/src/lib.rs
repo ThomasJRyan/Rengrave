@@ -2627,7 +2627,7 @@ impl RengraveApp {
             .general_toolbit_library
             .toolbits
             .iter()
-            .find(|tool| general_profile_tool_is_eligible(tool))
+            .find(|tool| general_profile_tool_is_selectable(tool))
             .map(|tool| tool.id.clone());
         self.general_profile_session = Some(ProfileToolSession {
             source_object_id,
@@ -2699,7 +2699,7 @@ impl RengraveApp {
                                     .general_toolbit_library
                                     .toolbits
                                     .iter()
-                                    .filter(|tool| general_profile_tool_is_eligible(tool))
+                                    .filter(|tool| general_profile_tool_is_selectable(tool))
                                 {
                                     ui.selectable_value(
                                         &mut session.selected_tool_id,
@@ -2709,10 +2709,12 @@ impl RengraveApp {
                                 }
                             });
                         if session.selected_tool_id.is_none() {
-                            ui.colored_label(
-                                egui::Color32::from_rgb(218, 164, 58),
-                                "Create a valid endmill in Settings > Toolbit Library.",
-                            );
+                            let message = if self.general_toolbit_library.toolbits.is_empty() {
+                                "No toolbits are defined. Open Settings > Toolbit Library."
+                            } else {
+                                "Profile cuts require an Endmill, Ballnose, or Bullnose toolbit."
+                            };
+                            ui.colored_label(egui::Color32::from_rgb(218, 164, 58), message);
                         }
                     });
 
@@ -2773,20 +2775,37 @@ impl RengraveApp {
                             .iter()
                             .find(|tool| tool.id == id)
                     });
+                    let definition_error =
+                        selected_tool.and_then(|tool| tool.validate().into_iter().next());
+                    let definition_is_valid = selected_tool.is_some() && definition_error.is_none();
                     let depth_fits_tool = selected_tool.is_some_and(|tool| {
                         session.parameters.cut_depth_mm <= tool.cutting_edge_height_mm
                     });
-                    if selected_tool.is_some() && !depth_fits_tool {
+                    let rates_are_valid = selected_tool
+                        .is_some_and(|tool| tool.feed_mm_min > 0.0 && tool.plunge_mm_min > 0.0);
+                    if let Some(error) = definition_error {
+                        ui.colored_label(
+                            egui::Color32::from_rgb(218, 164, 58),
+                            format!("Complete this toolbit in the library: {error}"),
+                        );
+                    } else if selected_tool.is_some() && !rates_are_valid {
+                        ui.colored_label(
+                            egui::Color32::from_rgb(218, 164, 58),
+                            "Set positive feed and plunge rates in the Toolbit Library.",
+                        );
+                    } else if selected_tool.is_some() && !depth_fits_tool {
                         ui.colored_label(
                             egui::Color32::from_rgb(218, 164, 58),
                             "Cut depth exceeds this tool's cutting edge.",
                         );
                     }
                     let can_generate = selected_tool.is_some()
+                        && definition_is_valid
                         && session.parameters.cut_depth_mm > 0.0
                         && session.parameters.pass_depth_mm > 0.0
                         && session.parameters.safe_height_mm > 0.0
-                        && depth_fits_tool;
+                        && depth_fits_tool
+                        && rates_are_valid;
                     let width = GENERAL_SETUP_MAX_WIDTH.min(ui.available_width());
                     let spacing = ui.spacing().item_spacing.x;
                     let button_width = ((width - spacing) * 0.5).max(0.0);
@@ -5228,11 +5247,8 @@ fn general_profile_icon_strokes() -> &'static [Stroke] {
         .as_slice()
 }
 
-fn general_profile_tool_is_eligible(tool: &GeneralToolbit) -> bool {
+fn general_profile_tool_is_selectable(tool: &GeneralToolbit) -> bool {
     tool.supports_profile_cut()
-        && tool.validate().is_empty()
-        && tool.feed_mm_min > 0.0
-        && tool.plunge_mm_min > 0.0
 }
 
 fn general_design_tool_size(available_width: f32) -> f32 {
@@ -9039,6 +9055,80 @@ mod tests {
         harness.get_by_label("Cancel").click();
         harness.run();
         assert!(harness.state().general_profile_session.is_none());
+        assert!(harness.state().general_profile_operation.is_none());
+    }
+
+    #[test]
+    fn kittest_profile_lists_defined_cutters_before_feed_rates_are_configured() {
+        let mut app = test_app();
+        app.tool_view = ToolView::GeneralPurpose;
+        app.general_toolbit_library.toolbits = general_toolbit_presets();
+        let id = app
+            .general_design_document
+            .add_circle(Point::default(), 10.0)
+            .expect("profile source");
+        app.general_selected_object = Some(id);
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(1000.0, 700.0))
+            .build_eframe(|_| app);
+        harness.run();
+        harness.get_by_label("Create Profile Toolpath").click();
+        harness.run();
+
+        assert!(
+            harness
+                .state()
+                .general_profile_session
+                .as_ref()
+                .and_then(|session| session.selected_tool_id.as_ref())
+                .is_some(),
+            "a defined profile cutter should remain selectable"
+        );
+        assert!(
+            harness
+                .query_by_label("Set positive feed and plunge rates in the Toolbit Library.")
+                .is_some()
+        );
+        harness.get_by_label("Generate").click();
+        harness.run();
+        assert!(harness.state().general_profile_operation.is_none());
+        assert!(harness.state().general_profile_session.is_some());
+    }
+
+    #[test]
+    fn kittest_profile_lists_incomplete_cutters_and_reports_the_first_missing_field() {
+        let mut app = test_app();
+        app.tool_view = ToolView::GeneralPurpose;
+        app.general_toolbit_library.toolbits = vec![GeneralToolbit::default()];
+        let id = app
+            .general_design_document
+            .add_circle(Point::default(), 10.0)
+            .expect("profile source");
+        app.general_selected_object = Some(id);
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(1000.0, 700.0))
+            .build_eframe(|_| app);
+        harness.run();
+        harness.get_by_label("Create Profile Toolpath").click();
+        harness.run();
+
+        assert!(
+            harness
+                .state()
+                .general_profile_session
+                .as_ref()
+                .and_then(|session| session.selected_tool_id.as_ref())
+                .is_some()
+        );
+        assert!(
+            harness
+                .query_by_label(
+                    "Complete this toolbit in the library: Cutting edge height must be greater than 0 mm"
+                )
+                .is_some()
+        );
+        harness.get_by_label("Generate").click();
+        harness.run();
         assert!(harness.state().general_profile_operation.is_none());
     }
 
