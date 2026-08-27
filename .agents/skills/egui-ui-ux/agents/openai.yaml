@@ -1,0 +1,12 @@
+interface:
+  display_name: egui UI/UX
+  short_description: Design, implement, and visually review Rust egui interfaces
+  icon_small: assets/icon.svg
+  icon_large: assets/icon.svg
+policy:
+  products:
+  - chatgpt
+  - codex
+  - api
+  - atlas
+  allow_implicit_invocation: true

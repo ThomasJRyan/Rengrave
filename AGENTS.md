@@ -119,6 +119,32 @@ cargo test -p rengrave-ui --lib kittest_renders_compact_gcode_status_strip
 
 Use the actual test filter that matches the changed behavior; the examples above are illustrative and should be updated as tests evolve.
 
+## UI Design Review and Implementation Skills
+
+For native `egui` UI work, use the repository-level `egui-ui-ux` skill as the
+implementation workflow. Follow its design-first, screenshot-driven process:
+inspect the existing architecture and visual vocabulary, choose the layout
+structure, implement the smallest coherent change, exercise relevant controls,
+and inspect the rendered result before considering the work complete.
+
+Use Impeccable as an independent design critic for UI/UX review, not as the
+implementation workflow. It may review designs, screenshots, interaction
+states, hierarchy, spacing, accessibility, responsive behavior, and clipping,
+then return concrete findings. Apply those findings through the
+`egui-ui-ux` workflow and validate the resulting UI again.
+
+For substantial UI changes, the preferred sequence is:
+
+1. Implement or refine the UI with `egui-ui-ux`.
+2. Render and inspect the affected populated states using the available
+   screenshot or egui harness workflow.
+3. Run Impeccable as a read-only design critic and record actionable findings.
+4. Address the findings with `egui-ui-ux`, then rerender and validate.
+
+Do not treat a successful build or a design critique as a substitute for the
+other: implementation belongs to `egui-ui-ux`, while Impeccable supplies
+independent visual and UX criticism.
+
 ## Rust Style and Compatibility
 
 - Use standard Rust formatting from `rustfmt`; do not hand-align large blocks.
