@@ -349,3 +349,76 @@ div.footer a { color: var(--text-muted); }
   div.body h1 { font-size: clamp(2rem, 9vw, 3rem); }
   div.footer { width: calc(100% - 1.5rem); }
 }
+
+/* Pygments ships a light syntax palette after the theme stylesheet. Keep
+   every token legible against the documentation's dark code surface. */
+
+div.body .highlight,
+div.body .highlight pre {
+  background: var(--surface-code) !important;
+  color: var(--text) !important;
+}
+
+div.body .highlight {
+  margin: 1.25rem 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+div.body .highlight pre {
+  margin: 0;
+  border: 0;
+}
+
+div.body .highlight span { color: var(--text) !important; }
+div.body .highlight .c,
+div.body .highlight .ch,
+div.body .highlight .cm,
+div.body .highlight .c1,
+div.body .highlight .cs { color: var(--text-dim) !important; font-style: italic; }
+div.body .highlight .k,
+div.body .highlight .kd,
+div.body .highlight .kn,
+div.body .highlight .kp,
+div.body .highlight .kr,
+div.body .highlight .ow { color: #8fc8e0 !important; font-weight: 650; }
+div.body .highlight .s,
+div.body .highlight .s1,
+div.body .highlight .s2,
+div.body .highlight .sa,
+div.body .highlight .sb,
+div.body .highlight .sc,
+div.body .highlight .se,
+div.body .highlight .sh,
+div.body .highlight .si,
+div.body .highlight .sr,
+div.body .highlight .ss { color: #9bd98a !important; }
+div.body .highlight .m,
+div.body .highlight .mb,
+div.body .highlight .mf,
+div.body .highlight .mh,
+div.body .highlight .mi,
+div.body .highlight .mo { color: #d6b77a !important; }
+div.body .highlight .err { color: #f09a9a !important; border-color: #a85b5b; }
+
+/* The theme's legacy light note background has higher specificity than the
+   generic admonition rule above it. Override it at the rendered Sphinx node. */
+
+div.body div.admonition,
+div.body div.admonition.note,
+div.body div.admonition.tip,
+div.body div.admonition.warning {
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--surface-raised) !important;
+  color: var(--text) !important;
+}
+
+div.body div.admonition p,
+div.body div.admonition li { color: var(--text) !important; }
+div.body div.admonition .admonition-title {
+  color: var(--green) !important;
+  font-weight: 700;
+}
+div.body div.admonition.warning { border-color: #876d37; }
+div.body div.admonition.warning .admonition-title { color: var(--amber) !important; }
