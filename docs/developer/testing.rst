@@ -45,21 +45,21 @@ versions.
 Documentation build
 -------------------
 
-Source documentation lives under ``docs/``. The generated site is built into
-``_docs/`` and is ignored by Git. Build the entry point with:
+Source documentation and its Python environment live entirely under
+``docs/``. Use ``uv`` through the documentation Makefile; the generated site
+is built into ``docs/_build/`` and is ignored by Git:
 
 ::
 
-   mkdir -p _docs/_images _docs/_static
-   cp docs/_images/*.svg _docs/_images/
-   cp docs/_static/rengrave.css _docs/_static/
-   rst2html --stylesheet=docs/_static/rengrave.css \
-     docs/index.rst _docs/index.html
+   cd docs
+   uv sync
+   make html
+   make serve
 
-When inspecting the result, verify that the expected headings, image URIs,
-code blocks, tables, and stylesheet reference appear in ``_docs/index.html``.
-The generated tree is a build artifact; edit the RST or source stylesheet,
-then rebuild it.
+The generated HTML is a multi-page Sphinx site. Open
+``docs/_build/html/index.html`` or use ``make serve`` for local browser
+inspection. Edit the RST or source stylesheet, then rebuild it. ``make
+linkcheck`` runs Sphinx's link checker.
 
 Manual review checklist
 -----------------------

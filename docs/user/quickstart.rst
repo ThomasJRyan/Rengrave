@@ -1,6 +1,13 @@
 Quick start
 ===========
 
+.. |workflow| image:: ../_images/workflow.svg
+   :alt: R-Engrave input, calculation, preview, and export workflow
+   :width: 100%
+.. |ui_placeholder| image:: ../_images/ui-overview-placeholder.svg
+   :alt: Placeholder for a native R-Engrave desktop screenshot
+   :width: 100%
+
 The safest first job is a small text engraving on scrap stock. Confirm the
 preview, inspect the generated file, and simulate or dry-run the G-code in the
 controller that will run it before cutting material.

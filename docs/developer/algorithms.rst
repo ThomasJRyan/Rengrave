@@ -1,6 +1,19 @@
 Algorithms and mathematics
 ==========================
 
+.. |coordinates| image:: ../_images/coordinate-system.svg
+   :alt: Coordinate bounds, origin selection, and profile expansion
+   :width: 100%
+.. |vcarve| image:: ../_images/vcarve-circle.svg
+   :alt: A V-bit tangent to a maximum inscribed circle in a carved region
+   :width: 100%
+.. |cleanup| image:: ../_images/cleanup-scanlines.svg
+   :alt: Cleanup area offset followed by horizontal and vertical scanlines
+   :width: 100%
+.. |profile| image:: ../_images/profile-tabs.svg
+   :alt: Profile perimeter, ramped tabs, and depth passes
+   :width: 100%
+
 Coordinate spaces and layout
 ----------------------------
 

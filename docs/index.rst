@@ -10,10 +10,6 @@ This is the first documentation draft for the current workspace. It describes
 implemented behavior, calls out compatibility boundaries, and marks UI details
 that still need a native screenshot or a final product decision.
 
-.. contents:: Contents
-   :local:
-   :depth: 2
-
 .. |workflow| image:: _images/workflow.svg
    :alt: R-Engrave input, calculation, preview, and export workflow
    :width: 100%
@@ -38,43 +34,33 @@ that still need a native screenshot or a final product decision.
    :alt: Placeholder for a native R-Engrave desktop screenshot
    :width: 100%
 
-Start here
-----------
-
 User guide
 ----------
 
-* `Quick start <#quick-start>`_
-* `User workflows <#user-workflows>`_
-* `User reference <#user-reference>`_
-* `Troubleshooting <#troubleshooting>`_
-* `Toolbit library <#toolbit-library>`_
-* `General profile toolpaths <#general-profile-toolpaths>`_
+.. toctree::
+   :maxdepth: 2
+   :caption: User guide
+
+   user/quickstart
+   user/workflows
+   user/reference
+   user/troubleshooting
+   user/toolbits
+   user/profile-toolpaths
 
 Developer guide
 ---------------
 
-* `Architecture <#architecture>`_
-* `Algorithms and mathematics <#algorithms-and-mathematics>`_
-* `Compatibility and extension notes <#compatibility-and-extension-notes>`_
-* `Testing and documentation workflow <#testing-and-documentation-workflow>`_
+.. toctree::
+   :maxdepth: 2
+   :caption: Developer guide
 
-The single-file build below includes the same pages in reading order. Keeping
-the sources separate makes future multi-page or Sphinx builds straightforward
-without making the required ``rst2html`` build depend on Sphinx.
-
-.. include:: user/quickstart.rst
-.. include:: user/workflows.rst
-.. include:: user/reference.rst
-.. include:: user/troubleshooting.rst
-.. include:: user/toolbits.rst
-.. include:: user/profile-toolpaths.rst
-.. include:: developer/architecture.rst
-.. include:: developer/algorithms.rst
-.. include:: developer/compatibility.rst
-.. include:: developer/testing.rst
-.. include:: developer/toolbits.rst
-.. include:: developer/general-profile-toolpaths.rst
+   developer/architecture
+   developer/algorithms
+   developer/compatibility
+   developer/testing
+   developer/toolbits
+   developer/general-profile-toolpaths
 
 Current scope
 -------------

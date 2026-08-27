@@ -46,7 +46,7 @@ This repository is a Rust port of F-Engrave. Keep `f-engrave_source/` intact as 
 - `crates/rengrave-core`: portable settings, geometry, parsers, toolpath logic, exporters, and core tests.
 - `crates/rengrave-cli`: batch and command-line entry point.
 - `crates/rengrave-ui`: `eframe/egui` desktop UI and egui harness tests.
-- `docs/`: reStructuredText user documentation, developer documentation, algorithm notes, diagrams, screenshots, custom stylesheet, and generated documentation output.
+- `docs/`: the self-contained Sphinx documentation project, including reStructuredText user/developer pages, diagrams, screenshots, custom stylesheet, `pyproject.toml`, `uv.lock`, `conf.py`, `Makefile`, and generated output.
 
 Use `PLAN.md` as the current porting roadmap. Add fixtures under a future `fixtures/` or crate-local `tests/` directory when golden F-Engrave outputs are created.
 
@@ -72,21 +72,29 @@ Documentation is part of every feature, bug fix, and behavior-changing change.
 
 ## Documentation Build
 
-Build the documentation with `rst2html` and the repository stylesheet. The exact input/output paths may grow with the documentation tree, but the canonical entry-point build is:
+Build the documentation from `docs/` with Sphinx and `uv`. The documentation
+environment owns its Python dependencies and generated output:
 
 ```sh
-mkdir -p docs/_build
-rst2html --stylesheet=docs/_static/rengrave.css docs/index.rst docs/_build/index.html
+cd docs
+uv sync
+make html
 ```
 
-When the documentation uses multiple included files, rebuild from `docs/index.rst` and verify that the generated HTML contains the expected sections, links, images, and stylesheet reference. Keep custom styling in `docs/_static/rengrave.css`; do not embed one-off styling in generated HTML.
+Use `make serve` to build and serve the site locally, or `make linkcheck` to
+check links. Verify the generated HTML contains the expected sections, links,
+images, and stylesheet reference. Keep custom styling in `docs/_static/rengrave.css`;
+do not embed one-off styling in generated HTML. Do not use the old standalone
+`rst2html` workflow.
 
 ## Build and Development Commands
 
 - `cargo fmt --all`: format every workspace crate.
 - `cargo run -p rengrave-ui`: launch the desktop UI shell for manual verification.
 - `cargo run -p rengrave-cli -- -b -t "Text"`: exercise batch-mode compatibility output.
-- `rst2html --stylesheet=docs/_static/rengrave.css docs/index.rst docs/_build/index.html`: build the documentation entry point.
+- `make -C docs html`: build the Sphinx documentation site.
+- `make -C docs serve`: build and serve the site at `http://127.0.0.1:8000`.
+- `make -C docs linkcheck`: check documentation links.
 
 ## Testing Requirements
 
