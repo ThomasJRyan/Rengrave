@@ -21,6 +21,10 @@ use rengrave_core::design::{DesignCircle, DesignGeometry, DesignObjectId, Vector
 use rengrave_core::dxf::read_dxf_font;
 use rengrave_core::external::is_bitmap_input;
 use rengrave_core::font::{Font, Stroke, read_cxf, read_ttf};
+use rengrave_core::general_profile::{
+    GeneralProfileOperation, GeneratedProfile, ProfileCutSide, ProfileParameters,
+    ProfileToolpathContour, generate_profile,
+};
 use rengrave_core::general_toolbit::{
     GeneralSpindleDirection, GeneralToolbit, GeneralToolbitKind, GeneralToolbitLibrary,
     default_general_toolbit_library_path, general_toolbit_presets,
@@ -78,6 +82,8 @@ const LOGO_SIZE: f32 = 40.0;
 const GENERAL_TAB_WIDTH: f32 = 28.0;
 const GENERAL_TOOL_PANEL_WIDTH: f32 = 256.0;
 const GENERAL_SETUP_MAX_WIDTH: f32 = 198.0;
+const GENERAL_TOOLPATH_PANEL_MIN_WIDTH: f32 = 220.0;
+const GENERAL_CENTER_PANEL_MIN_WIDTH: f32 = 240.0;
 const GENERAL_DESIGN_GRID_COLUMNS: usize = 5;
 const GENERAL_DESIGN_TOOL_GAP: f32 = 4.0;
 const GENERAL_JOB_TYPE_VISIBLE: bool = false;
@@ -172,6 +178,14 @@ struct CircleToolSession {
     draft: CircleDraft,
     defaults: CircleDraft,
     mode: CircleToolMode,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct ProfileToolSession {
+    source_object_id: DesignObjectId,
+    selected_tool_id: Option<String>,
+    parameters: ProfileParameters,
+    defaults: ProfileParameters,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -288,6 +302,10 @@ struct RengraveApp {
     general_design_document: VectorDocument,
     general_selected_object: Option<DesignObjectId>,
     general_temporary_tool: Option<GeneralTemporaryTool>,
+    general_profile_session: Option<ProfileToolSession>,
+    general_profile_operation: Option<GeneralProfileOperation>,
+    general_profile_toolpaths: Vec<ProfileToolpathContour>,
+    general_gcode: String,
     general_2d_transform: ViewTransform,
     general_2d_view_initialized: bool,
     general_3d_transform: ViewTransform,
@@ -453,6 +471,10 @@ impl RengraveApp {
             general_design_document: VectorDocument::default(),
             general_selected_object: None,
             general_temporary_tool: None,
+            general_profile_session: None,
+            general_profile_operation: None,
+            general_profile_toolpaths: Vec::new(),
+            general_gcode: String::new(),
             general_2d_transform: ViewTransform {
                 zoom: DEFAULT_PREVIEW_ZOOM / 4.0,
                 ..ViewTransform::default()
@@ -750,6 +772,10 @@ impl RengraveApp {
         self.general_design_document = project.design_document;
         self.general_selected_object = None;
         self.general_temporary_tool = None;
+        self.general_profile_session = None;
+        self.general_profile_operation = None;
+        self.general_profile_toolpaths.clear();
+        self.general_gcode.clear();
         self.controls = UiControls::from_settings(&project.settings);
         let inferred = ToolView::from_settings_and_path(
             &project.settings,
@@ -848,6 +874,10 @@ impl RengraveApp {
         self.general_design_document = VectorDocument::default();
         self.general_selected_object = None;
         self.general_temporary_tool = None;
+        self.general_profile_session = None;
+        self.general_profile_operation = None;
+        self.general_profile_toolpaths.clear();
+        self.general_gcode.clear();
         self.settings_path.clear();
         self.input_path.clear();
         self.text = RengraveDocument::default().text;
@@ -2550,6 +2580,20 @@ impl RengraveApp {
                 preview: true,
             });
         }
+        for contour in &self.general_profile_toolpaths {
+            scene.objects.push(GeneralSceneObject::ProfileToolpath {
+                points: contour
+                    .points
+                    .iter()
+                    .map(|point| PreviewPoint3d {
+                        x: point.x_mm,
+                        y: -point.y_mm,
+                        z: point.z_mm,
+                    })
+                    .collect(),
+                closed: contour.closed,
+            });
+        }
         scene
     }
 
@@ -2577,10 +2621,281 @@ impl RengraveApp {
         }));
     }
 
+    fn begin_general_profile(&mut self, source_object_id: DesignObjectId) {
+        let defaults = ProfileParameters::default();
+        let selected_tool_id = self
+            .general_toolbit_library
+            .toolbits
+            .iter()
+            .find(|tool| general_profile_tool_is_eligible(tool))
+            .map(|tool| tool.id.clone());
+        self.general_profile_session = Some(ProfileToolSession {
+            source_object_id,
+            selected_tool_id,
+            parameters: defaults,
+            defaults,
+        });
+    }
+
+    fn general_surface_z_mm(&self) -> f64 {
+        match self.general_job_setup.z_zero {
+            GeneralZZero::MaterialSurface => 0.0,
+            GeneralZZero::MachineBed => self.general_job_setup.thickness,
+        }
+    }
+
+    fn rebuild_general_profile_output(&mut self) -> Result<(), String> {
+        let Some(operation) = self.general_profile_operation.as_ref() else {
+            self.general_profile_toolpaths.clear();
+            self.general_gcode.clear();
+            return Ok(());
+        };
+        let Some(source) = self
+            .general_design_document
+            .object(operation.source_object_id)
+        else {
+            self.general_profile_operation = None;
+            self.general_profile_toolpaths.clear();
+            self.general_gcode.clear();
+            return Ok(());
+        };
+        let GeneratedProfile { contours, gcode } =
+            generate_profile(operation, source, self.general_surface_z_mm())
+                .map_err(|error| error.to_string())?;
+        self.general_profile_toolpaths = contours;
+        self.general_gcode = gcode;
+        Ok(())
+    }
+
+    fn show_general_toolpath_panel(&mut self, ui: &mut egui::Ui) {
+        if let Some(mut session) = self.general_profile_session.take() {
+            let mut action = ui
+                .input(|input| input.key_pressed(egui::Key::Escape))
+                .then_some(TemporaryToolAction::Cancel);
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    ui.strong("Profile Cut");
+                    ui.weak(format!("Vector {}", session.source_object_id.get()));
+                    ui.add_space(6.0);
+
+                    general_setup_group(ui, "Cutter", |ui, content_width| {
+                        let selected_label = session
+                            .selected_tool_id
+                            .as_deref()
+                            .and_then(|id| {
+                                self.general_toolbit_library
+                                    .toolbits
+                                    .iter()
+                                    .find(|tool| tool.id == id)
+                            })
+                            .map(|tool| tool.label.as_str())
+                            .unwrap_or("Choose a toolbit");
+                        egui::ComboBox::from_id_salt("general-profile-toolbit")
+                            .selected_text(selected_label)
+                            .width(content_width)
+                            .show_ui(ui, |ui| {
+                                for tool in self
+                                    .general_toolbit_library
+                                    .toolbits
+                                    .iter()
+                                    .filter(|tool| general_profile_tool_is_eligible(tool))
+                                {
+                                    ui.selectable_value(
+                                        &mut session.selected_tool_id,
+                                        Some(tool.id.clone()),
+                                        format!("T{} · {}", tool.tool_number, tool.label),
+                                    );
+                                }
+                            });
+                        if session.selected_tool_id.is_none() {
+                            ui.colored_label(
+                                egui::Color32::from_rgb(218, 164, 58),
+                                "Create a valid endmill in Settings > Toolbit Library.",
+                            );
+                        }
+                    });
+
+                    general_setup_group(ui, "Profile", |ui, content_width| {
+                        ui.label("Cut side");
+                        egui::ComboBox::from_id_salt("general-profile-side")
+                            .selected_text(session.parameters.cut_side.label())
+                            .width(content_width)
+                            .show_ui(ui, |ui| {
+                                for side in ProfileCutSide::ALL {
+                                    ui.selectable_value(
+                                        &mut session.parameters.cut_side,
+                                        side,
+                                        side.label(),
+                                    );
+                                }
+                            });
+                        general_profile_dimension_field(
+                            ui,
+                            "Additional offset",
+                            &mut session.parameters.additional_offset_mm,
+                            session.defaults.additional_offset_mm,
+                            self.general_job_setup.units,
+                            true,
+                        );
+                    });
+
+                    general_setup_group(ui, "Depths", |ui, _| {
+                        general_profile_dimension_field(
+                            ui,
+                            "Cut depth",
+                            &mut session.parameters.cut_depth_mm,
+                            session.defaults.cut_depth_mm,
+                            self.general_job_setup.units,
+                            false,
+                        );
+                        general_profile_dimension_field(
+                            ui,
+                            "Pass depth",
+                            &mut session.parameters.pass_depth_mm,
+                            session.defaults.pass_depth_mm,
+                            self.general_job_setup.units,
+                            false,
+                        );
+                        general_profile_dimension_field(
+                            ui,
+                            "Safe height",
+                            &mut session.parameters.safe_height_mm,
+                            session.defaults.safe_height_mm,
+                            self.general_job_setup.units,
+                            false,
+                        );
+                    });
+
+                    let selected_tool = session.selected_tool_id.as_deref().and_then(|id| {
+                        self.general_toolbit_library
+                            .toolbits
+                            .iter()
+                            .find(|tool| tool.id == id)
+                    });
+                    let depth_fits_tool = selected_tool.is_some_and(|tool| {
+                        session.parameters.cut_depth_mm <= tool.cutting_edge_height_mm
+                    });
+                    if selected_tool.is_some() && !depth_fits_tool {
+                        ui.colored_label(
+                            egui::Color32::from_rgb(218, 164, 58),
+                            "Cut depth exceeds this tool's cutting edge.",
+                        );
+                    }
+                    let can_generate = selected_tool.is_some()
+                        && session.parameters.cut_depth_mm > 0.0
+                        && session.parameters.pass_depth_mm > 0.0
+                        && session.parameters.safe_height_mm > 0.0
+                        && depth_fits_tool;
+                    let width = GENERAL_SETUP_MAX_WIDTH.min(ui.available_width());
+                    let spacing = ui.spacing().item_spacing.x;
+                    let button_width = ((width - spacing) * 0.5).max(0.0);
+                    ui.horizontal(|ui| {
+                        if ui
+                            .add_enabled(
+                                can_generate,
+                                egui::Button::new("Generate")
+                                    .min_size(egui::vec2(button_width, 26.0)),
+                            )
+                            .clicked()
+                        {
+                            action = Some(TemporaryToolAction::Confirm);
+                        }
+                        if ui
+                            .add_sized(egui::vec2(button_width, 26.0), egui::Button::new("Cancel"))
+                            .clicked()
+                        {
+                            action = Some(TemporaryToolAction::Cancel);
+                        }
+                    });
+                });
+
+            match action {
+                Some(TemporaryToolAction::Confirm) => {
+                    let tool = session.selected_tool_id.as_deref().and_then(|id| {
+                        self.general_toolbit_library
+                            .toolbits
+                            .iter()
+                            .find(|tool| tool.id == id)
+                            .cloned()
+                    });
+                    if let Some(tool) = tool {
+                        let operation = GeneralProfileOperation {
+                            source_object_id: session.source_object_id,
+                            tool,
+                            parameters: session.parameters,
+                        };
+                        let source = self
+                            .general_design_document
+                            .object(session.source_object_id)
+                            .copied();
+                        match source.map(|source| {
+                            generate_profile(&operation, &source, self.general_surface_z_mm())
+                        }) {
+                            Some(Ok(GeneratedProfile { contours, gcode })) => {
+                                self.general_profile_operation = Some(operation);
+                                self.general_profile_toolpaths = contours;
+                                self.general_gcode = gcode;
+                                self.status = "Profile toolpath generated".to_owned();
+                            }
+                            Some(Err(error)) => {
+                                self.status = "Profile toolpath failed".to_owned();
+                                self.warnings = vec![error.to_string()];
+                                self.general_profile_session = Some(session);
+                            }
+                            None => {
+                                self.status = "Profile source no longer exists".to_owned();
+                            }
+                        }
+                    }
+                }
+                Some(TemporaryToolAction::Cancel) => {}
+                None => self.general_profile_session = Some(session),
+            }
+            return;
+        }
+
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.strong("Toolpaths");
+                ui.add_space(6.0);
+                let button_size = 44.0_f32.min(ui.available_width());
+                let enabled = self.general_selected_object.is_some();
+                let response = ui
+                    .add_enabled_ui(enabled, |ui| general_profile_tool_button(ui, button_size))
+                    .inner;
+                if response.clicked()
+                    && let Some(source_object_id) = self.general_selected_object
+                {
+                    self.begin_general_profile(source_object_id);
+                }
+                ui.add_space(6.0);
+                if self.general_selected_object.is_none() {
+                    ui.weak("Select a closed vector in the 2D View to create a profile cut.");
+                } else {
+                    ui.weak("Profile follows the selected vector's exterior boundary.");
+                }
+                if let Some(operation) = &self.general_profile_operation {
+                    ui.separator();
+                    ui.strong("Generated");
+                    ui.label(format!(
+                        "Profile · {} · T{}",
+                        operation.parameters.cut_side.label(),
+                        operation.tool.tool_number
+                    ));
+                    ui.weak(format!("{} G-code bytes", self.general_gcode.len()));
+                }
+            });
+    }
+
     fn show_general_workbench(&mut self, ui: &mut egui::Ui) {
         let available = ui.available_rect_before_wrap();
         let left_width = GENERAL_TOOL_PANEL_WIDTH.min(available.width());
-        let right_width = available.width() * 0.15;
+        let right_width = (available.width() * 0.22)
+            .max(GENERAL_TOOLPATH_PANEL_MIN_WIDTH)
+            .min(300.0)
+            .min((available.width() - left_width - GENERAL_CENTER_PANEL_MIN_WIDTH).max(0.0));
         let center_width = (available.width() - left_width - right_width - 2.0).max(0.0);
         let left_rect =
             egui::Rect::from_min_size(available.min, egui::vec2(left_width, available.height()));
@@ -2666,6 +2981,8 @@ impl RengraveApp {
                 ui.scope_builder(egui::UiBuilder::new().max_rect(right_rect), |ui| {
                     ui.add_space(12.0);
                     ui.vertical_centered(|ui| ui.strong("Toolpath Panel"));
+                    ui.add_space(8.0);
+                    self.show_general_toolpath_panel(ui);
                 });
 
                 let separator_color = ui.visuals().widgets.noninteractive.bg_stroke.color;
@@ -2694,6 +3011,15 @@ impl RengraveApp {
             && let Some(id) = self.general_selected_object.take()
             && self.general_design_document.remove_object(id)
         {
+            if self
+                .general_profile_operation
+                .as_ref()
+                .is_some_and(|operation| operation.source_object_id == id)
+            {
+                self.general_profile_operation = None;
+                self.general_profile_toolpaths.clear();
+                self.general_gcode.clear();
+            }
             self.status = "Selected vector deleted".to_owned();
         }
 
@@ -2702,6 +3028,14 @@ impl RengraveApp {
             rect.max,
         );
         let response = ui.allocate_rect(canvas_rect, egui::Sense::click_and_drag());
+        let canvas_label = if self.general_profile_toolpaths.is_empty() {
+            "2D design view"
+        } else {
+            "2D design view with profile toolpath"
+        };
+        response.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::WidgetType::Other, ui.is_enabled(), canvas_label)
+        });
         let hover_pos = response.hover_pos();
         if response.dragged_by(egui::PointerButton::Secondary) {
             let delta = response.drag_delta();
@@ -2768,6 +3102,7 @@ impl RengraveApp {
                 egui::StrokeKind::Inside,
             );
         }
+        self.draw_general_profile_toolpaths_2d(&canvas_painter, canvas_rect);
         self.show_general_design_objects(ui, &canvas_painter, canvas_rect, &response);
         draw_general_rulers(
             &painter,
@@ -2861,8 +3196,43 @@ impl RengraveApp {
         }
     }
 
+    fn draw_general_profile_toolpaths_2d(&self, painter: &egui::Painter, canvas_rect: egui::Rect) {
+        let stroke = egui::Stroke::new(2.2, egui::Color32::from_rgb(45, 174, 105));
+        for contour in &self.general_profile_toolpaths {
+            let points = contour
+                .points
+                .iter()
+                .map(|point| {
+                    preview::model_point_to_screen(
+                        canvas_rect,
+                        self.general_2d_transform,
+                        general_display_point_to_view_point(
+                            Point::new(point.x_mm, point.y_mm),
+                            self.general_job_setup.units,
+                        ),
+                    )
+                })
+                .collect::<Vec<_>>();
+            if points.len() < 2 {
+                continue;
+            }
+            painter.add(egui::Shape::line(points.clone(), stroke));
+            if contour.closed {
+                painter.line_segment([*points.last().unwrap(), points[0]], stroke);
+            }
+        }
+    }
+
     fn show_general_3d_view(&mut self, ui: &mut egui::Ui, rect: egui::Rect) {
         let response = ui.allocate_rect(rect, egui::Sense::click_and_drag());
+        let viewport_label = if self.general_profile_toolpaths.is_empty() {
+            "3D job view"
+        } else {
+            "3D job view with profile toolpath"
+        };
+        response.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::WidgetType::Other, ui.is_enabled(), viewport_label)
+        });
         if response.dragged_by(egui::PointerButton::Primary)
             || response.dragged_by(egui::PointerButton::Middle)
         {
@@ -3125,6 +3495,9 @@ impl RengraveApp {
                                 .is_ok()
                             {
                                 self.general_selected_object = Some(id);
+                                if let Err(error) = self.rebuild_general_profile_output() {
+                                    self.warnings = vec![error];
+                                }
                                 self.status =
                                     "Vector updated; save the project to keep changes".to_owned();
                             }
@@ -4845,6 +5218,23 @@ fn general_edit_parameters_icon_strokes() -> &'static [Stroke] {
         .as_slice()
 }
 
+fn general_profile_icon_strokes() -> &'static [Stroke] {
+    static STROKES: OnceLock<Vec<Stroke>> = OnceLock::new();
+    STROKES
+        .get_or_init(|| {
+            parse_svg_segments(include_str!("../assets/tool-icons/profile.svg"))
+                .expect("the bundled profile tool icon must be valid SVG")
+        })
+        .as_slice()
+}
+
+fn general_profile_tool_is_eligible(tool: &GeneralToolbit) -> bool {
+    tool.supports_profile_cut()
+        && tool.validate().is_empty()
+        && tool.feed_mm_min > 0.0
+        && tool.plunge_mm_min > 0.0
+}
+
 fn general_design_tool_size(available_width: f32) -> f32 {
     let total_gap = GENERAL_DESIGN_TOOL_GAP * (GENERAL_DESIGN_GRID_COLUMNS - 1) as f32;
     ((available_width - total_gap) / GENERAL_DESIGN_GRID_COLUMNS as f32)
@@ -5026,6 +5416,46 @@ fn general_signed_dimension_row(
     });
 }
 
+fn general_profile_dimension_field(
+    ui: &mut egui::Ui,
+    label: &str,
+    value_mm: &mut f64,
+    default_mm: f64,
+    units: GeneralUnits,
+    signed: bool,
+) {
+    ui.label(label);
+    let suffix = general_units_suffix(units);
+    let mut display_value = general_display_value(*value_mm, units);
+    let default_value = general_display_value(default_mm, units);
+    let input_width = (ui.available_width() - 25.0).max(48.0);
+    if resettable_value_input(
+        ui,
+        &mut display_value,
+        &default_value,
+        egui::vec2(input_width, 22.0),
+        &format!("Reset {label} to default"),
+        general_input_values_match,
+        |ui, value| {
+            let editor = egui::DragValue::new(value)
+                .speed(general_drag_speed(units))
+                .suffix(suffix);
+            if signed {
+                ui.add_sized(egui::vec2(input_width, 22.0), editor)
+            } else {
+                ui.add_sized(
+                    egui::vec2(input_width, 22.0),
+                    editor.range(0.001..=f64::MAX),
+                )
+            }
+        },
+    )
+    .changed()
+    {
+        *value_mm = general_storage_value(display_value, units);
+    }
+}
+
 fn general_circle_size_row(
     ui: &mut egui::Ui,
     draft: &mut CircleDraft,
@@ -5107,6 +5537,32 @@ fn general_design_tool_button(
         );
     }
 
+    response.on_hover_text(label)
+}
+
+fn general_profile_tool_button(ui: &mut egui::Ui, size: f32) -> egui::Response {
+    let label = "Create Profile Toolpath";
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::click());
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label)
+    });
+    if ui.is_rect_visible(rect) {
+        let visuals = ui.style().interact(&response);
+        ui.painter()
+            .rect_filled(rect, visuals.corner_radius, visuals.bg_fill);
+        ui.painter().rect_stroke(
+            rect,
+            visuals.corner_radius,
+            visuals.bg_stroke,
+            egui::StrokeKind::Inside,
+        );
+        draw_general_svg_icon(
+            ui.painter(),
+            rect.shrink(7.0),
+            general_profile_icon_strokes(),
+            visuals.fg_stroke.color,
+        );
+    }
     response.on_hover_text(label)
 }
 
@@ -6220,6 +6676,10 @@ mod tests {
             general_design_document: VectorDocument::default(),
             general_selected_object: None,
             general_temporary_tool: None,
+            general_profile_session: None,
+            general_profile_operation: None,
+            general_profile_toolpaths: Vec::new(),
+            general_gcode: String::new(),
             general_2d_transform: ViewTransform {
                 zoom: DEFAULT_PREVIEW_ZOOM / 4.0,
                 ..ViewTransform::default()
@@ -6309,6 +6769,17 @@ mod tests {
             #[cfg(debug_assertions)]
             debug_layout_overlay: false,
         }
+    }
+
+    fn profile_test_toolbits() -> Vec<GeneralToolbit> {
+        let mut tools = general_toolbit_presets();
+        for tool in &mut tools {
+            if tool.supports_profile_cut() {
+                tool.feed_mm_min = 600.0;
+                tool.plunge_mm_min = 200.0;
+            }
+        }
+        tools
     }
 
     fn test_segment(start: (f64, f64), end: (f64, f64)) -> PreviewSegment {
@@ -8513,6 +8984,192 @@ mod tests {
                 .query_by_label("3D orientation gizmo: X, Y, Z")
                 .is_some()
         );
+    }
+
+    #[test]
+    fn kittest_profile_tool_requires_selection_then_opens_a_contained_editor() {
+        let mut app = test_app();
+        app.tool_view = ToolView::GeneralPurpose;
+        app.general_toolbit_library.toolbits = profile_test_toolbits();
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(1000.0, 700.0))
+            .build_eframe(|_| app);
+        harness.run();
+
+        let button = harness.get_by_label("Create Profile Toolpath");
+        assert!((button.rect().width() - button.rect().height()).abs() < 0.5);
+        button.click();
+        harness.run();
+        assert!(harness.state().general_profile_session.is_none());
+
+        let id = harness
+            .state_mut()
+            .general_design_document
+            .add_circle(Point::new(-12.0, -8.0), 10.0)
+            .expect("valid selected circle");
+        harness.state_mut().general_selected_object = Some(id);
+        harness.run();
+        harness.get_by_label("Create Profile Toolpath").click();
+        harness.run();
+
+        for label in [
+            "Profile Cut",
+            "Cutter",
+            "Profile",
+            "Depths",
+            "Cut side",
+            "Additional offset",
+            "Cut depth",
+            "Pass depth",
+            "Safe height",
+            "Generate",
+            "Cancel",
+        ] {
+            assert!(
+                harness.query_all_by_label(label).next().is_some(),
+                "missing {label}"
+            );
+        }
+        let editor_right = ["Cutter panel", "Profile panel", "Depths panel"]
+            .map(|label| harness.get_by_label(label).rect().right())
+            .into_iter()
+            .fold(f32::NEG_INFINITY, f32::max);
+        assert!(editor_right <= 1000.0, "profile editor escaped the window");
+
+        harness.get_by_label("Cancel").click();
+        harness.run();
+        assert!(harness.state().general_profile_session.is_none());
+        assert!(harness.state().general_profile_operation.is_none());
+    }
+
+    #[test]
+    fn kittest_profile_editor_stays_usable_in_a_narrow_workbench() {
+        let mut app = test_app();
+        app.tool_view = ToolView::GeneralPurpose;
+        app.general_toolbit_library.toolbits = profile_test_toolbits();
+        let id = app
+            .general_design_document
+            .add_circle(Point::default(), 10.0)
+            .expect("profile source");
+        app.general_selected_object = Some(id);
+        let size = egui::vec2(640.0, 480.0);
+        let mut harness = Harness::builder().with_size(size).build_eframe(|_| app);
+        harness.run();
+
+        let tool_button = harness.get_by_label("Create Profile Toolpath");
+        assert!((tool_button.rect().width() - 44.0).abs() < 0.5);
+        assert!((tool_button.rect().height() - 44.0).abs() < 0.5);
+        tool_button.click();
+        harness.run();
+
+        for label in [
+            "Cutter panel",
+            "Profile panel",
+            "Depths panel",
+            "Generate",
+            "Cancel",
+        ] {
+            let rect = harness.get_by_label(label).rect();
+            assert!(
+                rect.min.x >= 0.0
+                    && rect.min.y >= 0.0
+                    && rect.max.x <= size.x
+                    && rect.max.y <= size.y,
+                "{label} escaped the narrow workbench: {rect:?}"
+            );
+        }
+        assert!(harness.get_by_label("Generate").rect().height() >= 26.0);
+    }
+
+    #[test]
+    fn kittest_profile_generation_populates_gcode_and_both_viewports() {
+        let mut app = test_app();
+        app.tool_view = ToolView::GeneralPurpose;
+        app.general_toolbit_library.toolbits = profile_test_toolbits();
+        let id = app
+            .general_design_document
+            .add_circle(Point::new(-12.0, -8.0), 10.0)
+            .expect("valid selected circle");
+        app.general_selected_object = Some(id);
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(1000.0, 700.0))
+            .build_eframe(|_| app);
+        harness.run();
+        harness.get_by_label("Create Profile Toolpath").click();
+        harness.run();
+
+        let Some(session) = &mut harness.state_mut().general_profile_session else {
+            panic!("profile editor session");
+        };
+        session.parameters.cut_side = ProfileCutSide::Inside;
+        session.parameters.additional_offset_mm = 0.25;
+        session.parameters.cut_depth_mm = 2.5;
+        session.parameters.pass_depth_mm = 1.0;
+        harness.run();
+        harness.get_by_label("Generate").click();
+        harness.run();
+
+        let state = harness.state();
+        assert_eq!(
+            state
+                .general_profile_operation
+                .as_ref()
+                .expect("generated operation")
+                .source_object_id,
+            id
+        );
+        assert_eq!(state.general_profile_toolpaths.len(), 3);
+        assert!(state.general_gcode.contains("(Cut side: Inside)"));
+        assert!(state.general_gcode.contains("G2 "));
+        assert!(state.general_gcode.ends_with("M5\nM2\n"));
+        assert!(
+            harness
+                .query_by_label("2D design view with profile toolpath")
+                .is_some()
+        );
+        assert!(matches!(
+            state.general_scene().objects.last(),
+            Some(GeneralSceneObject::ProfileToolpath { points, closed: true })
+                if points.len() == 128
+        ));
+
+        let original_start_x = state.general_profile_toolpaths[0].points[0].x_mm;
+        harness
+            .state_mut()
+            .general_design_document
+            .update_circle(id, Point::new(-12.0, -8.0), 14.0)
+            .expect("updated source circle");
+        harness
+            .state_mut()
+            .rebuild_general_profile_output()
+            .expect("regenerated profile");
+        assert_ne!(
+            harness.state().general_profile_toolpaths[0].points[0].x_mm,
+            original_start_x
+        );
+
+        harness.get_by_label("3D View").click();
+        harness.run();
+        assert!(
+            harness
+                .query_by_label("3D job view with profile toolpath")
+                .is_some()
+        );
+
+        harness.get_by_label("2D View").click();
+        harness.run();
+        harness.key_press(egui::Key::Delete);
+        harness.run();
+        assert!(harness.state().general_profile_operation.is_none());
+        assert!(harness.state().general_profile_toolpaths.is_empty());
+        assert!(harness.state().general_gcode.is_empty());
+    }
+
+    #[test]
+    fn general_profile_tool_svg_is_valid() {
+        let svg = include_str!("../assets/tool-icons/profile.svg");
+        assert!(svg.contains("viewBox=\"0 0 24 24\""));
+        assert!(!general_profile_icon_strokes().is_empty());
     }
 
     #[test]

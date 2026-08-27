@@ -49,6 +49,7 @@ User guide
 * `User reference <#user-reference>`_
 * `Troubleshooting <#troubleshooting>`_
 * `Toolbit library <#toolbit-library>`_
+* `General profile toolpaths <#general-profile-toolpaths>`_
 
 Developer guide
 ---------------
@@ -67,11 +68,13 @@ without making the required ``rst2html`` build depend on Sphinx.
 .. include:: user/reference.rst
 .. include:: user/troubleshooting.rst
 .. include:: user/toolbits.rst
+.. include:: user/profile-toolpaths.rst
 .. include:: developer/architecture.rst
 .. include:: developer/algorithms.rst
 .. include:: developer/compatibility.rst
 .. include:: developer/testing.rst
 .. include:: developer/toolbits.rst
+.. include:: developer/general-profile-toolpaths.rst
 
 Current scope
 -------------

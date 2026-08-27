@@ -30,7 +30,7 @@ pub(crate) struct GeneralScene {
     pub(crate) objects: Vec<GeneralSceneObject>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) enum GeneralSceneObject {
     JobStock {
         width_mm: f64,
@@ -41,6 +41,10 @@ pub(crate) enum GeneralSceneObject {
         center_mm: Point,
         radius_mm: f64,
         preview: bool,
+    },
+    ProfileToolpath {
+        points: Vec<PreviewPoint3d>,
+        closed: bool,
     },
 }
 
@@ -67,50 +71,55 @@ impl GeneralScene {
             z: f64::NEG_INFINITY,
         };
         let mut has_points = false;
+        let mut include_point = |point: PreviewPoint3d| {
+            min.x = min.x.min(point.x);
+            min.y = min.y.min(point.y);
+            min.z = min.z.min(point.z);
+            max.x = max.x.max(point.x);
+            max.y = max.y.max(point.y);
+            max.z = max.z.max(point.z);
+            has_points = true;
+        };
 
         for object in &self.objects {
-            let points = match object {
+            match object {
                 GeneralSceneObject::JobStock {
                     width_mm,
                     height_mm,
                     thickness_mm,
-                } => [
-                    PreviewPoint3d {
+                } => {
+                    include_point(PreviewPoint3d {
                         x: -width_mm / 2.0,
                         y: -height_mm / 2.0,
                         z: -thickness_mm,
-                    },
-                    PreviewPoint3d {
+                    });
+                    include_point(PreviewPoint3d {
                         x: width_mm / 2.0,
                         y: height_mm / 2.0,
                         z: 0.0,
-                    },
-                ],
+                    });
+                }
                 GeneralSceneObject::DesignCircle {
                     center_mm,
                     radius_mm,
                     ..
-                } => [
-                    PreviewPoint3d {
+                } => {
+                    include_point(PreviewPoint3d {
                         x: center_mm.x - radius_mm,
                         y: center_mm.y - radius_mm,
                         z: 0.0,
-                    },
-                    PreviewPoint3d {
+                    });
+                    include_point(PreviewPoint3d {
                         x: center_mm.x + radius_mm,
                         y: center_mm.y + radius_mm,
                         z: 0.0,
-                    },
-                ],
-            };
-            for point in points {
-                min.x = min.x.min(point.x);
-                min.y = min.y.min(point.y);
-                min.z = min.z.min(point.z);
-                max.x = max.x.max(point.x);
-                max.y = max.y.max(point.y);
-                max.z = max.z.max(point.z);
-                has_points = true;
+                    });
+                }
+                GeneralSceneObject::ProfileToolpath { points, .. } => {
+                    for point in points {
+                        include_point(*point);
+                    }
+                }
             }
         }
 
@@ -1590,7 +1599,8 @@ pub(crate) fn draw_general_scene_3d(
             } => {
                 faces.extend(general_stock_faces(*width_mm, *height_mm, *thickness_mm));
             }
-            GeneralSceneObject::DesignCircle { .. } => {}
+            GeneralSceneObject::DesignCircle { .. }
+            | GeneralSceneObject::ProfileToolpath { .. } => {}
         }
     }
     faces.retain(|face| general_face_camera_alignment(face.vertices, yaw, pitch) > 0.01);
@@ -1644,6 +1654,21 @@ pub(crate) fn draw_general_scene_3d(
             })
             .collect();
         painter.add(egui::Shape::line(points, egui::Stroke::new(2.0, color)));
+    }
+
+    let toolpath_stroke = egui::Stroke::new(2.4, egui::Color32::from_rgb(45, 174, 105));
+    for object in &scene.objects {
+        let GeneralSceneObject::ProfileToolpath { points, closed } = object else {
+            continue;
+        };
+        let projected = points.iter().copied().map(project).collect::<Vec<_>>();
+        if projected.len() < 2 {
+            continue;
+        }
+        painter.add(egui::Shape::line(projected.clone(), toolpath_stroke));
+        if *closed {
+            painter.line_segment([*projected.last().unwrap(), projected[0]], toolpath_stroke);
+        }
     }
 }
 

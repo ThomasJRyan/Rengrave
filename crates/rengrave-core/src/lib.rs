@@ -7,6 +7,7 @@ pub mod export;
 pub mod external;
 pub mod font;
 pub mod gcode;
+pub mod general_profile;
 pub mod general_toolbit;
 pub mod geometry;
 pub mod layout;

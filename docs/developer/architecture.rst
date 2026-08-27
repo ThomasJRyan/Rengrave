@@ -82,9 +82,10 @@ values and text values can use appropriate equality rules.
 The 2D canvas and rulers use the selected display unit for screen coordinates
 and labels. When the unit selection changes, the workbench inversely rescales
 its view zoom by ``25.4`` so the same physical canvas remains the same size on
-screen while ruler values change to the new unit. The conversion is currently
-local to the layout-only General workbench; it should become part of the
-shared project model when that workbench gains a functional backend.
+screen while ruler values change to the new unit. The native General profile
+editor uses the same conversion boundary for offset, cut depth, pass depth,
+and safe-height fields. Canonical profile parameters and generated G-code
+remain millimetre based.
 
 The left ruler intentionally inverts its displayed value relative to the
 screen-space Y value: ``general_y_ruler_label(y, step)`` delegates to the

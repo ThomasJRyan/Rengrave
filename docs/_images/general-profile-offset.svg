@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 230" role="img" aria-labelledby="title desc">
+  <title id="title">Profile cutter compensation</title>
+  <desc id="desc">Three closed vectors showing on-line, outside, and inside cutter centerlines.</desc>
+  <rect width="720" height="230" fill="#202326"/>
+  <g font-family="sans-serif" font-size="16" fill="#d6dcdf" text-anchor="middle">
+    <text x="120" y="28">On the line</text>
+    <text x="360" y="28">Outside</text>
+    <text x="600" y="28">Inside</text>
+  </g>
+  <g fill="none" stroke-linejoin="round">
+    <g transform="translate(120 125)">
+      <rect x="-58" y="-58" width="116" height="116" stroke="#78848a" stroke-width="3"/>
+      <rect x="-58" y="-58" width="116" height="116" stroke="#2dae69" stroke-width="4" stroke-dasharray="9 6"/>
+    </g>
+    <g transform="translate(360 125)">
+      <rect x="-48" y="-48" width="96" height="96" stroke="#78848a" stroke-width="3"/>
+      <rect x="-65" y="-65" width="130" height="130" stroke="#2dae69" stroke-width="4" stroke-dasharray="9 6"/>
+    </g>
+    <g transform="translate(600 125)">
+      <rect x="-65" y="-65" width="130" height="130" stroke="#78848a" stroke-width="3"/>
+      <rect x="-48" y="-48" width="96" height="96" stroke="#2dae69" stroke-width="4" stroke-dasharray="9 6"/>
+    </g>
+  </g>
+  <g font-family="sans-serif" font-size="13" text-anchor="middle">
+    <text x="360" y="218" fill="#78848a">selected vector</text>
+    <text x="480" y="218" fill="#2dae69">cutter centerline</text>
+  </g>
+</svg>

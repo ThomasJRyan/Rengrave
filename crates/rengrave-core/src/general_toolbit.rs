@@ -139,6 +139,15 @@ impl Default for GeneralToolbit {
 }
 
 impl GeneralToolbit {
+    pub fn supports_profile_cut(&self) -> bool {
+        matches!(
+            self.kind,
+            GeneralToolbitKind::Endmill
+                | GeneralToolbitKind::Ballnose
+                | GeneralToolbitKind::Bullnose
+        )
+    }
+
     pub fn validate(&self) -> Vec<String> {
         let mut errors = Vec::new();
         if self.label.trim().is_empty() {
