@@ -153,3 +153,199 @@ hr { border: 0; border-top: 1px solid var(--border); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; }
 }
+
+/* Sphinx/Alabaster layout overrides. The reading surface is intentionally
+   compact and tool-like: navigation stays available without competing with
+   the documentation itself. */
+
+body {
+  background: var(--bg) !important;
+  color: var(--text) !important;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif !important;
+}
+
+div.document {
+  width: min(1180px, calc(100% - 3rem));
+  max-width: none;
+  margin: 2rem auto 0;
+}
+
+div.documentwrapper { width: 100%; }
+
+div.bodywrapper {
+  margin: 0 0 0 252px;
+}
+
+div.body {
+  padding: 2.75rem clamp(2rem, 5vw, 4.75rem) 4.5rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+}
+
+div.body > .section:first-child > h1 { margin-top: 0; }
+
+div.sphinxsidebar {
+  position: relative;
+  float: left;
+  width: 220px;
+  color: var(--text-muted);
+}
+
+div.sphinxsidebarwrapper {
+  position: sticky;
+  top: 1.5rem;
+  padding: 0.5rem 0.5rem 1rem;
+}
+
+div.sphinxsidebar h1.logo,
+div.sphinxsidebar h1.logo-name {
+  margin: 0 0 1.5rem;
+  padding: 0 0 1rem;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  font-size: 1.15rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+div.sphinxsidebar h1.logo a {
+  color: var(--green);
+  text-decoration: none;
+}
+
+div.sphinxsidebar h3 {
+  margin: 1.25rem 0 0.45rem;
+  color: var(--text-dim);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  line-height: 1.3;
+  text-transform: uppercase;
+}
+
+div.sphinxsidebar p.caption {
+  margin: 1.1rem 0 0.35rem;
+  color: var(--text-dim);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  line-height: 1.3;
+  text-transform: uppercase;
+}
+
+div.sphinxsidebar ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+div.sphinxsidebar ul li.toctree-l1 > a,
+div.sphinxsidebar ul li.toctree-l2 > a {
+  display: block;
+  padding: 0.34rem 0.55rem;
+  border: 0;
+  border-radius: 4px;
+  color: var(--text-muted);
+  font-size: 0.88rem;
+  line-height: 1.35;
+}
+
+div.sphinxsidebar ul li.toctree-l1 > a:hover,
+div.sphinxsidebar ul li.current > a {
+  background: var(--green-deep);
+  color: var(--green);
+  text-decoration: none;
+}
+
+div.sphinxsidebar #searchbox { margin: 0 0 1.25rem; }
+div.sphinxsidebar .search > div { display: block; }
+div.sphinxsidebar input {
+  min-height: 2.25rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface-code);
+  color: var(--text);
+  font: inherit;
+}
+div.sphinxsidebar input[type="text"] { width: calc(100% - 3.2rem); padding: 0.35rem 0.55rem; }
+div.sphinxsidebar input[type="submit"] { width: 2.7rem; color: var(--text-muted); cursor: pointer; }
+div.sphinxsidebar input:focus { outline: 2px solid var(--green); outline-offset: 2px; }
+
+div.body h1,
+div.body h2,
+div.body h3,
+div.body h4,
+div.body h5,
+div.body h6 {
+  font-family: inherit;
+  color: var(--text);
+  font-weight: 650;
+}
+
+div.body h1 {
+  max-width: 22ch;
+  margin: 0 0 1.4rem;
+  padding: 0;
+  color: var(--green);
+  font-size: clamp(2.25rem, 5vw, 3.6rem);
+  line-height: 1.08;
+}
+
+div.body h2 {
+  margin: 3rem 0 1rem;
+  padding: 1rem 0 0;
+  border-top: 1px solid var(--border);
+  font-size: 1.6rem;
+}
+
+div.body h3 { margin: 2rem 0 0.65rem; color: var(--green); font-size: 1.18rem; }
+div.body h4, div.body h5, div.body h6 { margin: 1.5rem 0 0.5rem; color: var(--text-muted); }
+div.body p, div.body li, div.body dd { max-width: 72ch; }
+div.body p { text-wrap: pretty; }
+
+div.body a { color: var(--green); }
+div.body a:hover { color: #a6f0c2; }
+div.body a.headerlink { color: var(--text-dim); }
+
+div.body .toctree-wrapper {
+  margin: 1.5rem 0 2.75rem;
+  padding: 1rem 1.2rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-raised);
+}
+div.body .toctree-wrapper p.caption {
+  margin: 0 0 0.55rem;
+  color: var(--green);
+  font-weight: 700;
+}
+div.body .toctree-wrapper ul { margin: 0; }
+div.body .toctree-wrapper li { margin: 0.22rem 0; }
+
+div.footer {
+  width: min(1180px, calc(100% - 3rem));
+  margin: 1rem auto 2rem;
+  color: var(--text-dim);
+  font-size: 0.78rem;
+}
+div.footer a { color: var(--text-muted); }
+
+@media (max-width: 54rem) {
+  div.document { width: min(100% - 1.5rem, 48rem); margin-top: 0.75rem; }
+  div.bodywrapper { margin: 0; }
+  div.sphinxsidebar {
+    float: none;
+    width: auto;
+    margin-bottom: 0.75rem;
+  }
+  div.sphinxsidebarwrapper { position: static; padding: 0.5rem 0.25rem; }
+  div.sphinxsidebar h1.logo { margin-bottom: 0.75rem; padding-bottom: 0.75rem; }
+  div.sphinxsidebar ul { display: flex; flex-wrap: wrap; gap: 0.15rem 0.25rem; }
+  div.sphinxsidebar ul li.toctree-l1 > a { padding: 0.3rem 0.45rem; font-size: 0.8rem; }
+  div.sphinxsidebar p.caption, div.sphinxsidebar h3 { display: none; }
+  div.body { padding: 2rem 1.25rem 3rem; }
+  div.body h1 { font-size: clamp(2rem, 9vw, 3rem); }
+  div.footer { width: calc(100% - 1.5rem); }
+}

@@ -34,9 +34,6 @@ that still need a native screenshot or a final product decision.
    :alt: Placeholder for a native R-Engrave desktop screenshot
    :width: 100%
 
-User guide
-----------
-
 .. toctree::
    :maxdepth: 2
    :caption: User guide
@@ -47,9 +44,6 @@ User guide
    user/troubleshooting
    user/toolbits
    user/profile-toolpaths
-
-Developer guide
----------------
 
 .. toctree::
    :maxdepth: 2
