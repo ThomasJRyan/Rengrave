@@ -60,6 +60,11 @@ to the right and allocate value editors at 60 percent of the row's remaining
 width. The generated-list width is captured before entering its scroll area;
 rows reserve space for the visibility toggle and cap the clickable label so
 long labels cannot expand past the panel edge.
+Profile editor rows use a shared fixed label-column token and a common value
+width calculation, with right-to-left value placement for a stable comparison
+column. Toolpath visibility checkboxes expose semantic ``Show toolpath <id>``
+labels while rendering without a text caption, preserving the available row
+width.
 
 For tool radius :math:`r` and additional offset :math:`a`, the signed exterior
 offset is:

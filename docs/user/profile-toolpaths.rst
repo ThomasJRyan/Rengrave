@@ -90,3 +90,7 @@ The toolpath generator is contained in its own panel at the top of the
 Toolpath Panel. Its controls expand to the available panel width, while the
 toolpath list below is capped and clipped to the panel bounds for narrow
 workspaces.
+
+Profile settings use a consistent label/value column so related dimensions and
+rates are easy to compare. Visibility controls in the list are compact
+checkboxes; hover over one to see its meaning.

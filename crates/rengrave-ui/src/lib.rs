@@ -97,6 +97,7 @@ const GENERAL_DEFAULT_JOB_HEIGHT_MM: f64 = 100.0;
 const GENERAL_DEFAULT_JOB_THICKNESS_MM: f64 = 10.0;
 const GENERAL_DEFAULT_SAFE_HEIGHT_MM: f64 = 3.0;
 const GENERAL_DEFAULT_CIRCLE_RADIUS_MM: f64 = 10.0;
+const GENERAL_PROFILE_LABEL_WIDTH: f32 = 104.0;
 const MAX_RECENT_PROJECTS: usize = 10;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3093,8 +3094,15 @@ impl RengraveApp {
                         if response.double_clicked() {
                             edit_id = Some(record.id);
                         }
-                        ui.checkbox(&mut record.enabled, "Show")
-                            .on_hover_text("Show this toolpath in the 2D and 3D views");
+                        let visibility = ui.checkbox(&mut record.enabled, "");
+                        visibility.widget_info(|| {
+                            egui::WidgetInfo::labeled(
+                                egui::WidgetType::Checkbox,
+                                ui.is_enabled(),
+                                format!("Show toolpath {}", record.id),
+                            )
+                        });
+                        visibility.on_hover_text("Show this toolpath in the 2D and 3D views");
                     });
                 }
             });
@@ -5316,7 +5324,10 @@ fn readiness_row(ui: &mut egui::Ui, label: &str, value: &str) {
 
 fn readiness_row_colored(ui: &mut egui::Ui, label: &str, value: &str, color: egui::Color32) {
     ui.horizontal(|ui| {
-        ui.label(label);
+        ui.add_sized(
+            egui::vec2(GENERAL_PROFILE_LABEL_WIDTH, 22.0),
+            egui::Label::new(label).truncate(),
+        );
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.label(egui::RichText::new(value).color(color));
         });
@@ -5336,7 +5347,10 @@ struct JobStatistics {
 
 fn stat_row(ui: &mut egui::Ui, label: &str, value: &str) {
     ui.horizontal(|ui| {
-        ui.label(label);
+        ui.add_sized(
+            egui::vec2(GENERAL_PROFILE_LABEL_WIDTH, 22.0),
+            egui::Label::new(label).truncate(),
+        );
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.monospace(value);
         });
@@ -5699,7 +5713,10 @@ fn general_profile_dimension_field(
     ui.horizontal(|ui| {
         let mut display_value = general_display_value(*value_mm, units);
         let default_value = general_display_value(default_mm, units);
-        ui.label(label);
+        ui.add_sized(
+            egui::vec2(GENERAL_PROFILE_LABEL_WIDTH, 22.0),
+            egui::Label::new(label).truncate(),
+        );
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let input_width = ((ui.available_width() - 25.0) * 0.6).max(48.0);
             if resettable_value_input(
@@ -5731,7 +5748,10 @@ fn general_profile_dimension_field(
 
 fn general_profile_rate_field(ui: &mut egui::Ui, label: &str, value: &mut f64, default: f64) {
     ui.horizontal(|ui| {
-        ui.label(label);
+        ui.add_sized(
+            egui::vec2(GENERAL_PROFILE_LABEL_WIDTH, 22.0),
+            egui::Label::new(label).truncate(),
+        );
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let input_width = ((ui.available_width() - 25.0) * 0.6).max(48.0);
             let response = ui.add_sized(
@@ -9519,7 +9539,7 @@ mod tests {
         assert_eq!(harness.state().general_toolpaths.len(), 2);
         assert!(harness.query_by_label("Toolpaths (2)").is_some());
         harness
-            .query_all_by_label("Show")
+            .query_all_by_label("Show toolpath 1")
             .next()
             .expect("first toolpath visibility control")
             .click();
