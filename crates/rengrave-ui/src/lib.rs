@@ -3017,28 +3017,28 @@ impl RengraveApp {
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
-                        ui.strong("Toolpaths");
-                        ui.add_space(6.0);
-                        let button_size = 44.0_f32.min(ui.available_width());
-                        let enabled = self.general_selected_object.is_some();
-                        let response = ui
-                            .add_enabled_ui(enabled, |ui| {
-                                general_profile_tool_button(ui, button_size)
-                            })
-                            .inner;
-                        if response.clicked()
-                            && let Some(source_object_id) = self.general_selected_object
-                        {
-                            self.begin_general_profile(source_object_id);
-                        }
-                        ui.add_space(6.0);
-                        if self.general_selected_object.is_none() {
-                            ui.weak(
-                                "Select a closed vector in the 2D View to create a profile cut.",
-                            );
-                        } else {
-                            ui.weak("Profile follows the selected vector's exterior boundary.");
-                        }
+                        general_toolpath_setup_group(ui, "Toolpath Generation", |ui, _| {
+                            let button_size = 44.0_f32.min(ui.available_width());
+                            let enabled = self.general_selected_object.is_some();
+                            let response = ui
+                                .add_enabled_ui(enabled, |ui| {
+                                    general_profile_tool_button(ui, button_size)
+                                })
+                                .inner;
+                            if response.clicked()
+                                && let Some(source_object_id) = self.general_selected_object
+                            {
+                                self.begin_general_profile(source_object_id);
+                            }
+                            ui.add_space(6.0);
+                            if self.general_selected_object.is_none() {
+                                ui.weak(
+                                    "Select a closed vector in the 2D View to create a profile cut.",
+                                );
+                            } else {
+                                ui.weak("Profile follows the selected vector's exterior boundary.");
+                            }
+                        });
                     });
             },
         );
@@ -3057,6 +3057,8 @@ impl RengraveApp {
         }
 
         let mut edit_id = None;
+        let list_width = ui.available_width().min(320.0);
+        ui.set_width(list_width);
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
@@ -3067,7 +3069,7 @@ impl RengraveApp {
                         record.operation.source_object_id.get()
                     );
                     ui.horizontal(|ui| {
-                        let row_width = (ui.available_width() - 50.0).clamp(0.0, 320.0);
+                        let row_width = (list_width - 50.0).max(0.0);
                         let response = egui::Frame::new()
                             .fill(if selected {
                                 ui.visuals().selection.bg_fill
@@ -5420,8 +5422,11 @@ fn general_setup_group_with_max_width(
     let frame = egui::Frame::group(ui.style()).inner_margin(egui::Margin::same(6));
     let frame_margin = frame.total_margin();
     let horizontal_frame_margin = frame_margin.left + frame_margin.right;
-    let (outer_width, content_width) =
-        general_setup_group_widths(max_width.min(ui.available_width()), horizontal_frame_margin);
+    let (outer_width, content_width) = general_setup_group_widths_with_max_width(
+        max_width.min(ui.available_width()),
+        horizontal_frame_margin,
+        max_width,
+    );
     let frame_response = ui
         .allocate_ui_with_layout(
             egui::vec2(outer_width, 0.0),
@@ -5449,8 +5454,21 @@ fn general_setup_group_with_max_width(
     ui.add_space(2.0);
 }
 
+#[allow(dead_code)] // exercised by the responsive layout test
 fn general_setup_group_widths(available_width: f32, horizontal_frame_margin: f32) -> (f32, f32) {
-    let outer_width = GENERAL_SETUP_MAX_WIDTH.min(available_width);
+    general_setup_group_widths_with_max_width(
+        available_width,
+        horizontal_frame_margin,
+        GENERAL_SETUP_MAX_WIDTH,
+    )
+}
+
+fn general_setup_group_widths_with_max_width(
+    available_width: f32,
+    horizontal_frame_margin: f32,
+    max_width: f32,
+) -> (f32, f32) {
+    let outer_width = max_width.min(available_width);
     let content_width = (outer_width - horizontal_frame_margin).max(0.0);
     (outer_width, content_width)
 }
@@ -5679,45 +5697,49 @@ fn general_profile_dimension_field(
     signed: bool,
 ) {
     ui.horizontal(|ui| {
-        ui.add_sized(egui::vec2(48.0, 22.0), egui::Label::new(label).truncate());
         let mut display_value = general_display_value(*value_mm, units);
         let default_value = general_display_value(default_mm, units);
-        let input_width = ((ui.available_width() - 25.0) * 0.6).max(48.0);
-        if resettable_value_input(
-            ui,
-            &mut display_value,
-            &default_value,
-            egui::vec2(input_width, 22.0),
-            &format!("Reset {label} to default"),
-            general_input_values_match,
-            |ui, value| {
-                let editor = egui::DragValue::new(value).speed(general_drag_speed(units));
-                if signed {
-                    ui.add_sized(egui::vec2(input_width, 22.0), editor)
-                } else {
-                    ui.add_sized(
-                        egui::vec2(input_width, 22.0),
-                        editor.range(0.001..=f64::MAX),
-                    )
-                }
-            },
-        )
-        .changed()
-        {
-            *value_mm = general_storage_value(display_value, units);
-        }
+        ui.label(label);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let input_width = ((ui.available_width() - 25.0) * 0.6).max(48.0);
+            if resettable_value_input(
+                ui,
+                &mut display_value,
+                &default_value,
+                egui::vec2(input_width, 22.0),
+                &format!("Reset {label} to default"),
+                general_input_values_match,
+                |ui, value| {
+                    let editor = egui::DragValue::new(value).speed(general_drag_speed(units));
+                    if signed {
+                        ui.add_sized(egui::vec2(input_width, 22.0), editor)
+                    } else {
+                        ui.add_sized(
+                            egui::vec2(input_width, 22.0),
+                            editor.range(0.001..=f64::MAX),
+                        )
+                    }
+                },
+            )
+            .changed()
+            {
+                *value_mm = general_storage_value(display_value, units);
+            }
+        });
     });
 }
 
 fn general_profile_rate_field(ui: &mut egui::Ui, label: &str, value: &mut f64, default: f64) {
     ui.horizontal(|ui| {
         ui.label(label);
-        let input_width = ((ui.available_width() - 25.0) * 0.6).max(48.0);
-        let response = ui.add_sized(
-            egui::vec2(input_width, 22.0),
-            egui::DragValue::new(value).speed(1.0).range(0.0..=f64::MAX),
-        );
-        response.on_hover_text(format!("{label}; toolbit default {default:.1} mm/min"));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let input_width = ((ui.available_width() - 25.0) * 0.6).max(48.0);
+            let response = ui.add_sized(
+                egui::vec2(input_width, 22.0),
+                egui::DragValue::new(value).speed(1.0).range(0.0..=f64::MAX),
+            );
+            response.on_hover_text(format!("{label}; toolbit default {default:.1} mm/min"));
+        });
     });
 }
 
@@ -9159,6 +9181,7 @@ mod tests {
             "3D View",
             "Centre Job (F7)",
             "Toolpath Panel",
+            "Toolpath Generation panel",
             "Job Size",
             "Safe height",
             "Z Zero Position",

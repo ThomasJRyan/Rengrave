@@ -53,6 +53,14 @@ one source vector without overwriting one another. A row click updates the
 selected source object, while a double-click creates a profile edit session
 for the same record.
 
+The generator uses ``general_toolpath_setup_group`` so its frame width is
+derived from the available Toolpath Panel width rather than the narrower
+design-panel maximum. Profile dimension and rate rows justify their controls
+to the right and allocate value editors at 60 percent of the row's remaining
+width. The generated-list width is captured before entering its scroll area;
+rows reserve space for the visibility toggle and cap the clickable label so
+long labels cannot expand past the panel edge.
+
 For tool radius :math:`r` and additional offset :math:`a`, the signed exterior
 offset is:
 

@@ -85,3 +85,8 @@ Click a row to select its source vector in the 2D view. Use **Show** to enable
 or disable that toolpath in the 2D and 3D previews. Double-click a row to reopen
 its profile settings and update the existing toolpath. Generating another
 profile adds a separate row, including when it uses the same vector.
+
+The toolpath generator is contained in its own panel at the top of the
+Toolpath Panel. Its controls expand to the available panel width, while the
+toolpath list below is capped and clipped to the panel bounds for narrow
+workspaces.
