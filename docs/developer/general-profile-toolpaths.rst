@@ -37,6 +37,18 @@ then passes edited values to the writer. The tool snapshot remains useful for
 identity, cutter geometry, and spindle direction without making library rate
 edits retroactively alter an existing operation.
 
+Toolpath records and visibility
+--------------------------------
+
+The UI stores each successful generation as a ``GeneralToolpathRecord`` with a
+stable session-local identifier, the frozen ``GeneralProfileOperation``, its
+derived contours, G-code buffer, and an ``enabled`` flag. New generations
+append records; editing a row updates that record by identifier. Rendering
+iterates enabled records in insertion order, so multiple operations may target
+one source vector without overwriting one another. A row click updates the
+selected source object, while a double-click creates a profile edit session
+for the same record.
+
 For tool radius :math:`r` and additional offset :math:`a`, the signed exterior
 offset is:
 

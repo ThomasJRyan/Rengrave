@@ -68,3 +68,14 @@ The generated buffer is deterministic metric G-code. It contains absolute
 positioning, tool selection, spindle direction, safe moves, the configured
 per-operation plunge/feed rates, one closed profile move per depth pass, and a
 normal spindle stop/program end.
+
+Toolpath list
+-------------
+
+Every generated profile cut is retained in the lower half of the Toolpath
+Panel. The list identifies the source vector, cut side, and tool number.
+
+Click a row to select its source vector in the 2D view. Use **Show** to enable
+or disable that toolpath in the 2D and 3D previews. Double-click a row to reopen
+its profile settings and update the existing toolpath. Generating another
+profile adds a separate row, including when it uses the same vector.
