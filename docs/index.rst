@@ -44,6 +44,7 @@ that still need a native screenshot or a final product decision.
    user/troubleshooting
    user/toolbits
    user/profile-toolpaths
+   user/pocket-toolpaths
 
 .. toctree::
    :maxdepth: 2
@@ -55,6 +56,7 @@ that still need a native screenshot or a final product decision.
    developer/testing
    developer/toolbits
    developer/general-profile-toolpaths
+   developer/general-pocket-toolpaths
 
 Current scope
 -------------

@@ -21,6 +21,10 @@ use rengrave_core::design::{DesignCircle, DesignGeometry, DesignObjectId, Vector
 use rengrave_core::dxf::read_dxf_font;
 use rengrave_core::external::is_bitmap_input;
 use rengrave_core::font::{Font, Stroke, read_cxf, read_ttf};
+use rengrave_core::general_pocket::{
+    GeneralPocketOperation, GeneratedPocket, PocketCutMode, PocketParameters, PocketPathPattern,
+    generate_pocket,
+};
 use rengrave_core::general_profile::{
     GeneralProfileOperation, GeneratedProfile, ProfileCutSide, ProfileParameters,
     ProfileToolpathContour, generate_profile,
@@ -192,9 +196,40 @@ struct ProfileToolSession {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+struct PocketToolSession {
+    source_object_id: DesignObjectId,
+    editing_toolpath_id: Option<u64>,
+    selected_tool_id: Option<String>,
+    parameters: PocketParameters,
+    defaults: PocketParameters,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum GeneralToolpathOperation {
+    Profile(GeneralProfileOperation),
+    Pocket(GeneralPocketOperation),
+}
+
+impl GeneralToolpathOperation {
+    fn source_object_id(&self) -> DesignObjectId {
+        match self {
+            Self::Profile(operation) => operation.source_object_id,
+            Self::Pocket(operation) => operation.source_object_id,
+        }
+    }
+
+    fn label(&self) -> &'static str {
+        match self {
+            Self::Profile(_) => "Profile",
+            Self::Pocket(_) => "Pocket",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 struct GeneralToolpathRecord {
     id: u64,
-    operation: GeneralProfileOperation,
+    operation: GeneralToolpathOperation,
     contours: Vec<ProfileToolpathContour>,
     gcode: String,
     enabled: bool,
@@ -317,7 +352,9 @@ struct RengraveApp {
     general_selected_object: Option<DesignObjectId>,
     general_temporary_tool: Option<GeneralTemporaryTool>,
     general_profile_session: Option<ProfileToolSession>,
+    general_pocket_session: Option<PocketToolSession>,
     general_profile_operation: Option<GeneralProfileOperation>,
+    general_pocket_operation: Option<GeneralPocketOperation>,
     general_profile_toolpaths: Vec<ProfileToolpathContour>,
     general_gcode: String,
     general_toolpaths: Vec<GeneralToolpathRecord>,
@@ -489,7 +526,9 @@ impl RengraveApp {
             general_selected_object: None,
             general_temporary_tool: None,
             general_profile_session: None,
+            general_pocket_session: None,
             general_profile_operation: None,
+            general_pocket_operation: None,
             general_profile_toolpaths: Vec::new(),
             general_gcode: String::new(),
             general_toolpaths: Vec::new(),
@@ -793,7 +832,9 @@ impl RengraveApp {
         self.general_selected_object = None;
         self.general_temporary_tool = None;
         self.general_profile_session = None;
+        self.general_pocket_session = None;
         self.general_profile_operation = None;
+        self.general_pocket_operation = None;
         self.general_profile_toolpaths.clear();
         self.general_gcode.clear();
         self.general_toolpaths.clear();
@@ -898,7 +939,9 @@ impl RengraveApp {
         self.general_selected_object = None;
         self.general_temporary_tool = None;
         self.general_profile_session = None;
+        self.general_pocket_session = None;
         self.general_profile_operation = None;
+        self.general_pocket_operation = None;
         self.general_profile_toolpaths.clear();
         self.general_gcode.clear();
         self.general_toolpaths.clear();
@@ -2681,16 +2724,63 @@ impl RengraveApp {
     }
 
     fn begin_general_profile_edit(&mut self, record: &GeneralToolpathRecord) {
-        self.general_selected_object = Some(record.operation.source_object_id);
+        let GeneralToolpathOperation::Profile(operation) = &record.operation else {
+            return;
+        };
+        self.general_selected_object = Some(operation.source_object_id);
         let mut defaults = ProfileParameters::default();
-        defaults.feed_mm_min = record.operation.tool.feed_mm_min;
-        defaults.plunge_mm_min = record.operation.tool.plunge_mm_min;
+        defaults.feed_mm_min = operation.tool.feed_mm_min;
+        defaults.plunge_mm_min = operation.tool.plunge_mm_min;
         defaults.safe_height_mm = self.general_job_setup.safe_height_mm;
         self.general_profile_session = Some(ProfileToolSession {
-            source_object_id: record.operation.source_object_id,
+            source_object_id: operation.source_object_id,
             editing_toolpath_id: Some(record.id),
-            selected_tool_id: Some(record.operation.tool.id.clone()),
-            parameters: record.operation.parameters,
+            selected_tool_id: Some(operation.tool.id.clone()),
+            parameters: operation.parameters,
+            defaults,
+        });
+    }
+
+    fn begin_general_pocket(&mut self, source_object_id: DesignObjectId) {
+        let selected_tool_id = self
+            .general_toolbit_library
+            .toolbits
+            .iter()
+            .find(|tool| general_profile_tool_is_selectable(tool))
+            .map(|tool| tool.id.clone());
+        let mut defaults = PocketParameters::default();
+        if let Some(tool) = selected_tool_id.as_deref().and_then(|id| {
+            self.general_toolbit_library
+                .toolbits
+                .iter()
+                .find(|tool| tool.id == id)
+        }) {
+            defaults.feed_mm_min = tool.feed_mm_min;
+            defaults.plunge_mm_min = tool.plunge_mm_min;
+        }
+        defaults.safe_height_mm = self.general_job_setup.safe_height_mm;
+        self.general_pocket_session = Some(PocketToolSession {
+            source_object_id,
+            editing_toolpath_id: None,
+            selected_tool_id,
+            parameters: defaults,
+            defaults,
+        });
+    }
+
+    fn begin_general_pocket_edit(&mut self, record: &GeneralToolpathRecord) {
+        let GeneralToolpathOperation::Pocket(operation) = &record.operation else {
+            return;
+        };
+        self.general_selected_object = Some(operation.source_object_id);
+        let mut defaults = operation.parameters;
+        defaults.feed_mm_min = operation.tool.feed_mm_min;
+        defaults.plunge_mm_min = operation.tool.plunge_mm_min;
+        self.general_pocket_session = Some(PocketToolSession {
+            source_object_id: operation.source_object_id,
+            editing_toolpath_id: Some(record.id),
+            selected_tool_id: Some(operation.tool.id.clone()),
+            parameters: operation.parameters,
             defaults,
         });
     }
@@ -2728,7 +2818,7 @@ impl RengraveApp {
             {
                 record.contours = contours.clone();
                 record.gcode = gcode.clone();
-                record.operation = operation.clone();
+                record.operation = GeneralToolpathOperation::Profile(operation.clone());
             }
         }
         self.general_profile_toolpaths = contours;
@@ -2736,7 +2826,130 @@ impl RengraveApp {
         Ok(())
     }
 
+    fn rebuild_general_pocket_output(&mut self) -> Result<(), String> {
+        let Some(operation) = self.general_pocket_operation.as_ref() else {
+            return Ok(());
+        };
+        let Some(source) = self
+            .general_design_document
+            .object(operation.source_object_id)
+        else {
+            self.general_pocket_operation = None;
+            return Ok(());
+        };
+        let GeneratedPocket { contours, gcode } =
+            generate_pocket(operation, source, self.general_surface_z_mm())
+                .map_err(|error| error.to_string())?;
+        let generated_gcode = gcode.clone();
+        if let Some(id) = self.general_selected_toolpath
+            && let Some(record) = self
+                .general_toolpaths
+                .iter_mut()
+                .find(|record| record.id == id)
+        {
+            record.contours = contours;
+            record.gcode = gcode;
+            record.operation = GeneralToolpathOperation::Pocket(operation.clone());
+        }
+        self.general_gcode = generated_gcode;
+        Ok(())
+    }
+
     fn show_general_toolpath_panel(&mut self, ui: &mut egui::Ui) {
+        if let Some(mut session) = self.general_pocket_session.take() {
+            let action = show_general_pocket_settings(
+                ui,
+                &mut session,
+                self.general_job_setup.units,
+                &self.general_toolbit_library.toolbits,
+            );
+            match action {
+                Some(TemporaryToolAction::Confirm) => {
+                    let Some(mut tool) = session.selected_tool_id.as_deref().and_then(|id| {
+                        self.general_toolbit_library
+                            .toolbits
+                            .iter()
+                            .find(|tool| tool.id == id)
+                            .cloned()
+                    }) else {
+                        self.general_pocket_session = Some(session);
+                        return;
+                    };
+                    tool.feed_mm_min = session.parameters.feed_mm_min;
+                    tool.plunge_mm_min = session.parameters.plunge_mm_min;
+                    if let Some(library_tool) = self
+                        .general_toolbit_library
+                        .toolbits
+                        .iter_mut()
+                        .find(|library_tool| library_tool.id == tool.id)
+                    {
+                        library_tool.feed_mm_min = tool.feed_mm_min;
+                        library_tool.plunge_mm_min = tool.plunge_mm_min;
+                    }
+                    self.save_general_toolbit_library();
+                    let operation = GeneralPocketOperation {
+                        source_object_id: session.source_object_id,
+                        tool,
+                        parameters: session.parameters,
+                    };
+                    let source = self
+                        .general_design_document
+                        .object(session.source_object_id)
+                        .copied();
+                    match source.map(|source| {
+                        generate_pocket(&operation, &source, self.general_surface_z_mm())
+                    }) {
+                        Some(Ok(GeneratedPocket { contours, gcode })) => {
+                            let id = session.editing_toolpath_id.unwrap_or_else(|| {
+                                let id = self.next_general_toolpath_id;
+                                self.next_general_toolpath_id += 1;
+                                id
+                            });
+                            let record = GeneralToolpathRecord {
+                                id,
+                                operation: GeneralToolpathOperation::Pocket(operation.clone()),
+                                contours,
+                                gcode,
+                                enabled: self
+                                    .general_toolpaths
+                                    .iter()
+                                    .find(|record| record.id == id)
+                                    .is_none_or(|record| record.enabled),
+                            };
+                            if let Some(existing) = self
+                                .general_toolpaths
+                                .iter_mut()
+                                .find(|record| record.id == id)
+                            {
+                                *existing = record;
+                            } else {
+                                self.general_toolpaths.push(record);
+                            }
+                            self.general_selected_toolpath = Some(id);
+                            self.general_selected_object = Some(operation.source_object_id);
+                            self.general_pocket_operation = Some(operation);
+                            self.general_gcode = self
+                                .general_toolpaths
+                                .iter()
+                                .find(|record| record.id == id)
+                                .map(|record| record.gcode.clone())
+                                .unwrap_or_default();
+                            self.status = "Pocket toolpath generated".to_owned();
+                        }
+                        Some(Err(error)) => {
+                            self.warnings = vec![error.to_string()];
+                            self.general_pocket_session = Some(session);
+                        }
+                        None => {
+                            self.warnings = vec!["Pocket source no longer exists".to_owned()];
+                        }
+                    }
+                }
+                Some(TemporaryToolAction::Cancel) => {}
+                None => self.general_pocket_session = Some(session),
+            }
+            return;
+        }
         if let Some(mut session) = self.general_profile_session.take() {
             let mut action = ui
                 .input(|input| input.key_pressed(egui::Key::Escape))
@@ -2969,7 +3182,7 @@ impl RengraveApp {
                                     });
                                 let record = GeneralToolpathRecord {
                                     id: toolpath_id,
-                                    operation: operation.clone(),
+                                    operation: GeneralToolpathOperation::Profile(operation.clone()),
                                     contours: contours.clone(),
                                     gcode: gcode.clone(),
                                     enabled: self
@@ -3018,19 +3231,15 @@ impl RengraveApp {
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
-                        general_toolpath_setup_group(ui, "Toolpath Generation", |ui, _| {
-                            let button_size = 44.0_f32.min(ui.available_width());
+                        general_toolpath_setup_group(ui, "Toolpath Generation", |ui, content_width| {
+                            let button_size = 44.0_f32.min(content_width);
                             let enabled = self.general_selected_object.is_some();
-                            let response = ui
-                                .add_enabled_ui(enabled, |ui| {
-                                    general_profile_tool_button(ui, button_size)
-                                })
-                                .inner;
-                            if response.clicked()
-                                && let Some(source_object_id) = self.general_selected_object
-                            {
-                                self.begin_general_profile(source_object_id);
-                            }
+                            ui.horizontal(|ui| {
+                                let response = ui.add_enabled_ui(enabled, |ui| general_profile_tool_button(ui, button_size)).inner;
+                                if response.clicked() && let Some(source_object_id) = self.general_selected_object { self.begin_general_profile(source_object_id); }
+                                let response = ui.add_enabled_ui(enabled, |ui| general_pocket_tool_button(ui, button_size)).inner;
+                                if response.clicked() && let Some(source_object_id) = self.general_selected_object { self.begin_general_pocket(source_object_id); }
+                            });
                             ui.add_space(6.0);
                             if self.general_selected_object.is_none() {
                                 ui.weak(
@@ -3066,8 +3275,9 @@ impl RengraveApp {
                 for record in &mut self.general_toolpaths {
                     let selected = self.general_selected_toolpath == Some(record.id);
                     let label = format!(
-                        "Profile · Vector {}",
-                        record.operation.source_object_id.get()
+                        "{} · Vector {}",
+                        record.operation.label(),
+                        record.operation.source_object_id().get()
                     );
                     ui.horizontal(|ui| {
                         let row_width = (list_width - 50.0).max(0.0);
@@ -3089,7 +3299,8 @@ impl RengraveApp {
                             .inner;
                         if response.clicked() {
                             self.general_selected_toolpath = Some(record.id);
-                            self.general_selected_object = Some(record.operation.source_object_id);
+                            self.general_selected_object =
+                                Some(record.operation.source_object_id());
                         }
                         if response.double_clicked() {
                             edit_id = Some(record.id);
@@ -3111,7 +3322,10 @@ impl RengraveApp {
             && let Some(record) = self.general_toolpaths.iter().find(|record| record.id == id)
         {
             let record = record.clone();
-            self.begin_general_profile_edit(&record);
+            match record.operation {
+                GeneralToolpathOperation::Profile(_) => self.begin_general_profile_edit(&record),
+                GeneralToolpathOperation::Pocket(_) => self.begin_general_pocket_edit(&record),
+            }
         }
     }
 
@@ -3238,7 +3452,7 @@ impl RengraveApp {
             && self.general_design_document.remove_object(id)
         {
             self.general_toolpaths
-                .retain(|record| record.operation.source_object_id != id);
+                .retain(|record| record.operation.source_object_id() != id);
             if self.general_selected_toolpath.is_some_and(|toolpath_id| {
                 !self
                     .general_toolpaths
@@ -3255,6 +3469,13 @@ impl RengraveApp {
                 self.general_profile_operation = None;
                 self.general_profile_toolpaths.clear();
                 self.general_gcode.clear();
+            }
+            if self
+                .general_pocket_operation
+                .as_ref()
+                .is_some_and(|operation| operation.source_object_id == id)
+            {
+                self.general_pocket_operation = None;
             }
             self.status = "Selected vector deleted".to_owned();
         }
@@ -3745,6 +3966,9 @@ impl RengraveApp {
                             {
                                 self.general_selected_object = Some(id);
                                 if let Err(error) = self.rebuild_general_profile_output() {
+                                    self.warnings = vec![error];
+                                }
+                                if let Err(error) = self.rebuild_general_pocket_output() {
                                     self.warnings = vec![error];
                                 }
                                 self.status =
@@ -5517,6 +5741,16 @@ fn general_profile_icon_strokes() -> &'static [Stroke] {
         .as_slice()
 }
 
+fn general_pocket_icon_strokes() -> &'static [Stroke] {
+    static STROKES: OnceLock<Vec<Stroke>> = OnceLock::new();
+    STROKES
+        .get_or_init(|| {
+            parse_svg_segments(include_str!("../assets/tool-icons/pocket.svg"))
+                .expect("the bundled pocket tool icon must be valid SVG")
+        })
+        .as_slice()
+}
+
 fn general_profile_tool_is_selectable(tool: &GeneralToolbit) -> bool {
     tool.supports_profile_cut()
 }
@@ -5564,6 +5798,75 @@ fn general_design_tool_grid(
         });
     });
     selected_tool
+}
+
+fn show_general_pocket_settings(
+    ui: &mut egui::Ui,
+    session: &mut PocketToolSession,
+    units: GeneralUnits,
+    toolbits: &[GeneralToolbit],
+) -> Option<TemporaryToolAction> {
+    let mut action = ui
+        .input(|input| input.key_pressed(egui::Key::Escape))
+        .then_some(TemporaryToolAction::Cancel);
+    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+        ui.strong("Pocket");
+        ui.weak(format!("Vector {}", session.source_object_id.get()));
+        ui.add_space(6.0);
+        general_toolpath_setup_group(ui, "Cutter", |ui, content_width| {
+            let previous_tool_id = session.selected_tool_id.clone();
+            let selected_label = session.selected_tool_id.as_deref().and_then(|id| toolbits.iter().find(|tool| tool.id == id)).map(|tool| tool.label.as_str()).unwrap_or("Choose a toolbit");
+            egui::ComboBox::from_id_salt("general-pocket-toolbit").selected_text(selected_label).width(content_width).show_ui(ui, |ui| {
+                for tool in toolbits.iter().filter(|tool| general_profile_tool_is_selectable(tool)) {
+                    ui.selectable_value(&mut session.selected_tool_id, Some(tool.id.clone()), format!("T{} · {}", tool.tool_number, tool.label));
+                }
+            });
+            if session.selected_tool_id != previous_tool_id
+                && let Some(tool) = session.selected_tool_id.as_deref().and_then(|id| toolbits.iter().find(|tool| tool.id == id))
+            {
+                session.parameters.feed_mm_min = tool.feed_mm_min;
+                session.parameters.plunge_mm_min = tool.plunge_mm_min;
+                session.defaults.feed_mm_min = tool.feed_mm_min;
+                session.defaults.plunge_mm_min = tool.plunge_mm_min;
+            }
+        });
+        general_toolpath_setup_group(ui, "Pocket", |ui, content_width| {
+            ui.label("Path pattern");
+            egui::ComboBox::from_id_salt("general-pocket-pattern").selected_text(session.parameters.pattern.label()).width(content_width).show_ui(ui, |ui| {
+                for pattern in PocketPathPattern::ALL { ui.selectable_value(&mut session.parameters.pattern, pattern, pattern.label()); }
+            });
+            ui.add_space(4.0);
+            ui.label("Cut mode");
+            egui::ComboBox::from_id_salt("general-pocket-cut-mode").selected_text(session.parameters.cut_mode.label()).width(content_width).show_ui(ui, |ui| {
+                for mode in PocketCutMode::ALL { ui.selectable_value(&mut session.parameters.cut_mode, mode, mode.label()); }
+            });
+            general_profile_dimension_field(ui, "Step over", &mut session.parameters.step_over_mm, session.defaults.step_over_mm, units, false);
+            general_profile_rate_field(ui, "Feed rate", &mut session.parameters.feed_mm_min, session.defaults.feed_mm_min);
+            general_profile_rate_field(ui, "Plunge rate", &mut session.parameters.plunge_mm_min, session.defaults.plunge_mm_min);
+            ui.checkbox(&mut session.parameters.rest_machining, "Rest machining").on_hover_text("Reserve this operation for stock left by previous paths; stock-aware removal is planned next.");
+        });
+        general_toolpath_setup_group(ui, "Depths", |ui, _| {
+            general_profile_dimension_field(ui, "Cut depth", &mut session.parameters.cut_depth_mm, session.defaults.cut_depth_mm, units, false);
+            general_profile_dimension_field(ui, "Step down", &mut session.parameters.step_down_mm, session.defaults.step_down_mm, units, false);
+            general_profile_dimension_field(ui, "Start height", &mut session.parameters.start_height_mm, session.defaults.start_height_mm, units, true);
+            general_profile_dimension_field(ui, "Safe height", &mut session.parameters.safe_height_mm, session.defaults.safe_height_mm, units, false);
+        });
+        let selected_tool = session.selected_tool_id.as_deref().and_then(|id| toolbits.iter().find(|tool| tool.id == id));
+        let can_generate = selected_tool.is_some_and(|tool| tool.validate().is_empty())
+            && session.parameters.feed_mm_min > 0.0 && session.parameters.plunge_mm_min > 0.0
+            && session.parameters.cut_depth_mm > 0.0 && session.parameters.step_down_mm > 0.0
+            && session.parameters.step_over_mm > 0.0 && session.parameters.safe_height_mm > 0.0;
+        if selected_tool.is_none() { ui.colored_label(egui::Color32::from_rgb(218, 164, 58), "Choose a valid endmill-style toolbit."); }
+        if !can_generate && selected_tool.is_some() { ui.colored_label(egui::Color32::from_rgb(218, 164, 58), "Set valid cutter dimensions, positive rates, and pocket depths."); }
+        let width = ui.available_width();
+        let spacing = ui.spacing().item_spacing.x;
+        let button_width = ((width - spacing) * 0.5).max(0.0);
+        ui.horizontal(|ui| {
+            if ui.add_enabled(can_generate, egui::Button::new("Generate").min_size(egui::vec2(button_width, 26.0))).clicked() { action = Some(TemporaryToolAction::Confirm); }
+            if ui.add_sized(egui::vec2(button_width, 26.0), egui::Button::new("Cancel")).clicked() { action = Some(TemporaryToolAction::Cancel); }
+        });
+    });
+    action
 }
 
 fn show_general_circle_settings(
@@ -5867,6 +6170,32 @@ fn general_profile_tool_button(ui: &mut egui::Ui, size: f32) -> egui::Response {
             ui.painter(),
             rect.shrink(7.0),
             general_profile_icon_strokes(),
+            visuals.fg_stroke.color,
+        );
+    }
+    response.on_hover_text(label)
+}
+
+fn general_pocket_tool_button(ui: &mut egui::Ui, size: f32) -> egui::Response {
+    let label = "Create Pocket Toolpath";
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::click());
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label)
+    });
+    if ui.is_rect_visible(rect) {
+        let visuals = ui.style().interact(&response);
+        ui.painter()
+            .rect_filled(rect, visuals.corner_radius, visuals.bg_fill);
+        ui.painter().rect_stroke(
+            rect,
+            visuals.corner_radius,
+            visuals.bg_stroke,
+            egui::StrokeKind::Inside,
+        );
+        draw_general_svg_icon(
+            ui.painter(),
+            rect.shrink(7.0),
+            general_pocket_icon_strokes(),
             visuals.fg_stroke.color,
         );
     }
@@ -6988,7 +7317,9 @@ mod tests {
             general_selected_object: None,
             general_temporary_tool: None,
             general_profile_session: None,
+            general_pocket_session: None,
             general_profile_operation: None,
+            general_pocket_operation: None,
             general_profile_toolpaths: Vec::new(),
             general_gcode: String::new(),
             general_toolpaths: Vec::new(),
@@ -9356,6 +9687,73 @@ mod tests {
         harness.run();
         assert!(harness.state().general_profile_session.is_none());
         assert!(harness.state().general_profile_operation.is_none());
+    }
+
+    #[test]
+    fn kittest_pocket_tool_generates_for_selected_circle_and_uses_tool_fit_validation() {
+        let mut app = test_app();
+        app.tool_view = ToolView::GeneralPurpose;
+        app.general_toolbit_library.toolbits = profile_test_toolbits();
+        let id = app
+            .general_design_document
+            .add_circle(Point::default(), 10.0)
+            .expect("pocket source");
+        app.general_selected_object = Some(id);
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(1000.0, 700.0))
+            .build_eframe(|_| app);
+        harness.run();
+
+        let button = harness.get_by_label("Create Pocket Toolpath");
+        assert!((button.rect().width() - button.rect().height()).abs() < 0.5);
+        button.click();
+        harness.run();
+        for label in [
+            "Pocket",
+            "Cutter",
+            "Path pattern",
+            "Cut mode",
+            "Step over",
+            "Cut depth",
+            "Step down",
+            "Start height",
+            "Safe height",
+            "Rest machining",
+            "Generate",
+            "Cancel",
+        ] {
+            assert!(
+                harness.query_all_by_label(label).next().is_some(),
+                "missing {label}"
+            );
+        }
+        let Some(session) = &mut harness.state_mut().general_pocket_session else {
+            panic!("pocket editor session");
+        };
+        session.parameters.feed_mm_min = 321.0;
+        session.parameters.plunge_mm_min = 123.0;
+        harness.run();
+        harness.get_by_label("Generate").click();
+        harness.run();
+
+        assert!(matches!(
+            harness
+                .state()
+                .general_toolpaths
+                .last()
+                .map(|record| &record.operation),
+            Some(GeneralToolpathOperation::Pocket(_))
+        ));
+        assert!(
+            harness
+                .state()
+                .general_gcode
+                .contains("(R-Engrave General Pocket)")
+        );
+        assert!(harness.state().general_gcode.contains("(Pattern: Offset)"));
+        assert!(harness.state().general_gcode.contains("F321.0"));
+        assert!(harness.state().general_gcode.contains("F123.0"));
+        assert!(harness.query_by_label("Pocket · Vector 1").is_some());
     }
 
     #[test]
