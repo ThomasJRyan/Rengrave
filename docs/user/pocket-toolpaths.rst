@@ -14,7 +14,9 @@ Create a pocket
 2. In the **Toolpath Panel**, select the square **Create Pocket Toolpath**
    button.
 3. Choose an Endmill, Ballnose, or Bullnose toolbit.
-4. Select a path pattern, set the cutter parameters, and choose **Generate**.
+4. Select a path pattern, set the cutter parameters, and choose **Apply**.
+   The editor remains open for quick setting changes; choose **Close** when
+   finished.
 
 The generated pocket appears in the 2D and 3D previews and is added to the
 Toolpaths list. A pocket can be generated alongside profile operations on the

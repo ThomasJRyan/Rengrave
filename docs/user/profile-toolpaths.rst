@@ -13,7 +13,10 @@ Create a profile
 2. In the **Toolpath Panel**, select the square **Create Profile Toolpath**
    button. The button is disabled until a vector is selected.
 3. Choose a valid endmill-style cutter from the General Toolbit Library.
-4. Set the cut side and depth controls, then select **Generate**.
+4. Set the cut side and depth controls, then select **Apply**. The editor
+   remains open so you can make another change and apply it immediately.
+5. Select **Close** when finished. If nothing has been applied, closing simply
+   discards the unfinished editor session.
 
 The green centerline appears in both the 2D and 3D views. In 3D, each depth
 pass is drawn below the material surface. Generating another profile replaces
@@ -31,7 +34,7 @@ Profile controls
    Selects a valid Endmill, Ballnose, or Bullnose definition from
    **Settings > Toolbit Library**. The operation freezes the selected toolbit
    values when it is generated. Profile-capable definitions remain visible
-   when dimensions, feed, or plunge still need attention; **Generate** stays
+   when dimensions, feed, or plunge still need attention; **Apply** stays
    disabled and identifies the first field to correct. Drill, V-bit, chamfer,
    slitting-saw, and probe definitions are not offered because their effective
    profile diameter requires operation-specific handling.

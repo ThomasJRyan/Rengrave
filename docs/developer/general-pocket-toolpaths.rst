@@ -62,7 +62,7 @@ UI integration
 
 The UI stores pocket and profile operations behind ``GeneralToolpathOperation``
 in the shared generated-toolpath list. A pocket session is temporary until
-Generate succeeds; the selected tool snapshot and operation parameters are
+Apply succeeds; the selected tool snapshot and operation parameters are
 then stored on the record. This allows multiple operations on one source
 vector, double-click editing, shared visibility controls, and the same preview
 pipeline for both operation kinds. Pocket output also updates the General

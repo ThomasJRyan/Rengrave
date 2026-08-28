@@ -2935,6 +2935,8 @@ impl RengraveApp {
                                 .map(|record| record.gcode.clone())
                                 .unwrap_or_default();
                             self.status = "Pocket toolpath generated".to_owned();
+                            session.editing_toolpath_id = Some(id);
+                            self.general_pocket_session = Some(session);
                         }
                         Some(Err(error)) => {
                             self.warnings = vec![error.to_string()];
@@ -3123,15 +3125,14 @@ impl RengraveApp {
                         if ui
                             .add_enabled(
                                 can_generate,
-                                egui::Button::new("Generate")
-                                    .min_size(egui::vec2(button_width, 26.0)),
+                                egui::Button::new("Apply").min_size(egui::vec2(button_width, 26.0)),
                             )
                             .clicked()
                         {
                             action = Some(TemporaryToolAction::Confirm);
                         }
                         if ui
-                            .add_sized(egui::vec2(button_width, 26.0), egui::Button::new("Cancel"))
+                            .add_sized(egui::vec2(button_width, 26.0), egui::Button::new("Close"))
                             .clicked()
                         {
                             action = Some(TemporaryToolAction::Cancel);
@@ -3205,6 +3206,8 @@ impl RengraveApp {
                                 self.general_profile_toolpaths = contours;
                                 self.general_gcode = gcode;
                                 self.status = "Profile toolpath generated".to_owned();
+                                session.editing_toolpath_id = Some(toolpath_id);
+                                self.general_profile_session = Some(session);
                             }
                             Some(Err(error)) => {
                                 self.status = "Profile toolpath failed".to_owned();
@@ -5862,8 +5865,8 @@ fn show_general_pocket_settings(
         let spacing = ui.spacing().item_spacing.x;
         let button_width = ((width - spacing) * 0.5).max(0.0);
         ui.horizontal(|ui| {
-            if ui.add_enabled(can_generate, egui::Button::new("Generate").min_size(egui::vec2(button_width, 26.0))).clicked() { action = Some(TemporaryToolAction::Confirm); }
-            if ui.add_sized(egui::vec2(button_width, 26.0), egui::Button::new("Cancel")).clicked() { action = Some(TemporaryToolAction::Cancel); }
+            if ui.add_enabled(can_generate, egui::Button::new("Apply").min_size(egui::vec2(button_width, 26.0))).clicked() { action = Some(TemporaryToolAction::Confirm); }
+            if ui.add_sized(egui::vec2(button_width, 26.0), egui::Button::new("Close")).clicked() { action = Some(TemporaryToolAction::Cancel); }
         });
     });
     action
@@ -9669,8 +9672,8 @@ mod tests {
             "Cut depth",
             "Pass depth",
             "Safe height",
-            "Generate",
-            "Cancel",
+            "Apply",
+            "Close",
         ] {
             assert!(
                 harness.query_all_by_label(label).next().is_some(),
@@ -9683,7 +9686,7 @@ mod tests {
             .fold(f32::NEG_INFINITY, f32::max);
         assert!(editor_right <= 1000.0, "profile editor escaped the window");
 
-        harness.get_by_label("Cancel").click();
+        harness.get_by_label("Close").click();
         harness.run();
         assert!(harness.state().general_profile_session.is_none());
         assert!(harness.state().general_profile_operation.is_none());
@@ -9719,8 +9722,8 @@ mod tests {
             "Start height",
             "Safe height",
             "Rest machining",
-            "Generate",
-            "Cancel",
+            "Apply",
+            "Close",
         ] {
             assert!(
                 harness.query_all_by_label(label).next().is_some(),
@@ -9733,7 +9736,7 @@ mod tests {
         session.parameters.feed_mm_min = 321.0;
         session.parameters.plunge_mm_min = 123.0;
         harness.run();
-        harness.get_by_label("Generate").click();
+        harness.get_by_label("Apply").click();
         harness.run();
 
         assert!(matches!(
@@ -9753,6 +9756,22 @@ mod tests {
         assert!(harness.state().general_gcode.contains("(Pattern: Offset)"));
         assert!(harness.state().general_gcode.contains("F321.0"));
         assert!(harness.state().general_gcode.contains("F123.0"));
+        assert!(harness.state().general_pocket_session.is_some());
+        harness
+            .state_mut()
+            .general_pocket_session
+            .as_mut()
+            .expect("pocket editor remains open")
+            .parameters
+            .step_over_mm = 2.0;
+        harness.run();
+        harness.get_by_label("Apply").click();
+        harness.run();
+        assert_eq!(harness.state().general_toolpaths.len(), 1);
+        assert!(harness.state().general_pocket_session.is_some());
+        harness.get_by_label("Close").click();
+        harness.run();
+        assert!(harness.state().general_pocket_session.is_none());
         assert!(harness.query_by_label("Pocket · Vector 1").is_some());
     }
 
@@ -9787,7 +9806,7 @@ mod tests {
                 .query_by_label("Set positive feed and plunge rates for this operation.")
                 .is_some()
         );
-        harness.get_by_label("Generate").click();
+        harness.get_by_label("Apply").click();
         harness.run();
         assert!(harness.state().general_profile_operation.is_none());
         assert!(harness.state().general_profile_session.is_some());
@@ -9825,7 +9844,7 @@ mod tests {
                 )
                 .is_some()
         );
-        harness.get_by_label("Generate").click();
+        harness.get_by_label("Apply").click();
         harness.run();
         assert!(harness.state().general_profile_operation.is_none());
     }
@@ -9854,8 +9873,8 @@ mod tests {
             "Cutter panel",
             "Profile panel",
             "Depths panel",
-            "Generate",
-            "Cancel",
+            "Apply",
+            "Close",
         ] {
             let rect = harness.get_by_label(label).rect();
             assert!(
@@ -9866,7 +9885,7 @@ mod tests {
                 "{label} escaped the narrow workbench: {rect:?}"
             );
         }
-        assert!(harness.get_by_label("Generate").rect().height() >= 26.0);
+        assert!(harness.get_by_label("Apply").rect().height() >= 26.0);
     }
 
     #[test]
@@ -9898,7 +9917,7 @@ mod tests {
         session.parameters.feed_mm_min = 321.0;
         session.parameters.plunge_mm_min = 123.0;
         harness.run();
-        harness.get_by_label("Generate").click();
+        harness.get_by_label("Apply").click();
         harness.run();
 
         {
@@ -9918,6 +9937,10 @@ mod tests {
             assert!(state.general_gcode.contains("G2 "));
             assert!(state.general_gcode.ends_with("M5\nM2\n"));
         }
+        assert!(harness.state().general_profile_session.is_some());
+        harness.get_by_label("Close").click();
+        harness.run();
+        assert!(harness.state().general_profile_session.is_none());
         let toolpath_label = format!("Profile · Vector {}", id.get(),);
         assert!(harness.query_by_label("Toolpaths (1)").is_some());
         harness.get_by_label(&toolpath_label).click();
@@ -9932,9 +9955,12 @@ mod tests {
             .expect("second profile session");
         assert_eq!(session.parameters.feed_mm_min, 321.0);
         assert_eq!(session.parameters.plunge_mm_min, 123.0);
-        harness.get_by_label("Generate").click();
+        harness.get_by_label("Apply").click();
         harness.run();
         assert_eq!(harness.state().general_toolpaths.len(), 2);
+        assert!(harness.state().general_profile_session.is_some());
+        harness.get_by_label("Close").click();
+        harness.run();
         assert!(harness.query_by_label("Toolpaths (2)").is_some());
         harness
             .query_all_by_label("Show toolpath 1")

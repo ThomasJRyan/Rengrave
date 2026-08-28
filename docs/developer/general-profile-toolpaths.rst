@@ -107,14 +107,16 @@ UI ownership and invalidation
 
 ``RengraveApp`` owns a temporary ``ProfileToolSession``, the current generated
 operation, derived preview contours, and the internal G-code string. The
-Toolpath Panel replaces its tool list with a contained editor until Generate,
-Cancel, or Escape. The square SVG button and every parameter control expose
+Toolpath Panel replaces its tool list with a contained editor until Apply,
+Close, or Escape. Apply commits the generated operation while retaining the
+session, so repeated adjustments update the same record. Close exits the
+session without changing the last applied output. The square SVG button and every parameter control expose
 semantic labels for EGUI harness inspection.
 
 Tool selection and generation readiness are separate checks. The picker lists
 every Endmill, Ballnose, or Bullnose definition so a saved library entry is
 never misreported as absent. The editor then validates required dimensions,
-positive feed and plunge rates, and cutting-edge depth. It keeps **Generate**
+positive feed and plunge rates, and cutting-edge depth. It keeps **Apply**
 disabled and exposes the first actionable correction while the definition is
 incomplete.
 
